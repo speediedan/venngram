@@ -36,6 +36,9 @@ version = { attr = "venngram.__about__.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+venngram = ["py.typed"]
+
 [tool.pytest.ini_options]
 addopts = "--doctest-modules --strict-markers"
 testpaths = ["src/venngram", "tests"]
