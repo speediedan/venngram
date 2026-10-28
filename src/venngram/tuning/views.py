@@ -36,13 +36,15 @@ from typing import Any, Protocol, runtime_checkable
 from torch import nn, Tensor
 
 from .errors import TunableViewError, Unresolvable
+from venngram.physical import PhysicalStructure
+from venngram.resolve import StructureProvider
 from venngram.roles import declared_kinds, parse_role, role_kind, UNCHECKPOINTED_ROLE_KINDS, validate_roles
 
 # the module attribute a view is attached under for discovery
 VIEW_ATTR = "tunable_view"
 REQUIRED_MEMBERS = ("root", "support", "to_physical", "to_logical")
 OPTIONAL_MEMBERS = ("logical_named_parameters", "coupled", "depth_groups", "roles", "checkpoint_state_dict",
-                    "load_checkpoint_state_dict", "promote")
+                    "load_checkpoint_state_dict", "promote", "structure")
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,11 @@ class TunableViewExtras(Protocol):
     def promote(self, physical: Sequence[str], role: str) -> Mapping[str, str]:
         """Promote ``physical`` tensors to ``role``, returning each promoted tensor's old name mapped to its new
         name."""
+        ...
+
+    def structure(self) -> StructureProvider:
+        """Places the root's physical tensors in its block structure, for addresses' ``layers``, ``stack`` and
+        ``component`` fields."""
         ...
 
 
@@ -259,6 +266,11 @@ class ViewDefaults:
                                f" {missing}, unexpected keys {unexpected}.")
         self.root.load_state_dict(state_dict, strict=False)
 
+    def structure(self) -> StructureProvider:
+        """The physical structure of the root (:class:`~venngram.physical.PhysicalStructure`): its block list, and no
+        components."""
+        return PhysicalStructure(self.root)
+
     def promote(self, physical: Sequence[str], role: str) -> Mapping[str, str]:
         """Keep every name.
 
@@ -357,6 +369,9 @@ class BoundView:
 
     def load_checkpoint_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True) -> None:
         self._member("load_checkpoint_state_dict")(state_dict, strict=strict)
+
+    def structure(self) -> StructureProvider:
+        return self._member("structure")()
 
     def promote(self, physical: Sequence[str], role: str) -> Mapping[str, str]:
         """Promote ``physical`` to ``role`` through the view (or the default), and record the new role.

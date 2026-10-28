@@ -72,3 +72,13 @@ def test_role_errors_are_venngram_errors():
     with pytest.raises(RoleError, match="unknown role kind"):
         venngram.roles.parse_selector("role:weights")
     assert issubclass(RoleError, VenngramError) and issubclass(tv.TunableViewError, VenngramError)
+
+
+def test_a_views_structure_defaults_to_the_physical_structure_of_its_root():
+    from conftest import TinyDecoder
+
+    from venngram.physical import PhysicalStructure
+
+    model = TinyDecoder(depth=3)
+    structure = tv.as_view(tv.CanonicalView(model)).structure()
+    assert isinstance(structure, PhysicalStructure) and structure.depth() == 3
