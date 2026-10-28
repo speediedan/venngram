@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "venngram"
+dynamic = ["version"]
+description = "A set-algebraic protocol for addressing model slices (tensors, activation sites, neurons, features, subspaces) for tuning and steering"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Daniel Dale" }]
+requires-python = ">=3.11"
+dependencies = ["torch>=2.12.0", "PyYAML>=6.0.2"]
+keywords = ["interpretability", "fine-tuning", "steering", "pytorch", "sparse autoencoders"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/speediedan/venngram"
+Issues = "https://github.com/speediedan/venngram/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.dynamic]
+version = { attr = "venngram.__about__.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules --strict-markers"
+testpaths = ["src/venngram", "tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F"]
+ignore = ["E731"]
+
+[tool.pyright]
+include = ["src/venngram"]
+pythonVersion = "3.11"
