@@ -21,6 +21,8 @@ hand (or derived from another source) and registered.
 - :mod:`~venngram.maps.schema`: the document schema, its reader, the vocabulary and the registry of maps;
 - :mod:`~venngram.maps.check`: checking a map against a model (every row's module exists where it says);
 - :mod:`~venngram.maps.structure`: :class:`~venngram.maps.structure.MapStructure`, the map-backed structure provider;
+- :mod:`~venngram.maps.verification`: verifying a map against an architecture without weights (partition, widths
+  from the configuration, forward order), and its verification record;
 - :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over it;
 - :mod:`~venngram.maps.transformer_lens`: one source of seed maps, deriving a map from a TransformerLens architecture
   adapter (read duck-typed: venngram does not depend on TransformerLens).
@@ -34,6 +36,7 @@ from venngram.maps.check import (check_map_against_model, ComponentMapModelMisma
 from venngram.maps.schema import (component_map_for, ComponentMap, from_document, known_architectures,
                                   load_component_map, register, VOCABULARY)
 from venngram.maps.structure import map_for, map_structure, MapStructure
+from venngram.maps.verification import VerificationReport, verify
 from venngram.maps.view import MappedView, PEFT_LORA_RULES
 
 __all__ = [
@@ -52,5 +55,7 @@ __all__ = [
     "PEFT_LORA_RULES",
     "register",
     "validate_map_against_model",
+    "VerificationReport",
+    "verify",
     "VOCABULARY",
 ]

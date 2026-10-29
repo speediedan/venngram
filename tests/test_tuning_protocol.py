@@ -9,8 +9,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""venngram imports only the standard library, ``torch`` and ``yaml``, and its core (addresses, books, roles,
-resolution) imports no ``torch`` at all."""
+"""venngram imports only the standard library, ``torch`` and ``yaml`` at module level, and its core (addresses, books,
+roles, resolution) imports no ``torch`` at all. A declared optional dependency may be imported inside a function, by the
+feature that needs it."""
 import ast
 import subprocess
 import sys
@@ -25,23 +26,42 @@ from venngram.errors import RoleError, VenngramError
 
 PKG_DIR = Path(venngram.__file__).parent
 ALLOWED = {"torch", "yaml", "venngram"}
+#: Optional dependencies (each an extra in ``pyproject.toml``), importable inside a function of the named modules only.
+OPTIONAL = {"maps/verification.py": {"transformers"}}
 TORCH_FREE = ("__init__.py", "__about__.py", "address.py", "book.py", "errors.py", "resolve.py", "roles.py")
 
 
-def _top_level_imports(path: Path) -> set[str]:
-    found = set()
-    for node in ast.walk(ast.parse(path.read_text())):
-        if isinstance(node, ast.Import):
-            found.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0:
-            found.add((node.module or "").split(".")[0])
-    return found
+def _names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {alias.name.split(".")[0] for alias in node.names}
+    if isinstance(node, ast.ImportFrom) and node.level == 0:
+        return {(node.module or "").split(".")[0]}
+    return set()
+
+
+def _top_level_imports(path: Path, *, nested: bool = True) -> set[str]:
+    """Every package ``path`` imports; with ``nested=False``, only the ones imported outside a function."""
+    tree = ast.parse(path.read_text())
+    inner = {id(n) for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+             for n in ast.walk(f)}
+    return {m for node in ast.walk(tree) if nested or id(node) not in inner for m in _names(node)}
 
 
 @pytest.mark.parametrize("module", sorted(str(p.relative_to(PKG_DIR)) for p in PKG_DIR.rglob("*.py")))
 def test_imports_only_stdlib_torch_and_yaml(module):
-    outside = sorted(m for m in _top_level_imports(PKG_DIR / module) if m not in ALLOWED | set(sys.stdlib_module_names))
+    allowed = ALLOWED | set(sys.stdlib_module_names)
+    outside = sorted(_top_level_imports(PKG_DIR / module, nested=False) - allowed)
     assert not outside, f"{module} imports {outside}"
+    lazy = sorted(_top_level_imports(PKG_DIR / module) - allowed - OPTIONAL.get(module, set()))
+    assert not lazy, f"{module} imports {lazy}, which is not a declared optional dependency of it"
+
+
+def test_optional_dependencies_are_declared_extras():
+    import tomllib
+
+    extras = tomllib.loads((PKG_DIR.parents[1] / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+    declared = {req.split(">")[0].split("=")[0].split("[")[0].strip() for reqs in extras.values() for req in reqs}
+    assert set().union(*OPTIONAL.values()) <= declared
 
 
 def test_the_core_imports_without_torch():

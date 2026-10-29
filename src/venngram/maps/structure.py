@@ -163,6 +163,10 @@ class MapStructure:
             return Refusal(f"the {self.cmap.architecture} component map has no {what}", named)
         return depth
 
+    def placed(self) -> dict[str, Location]:
+        """Every module path (relative to the root) this structure places, with its location."""
+        return dict(self._table)
+
     def components(self) -> list[str]:
         """The components this structure can locate, in map order."""
         return list(dict.fromkeys(loc.component for loc in self._table.values() if loc.component))

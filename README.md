@@ -113,6 +113,17 @@ Seed maps are bundled for GPT-2, Llama, Qwen3, OPT, Gemma 2, Gemma 3 and Gemma 3
 model of its architecture and cross-checked against TransformerLens's adapter for it. TransformerLens is one source of
 seeds (`venngram.maps.transformer_lens` derives a map from an adapter); venngram does not depend on it.
 
+A map is verified against an architecture without downloading weights: on a meta-device model built from the
+configuration, every row's module exists, every parameter is claimed by exactly one component, and the widths the
+configuration implies hold (`attn.q` and `attn.k` differ under grouped-query attention, so a swap fails); a forward on
+a small random-init model confirms the order within a block, which catches swapped labels that widths cannot. A rule
+applies only where the map names its component, so a map outside the vocabulary's conventions is reported `partial`
+rather than failed.
+
+```bash
+python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or venngram.maps.verify(config_or_model)
+```
+
 A map is all a tunable view needs, so a mapped architecture needs no view code:
 
 ```python
