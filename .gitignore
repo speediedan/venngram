@@ -6,3 +6,6 @@ dist/
 .venv/
 .pytest_cache/
 .ruff_cache/
+
+# agent worktrees
+.claude/worktrees/
