@@ -47,7 +47,7 @@ def _top_level_imports(path: Path, *, nested: bool = True) -> set[str]:
     return {m for node in ast.walk(tree) if nested or id(node) not in inner for m in _names(node)}
 
 
-@pytest.mark.parametrize("module", sorted(str(p.relative_to(PKG_DIR)) for p in PKG_DIR.rglob("*.py")))
+@pytest.mark.parametrize("module", sorted(p.relative_to(PKG_DIR).as_posix() for p in PKG_DIR.rglob("*.py")))
 def test_imports_only_stdlib_torch_and_yaml(module):
     allowed = ALLOWED | set(sys.stdlib_module_names)
     outside = sorted(_top_level_imports(PKG_DIR / module, nested=False) - allowed)
