@@ -87,6 +87,11 @@ and a model's physical parameters, with a role for each tensor.
 [Fine-Tuning Scheduler](https://github.com/speediedan/finetuning-scheduler) consumes it, and its schedules accept
 addresses.
 
+## Agent skill
+
+`.agents/skills/venngram-addressing/` (mirrored in `.claude/skills/`) is an agent skill, in the open skill format,
+for composing, resolving and debugging addresses and writing address books. Its examples run in the test suite.
+
 ## License
 
 Apache-2.0.
