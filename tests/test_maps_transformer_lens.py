@@ -1,4 +1,7 @@
-"""The independent oracle for the bundled maps: TransformerLens's own per-architecture component mapping.
+"""A cross-check of the bundled seed maps against TransformerLens's own per-architecture component mapping.
+
+TransformerLens is one independent source for these particular architectures, not a constraint on what a map may
+express (``test_maps_any_architecture.py`` maps models no library adapts).
 
 A map checked only against the model it describes can still name the wrong module for a component (a swapped `in` and
 `out`, say) as long as both modules exist. TransformerLens maintains its adapters independently, so every bundled row it

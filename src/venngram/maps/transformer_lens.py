@@ -13,10 +13,12 @@ r"""
 Maps From TransformerLens
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Derive a component map from a TransformerLens bridge ``ArchitectureAdapter``'s ``component_mapping``. TransformerLens
-keeps one adapter per architecture, each naming the module every bridge component wraps, so this is an independent
-source for the facts a bundled document carries, and the seed of the registry's maps. The adapter is read duck-typed:
-venngram never imports TransformerLens.
+Derive a component map from a TransformerLens bridge ``ArchitectureAdapter``'s ``component_mapping``: one source of
+seed maps among others, not the definition of what a map can hold. TransformerLens keeps an adapter for each
+architecture it supports, naming the module every bridge component wraps, so it is a convenient seed for those
+architectures and an independent cross-check of a hand-written document for one of them. A map for any other
+architecture is written directly (:func:`~venngram.maps.schema.from_document`). The adapter is read duck-typed: venngram
+never imports TransformerLens.
 
 .. warning:: This is an experimental API and may change in a future release.
 """

@@ -69,8 +69,9 @@ def test_every_parameter_is_located_at_a_component(architecture):
 @pytest.mark.parametrize("architecture", sorted(CONFIGS))
 def test_bundled_components_are_in_the_vocabulary(architecture):
     cmap = component_map_for(architecture)
+    # a convention the bundled seeds follow so addresses port across them; a map may name any component it has
     outside = {cmap.key(k).component for k in cmap.components} - set(VOCABULARY) - {""}
-    assert outside <= {"projector"}  # a declared kind of the multimodal document
+    assert outside <= {"projector"}
 
 
 def test_a_wrong_map_is_refused_naming_every_problem():

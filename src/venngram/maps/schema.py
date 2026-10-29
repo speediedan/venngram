@@ -13,17 +13,29 @@ r"""
 Component Maps
 ^^^^^^^^^^^^^^
 
-Where each architecture-neutral component lives in one architecture's module tree: the data a vocabulary-backed
-structure provider (:class:`~venngram.maps.structure.MapStructure`) resolves ``component`` and ``stack`` through, and
-the schema those documents are written in.
+Where each component lives in one architecture's module tree: the data a vocabulary-backed structure provider
+(:class:`~venngram.maps.structure.MapStructure`) resolves ``component`` and ``stack`` through, and the schema those
+documents are written in.
 
-One document per architecture, over a fixed schema: a component path in the vocabulary (:data:`VOCABULARY`), the
-PyTorch module path it names (with ``{i}`` for the layer), and the component's *kind*. Block-relative rows are keyed
-``blocks.{i}.<component>``; a further block stack (a vision tower beside a language model) is declared under
-``stacks:`` and keyed ``<stack>.blocks.{i}.<component>``.
+**Any architecture is expressible.** A map is a plain document, written by hand or derived from any source, for any
+PyTorch module tree: a decoder, an encoder-decoder, a state-space or convolutional mixer, a mixture of experts, a
+vision tower, or something no library anticipated. Its rows name whatever components the model has
+(``mixer.conv``, ``router``, ``projector``); a component with behaviour the bundled kinds do not describe gets a kind
+of its own, declared in the document (``kinds:``); a heterogeneous stack restricts a row to the layers that have it
+(``layers:``); and a model with several block lists declares each further one (``stacks:``).
+
+One document per architecture: a component path, the module path it names (with ``{i}`` for the layer), and the
+component's *kind*. Block-relative rows are keyed ``blocks.{i}.<component>``; a further block stack is keyed
+``<stack>.blocks.{i}.<component>``; anything outside every block is keyed by its component alone.
+
+:data:`VOCABULARY` is a convention, not a closed set: the names a component plays a familiar part under, so that one
+address (``component:mlp.out``) selects the same part on every architecture that has it. Use a vocabulary name when a
+component plays that part, and a name of your own otherwise.
 
 Sources, in precedence order: a runtime registration (:func:`register`), then the documents bundled under ``data/``.
-The documents were first written for interpretune's activation points and keep its schema, so a document either
+The bundled documents are seeds for common architectures, several of them cross-checked against TransformerLens's
+architecture adapters (:mod:`~venngram.maps.transformer_lens` derives a map from one); nothing here depends on
+TransformerLens. The schema is the one interpretune's activation points were first written in, so a document either
 package wrote reads in the other.
 
 .. warning:: This is an experimental API and may change in a future release.
@@ -37,10 +49,10 @@ import yaml
 
 _DATA_DIR = Path(__file__).parent / "data"
 
-#: The component vocabulary: the TransformerLens bridge's names, which interpretune's activation points also use.
-#: Block-relative components first, then the ones outside every block. A document may name a component outside this
-#: list (a multimodal projector, say); the list is what a consumer can rely on meaning the same thing across
-#: architectures.
+#: The shared component names: a convention for the parts most architectures have, so an address ports across them. A
+#: map may name any other component. The names follow the ones TransformerLens's bridge and interpretune's activation
+#: points already emit, so a selection reads the same in all three. Block-relative components first, then the ones
+#: outside every block.
 VOCABULARY: tuple[str, ...] = (
     "ln1", "attn", "attn.q", "attn.k", "attn.v", "attn.qkv", "attn.o", "attn.q_norm", "attn.k_norm", "ln1_post",
     "ln2", "mlp", "mlp.gate", "mlp.in", "mlp.out", "ln2_post",

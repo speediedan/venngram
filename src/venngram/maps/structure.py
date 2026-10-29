@@ -59,20 +59,8 @@ def map_for(model: nn.Module, architecture: str | None = None, *, strict: bool =
                    "meant (a base model inside a task head is mapped under the head's class), or register one.")
 
 
-def detect_prefix(root: nn.Module, cmap: ComponentMap) -> str | None:
-    """The leading module path ``root`` lacks relative to the map (``""`` when ``root`` is the mapped class itself,
-    ``"model"`` for the ``LlamaModel`` inside a ``LlamaForCausalLM``), found from the primary stack's blocks; ``None``
-    when ``root`` has them under no suffix of the template.
-
-    A suffix counts only when it keeps the block list's own name (a bare index matches any ``nn.Sequential``) and the
-    first block it finds holds a module some block-relative row names.
-    """
-    template = cmap.block_template()
-    if template is None:
-        return None
+def _block_prefix(root: nn.Module, template: str, inner: list[str]) -> str | None:
     segments = template.split(".")
-    inner = [e.module for k, e in cmap.components.items() if k.startswith("blocks.{i}.") and e.module.startswith(
-        f"{template}.")]
     for k in range(len(segments) - 1):
         prefix, block = ".".join(segments[:k]), ".".join(segments[k:])
         if submodule(root, block.replace("{i}", "0")) is None:
@@ -80,6 +68,34 @@ def detect_prefix(root: nn.Module, cmap: ComponentMap) -> str | None:
         if not inner or any(submodule(root, m[len(prefix) + 1 if prefix else 0:].replace("{i}", "0")) is not None
                             for m in inner):
             return prefix
+    return None
+
+
+def detect_prefix(root: nn.Module, cmap: ComponentMap) -> str | None:
+    """The leading module path ``root`` lacks relative to the map (``""`` when ``root`` is the mapped class itself,
+    ``"model"`` for the ``LlamaModel`` inside a ``LlamaForCausalLM``); ``None`` when the map does not describe ``root``.
+
+    It is found from the first block stack that resolves (the primary one, then the declared ones in name order). A
+    suffix of a stack's template counts only when it keeps the block list's own name (a bare index matches any
+    ``nn.Sequential``) and the first block it finds holds a module some row of that stack names. A map with no block
+    stack at all (a model without a block list) is placed from its other rows.
+    """
+    templates = [(stack, cmap.block_template(stack)) for stack in cmap.stack_names()]
+    templates = [(stack, t) for stack, t in templates if t is not None]
+    for stack, template in templates:
+        head = "blocks.{i}." if stack == PRIMARY_STACK else f"{stack}.blocks.{{i}}."
+        inner = [e.module for k, e in cmap.components.items() if k.startswith(head) and e.module.startswith(
+            f"{template}.")]
+        prefix = _block_prefix(root, template, inner)
+        if prefix is not None:
+            return prefix
+    if templates:
+        return None
+    for entry in cmap.components.values():
+        segments = entry.module.split(".")
+        for k in range(len(segments)):
+            if submodule(root, ".".join(segments[k:])) is not None:
+                return ".".join(segments[:k])
     return None
 
 
@@ -101,8 +117,9 @@ class MapStructure:
         self._depths: dict[str, int] = {}
         self._table: dict[str, Location] = {}
         if self.prefix is None:
-            self.refusal = Refusal(f"{type(root).__name__} has none of the blocks the {cmap.architecture} component "
-                                   f"map names ({cmap.block_template()!r}), so the map does not describe it")
+            names = [t for t in map(cmap.block_template, cmap.stack_names()) if t] or list(cmap.components)
+            self.refusal = Refusal(f"{type(root).__name__} has none of the modules the {cmap.architecture} component "
+                                   f"map places from ({', '.join(map(repr, names))}), so the map does not describe it")
             return
         for stack in cmap.stack_names():
             template = self._relative(cmap.block_template(stack))
@@ -141,8 +158,9 @@ class MapStructure:
             return self.refusal
         depth = self._depths.get(stack or PRIMARY_STACK)
         if depth is None:
-            return Refusal(f"the {self.cmap.architecture} component map has no block stack `{stack}`",
-                           tuple(s for s in self._depths if s != PRIMARY_STACK))
+            named = tuple(f"stack:{s}" for s in self._depths if s != PRIMARY_STACK)
+            what = f"block stack `{stack}`" if stack else "primary block stack (`blocks.{i}`)"
+            return Refusal(f"the {self.cmap.architecture} component map has no {what}", named)
         return depth
 
     def components(self) -> list[str]:

@@ -14,13 +14,16 @@ Component Maps
 ^^^^^^^^^^^^^^
 
 Per-architecture component maps, and what is built from them: a vocabulary structure provider, so ``component`` and
-``stack`` resolve, and a tunable view that needs no per-model code.
+``stack`` resolve, and a tunable view that needs no per-model code. A map is a data document that can describe any
+PyTorch module tree: the bundled ones are seeds for common architectures, and a map for any other model is written by
+hand (or derived from another source) and registered.
 
 - :mod:`~venngram.maps.schema`: the document schema, its reader, the vocabulary and the registry of maps;
 - :mod:`~venngram.maps.check`: checking a map against a model (every row's module exists where it says);
 - :mod:`~venngram.maps.structure`: :class:`~venngram.maps.structure.MapStructure`, the map-backed structure provider;
 - :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over it;
-- :mod:`~venngram.maps.transformer_lens`: deriving a map from a TransformerLens architecture adapter.
+- :mod:`~venngram.maps.transformer_lens`: one source of seed maps, deriving a map from a TransformerLens architecture
+  adapter (read duck-typed: venngram does not depend on TransformerLens).
 
 Maps are data: loading one runs no code.
 
