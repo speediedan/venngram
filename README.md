@@ -74,11 +74,29 @@ The grammar, the algebra and the book schema know no model library or interpreta
 architecture or a backend enters only through providers:
 
 - **`PhysicalStructure`** (included) finds any PyTorch model's block list, so `layers` works everywhere.
-- **Vocabulary-backed structure providers** add architecture-neutral components.
+- **Vocabulary-backed structure providers** add architecture-neutral components: `venngram.maps` builds one from a
+  per-architecture component map (below).
 - **Site and latent resolvers** turn `point`, `features` and `subspace` addresses into hooks and loaded latent models
   per backend.
 
 [interpretune](https://github.com/speediedan/interpretune) supplies both of the last two.
+
+## Component maps
+
+`venngram.maps` holds one YAML document per architecture naming where each component of the vocabulary lives in its
+module tree (`embed`, `ln1`, `attn.q`, `attn.k`, `attn.v`, `attn.o`, `ln2`, `mlp.gate`, `mlp.in`, `mlp.out`, `ln_final`,
+`unembed`, and a few more): the names TransformerLens's bridge and interpretune's activation points use. Maps are bundled
+for GPT-2, Llama, Qwen3, OPT, Gemma 2, Gemma 3 and Gemma 3 multimodal, each checked against a model of its
+architecture and against TransformerLens's own adapter for it.
+
+A map is all a tunable view needs, so a mapped architecture needs no view code:
+
+```python
+from venngram.maps import MappedView, PEFT_LORA_RULES
+
+view = MappedView(model, role_rules=PEFT_LORA_RULES)  # the map is found from the model's class
+# `component:mlp.out & layers:-4:` now selects the same tensors on a Llama, an OPT or a Gemma model
+```
 
 ## Tunable views
 
