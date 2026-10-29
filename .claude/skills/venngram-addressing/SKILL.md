@@ -98,8 +98,9 @@ select("@rest", space, book.sets())            # with an AddressBook's sets
   genuinely acceptable.
 - **`layers` needs one block list.** `PhysicalStructure` finds a model's single top-level `nn.ModuleList`. A model
   with several (an encoder and a decoder) is refused until one is named with `layers_pattern`.
-- **`component` needs a vocabulary.** A consumer's view, or interpretune's component maps, supplies one. Without it,
-  fall back to `module:`, which is tied to the model's module names.
+- **`component` needs a vocabulary.** `venngram.maps.MappedView(model)` supplies one for any architecture with a
+  component map (`venngram.maps.known_architectures()`), as can a consumer's own view. Without one, fall back to
+  `module:`, which is tied to the model's module names.
 - `parse(...)` and `to_string(...)` round-trip the two forms, which helps when composing an address in code.
 
 ## Related

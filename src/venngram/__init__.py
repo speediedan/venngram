@@ -24,6 +24,7 @@ specification of the neural traces it targets.
 - :mod:`venngram.book`: address books, the shareable documents of named sets;
 - :mod:`venngram.resolve`: resolution over a model's tensors, and the provider interfaces;
 - :mod:`venngram.physical`: the structure provider every PyTorch model gets;
+- :mod:`venngram.maps`: per-architecture component maps, the structure provider and the generic view built from them;
 - :mod:`venngram.roles`: the role vocabulary (what a tensor *is*, where an address says *which*);
 - :mod:`venngram.tuning`: the tunable view protocol, through which a fine-tuning consumer sees a model.
 

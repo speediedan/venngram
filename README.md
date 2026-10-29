@@ -74,11 +74,54 @@ The grammar, the algebra and the book schema know no model library or interpreta
 architecture or a backend enters only through providers:
 
 - **`PhysicalStructure`** (included) finds any PyTorch model's block list, so `layers` works everywhere.
-- **Vocabulary-backed structure providers** add architecture-neutral components.
+- **Vocabulary-backed structure providers** add architecture-neutral components: `venngram.maps` builds one from a
+  per-architecture component map (below).
 - **Site and latent resolvers** turn `point`, `features` and `subspace` addresses into hooks and loaded latent models
   per backend.
 
 [interpretune](https://github.com/speediedan/interpretune) supplies both of the last two.
+
+## Component maps
+
+`venngram.maps` reads component maps: one YAML document per architecture naming where each of its components lives in
+its module tree. A map can describe any PyTorch model, not only the architectures some library already adapts:
+
+- rows name whatever components the model has (`mixer.conv`, `moe.router`, `projector`);
+- a component whose behaviour the bundled kinds do not describe gets a kind declared in the document (`kinds:`);
+- a heterogeneous stack restricts a row to the layers that have it (`layers: odd`);
+- further block lists (an encoder and a decoder, a vision tower) are declared as named stacks (`stacks:`), and a model
+  with no block list is mapped by its other rows.
+
+```yaml
+schema_version: 2
+architecture: Hybrid          # matched against the model's class name
+kinds:
+  mixer: {output: tensor, sublayer: true}
+components:
+  blocks.{i}:            {module: "trunk.{i}",              kind: block}
+  blocks.{i}.attn.q:     {module: "trunk.{i}.attention.wq", kind: linear, layers: odd}
+  blocks.{i}.mixer.conv: {module: "trunk.{i}.mixer.conv",   kind: linear, layers: even}
+  unembed:               {module: "readout",                kind: unembed}
+```
+
+A shared vocabulary (`embed`, `ln1`, `attn.q`, `attn.k`, `attn.v`, `attn.o`, `ln2`, `mlp.gate`, `mlp.in`, `mlp.out`,
+`ln_final`, `unembed`, and a few more) is the convention for the parts many architectures have, so one address selects
+the same part on all of them; its names match the ones TransformerLens's bridge and interpretune's activation points
+emit. A component outside it simply uses a name of its own.
+
+Seed maps are bundled for GPT-2, Llama, Qwen3, OPT, Gemma 2, Gemma 3 and Gemma 3 multimodal, each checked against a
+model of its architecture and cross-checked against TransformerLens's adapter for it. TransformerLens is one source of
+seeds (`venngram.maps.transformer_lens` derives a map from an adapter); venngram does not depend on it.
+
+A map is all a tunable view needs, so a mapped architecture needs no view code:
+
+```python
+from venngram.maps import from_document, MappedView, PEFT_LORA_RULES, register
+
+register(from_document(yaml.safe_load(open("hybrid.yaml"))))  # a bundled architecture needs no registration
+view = MappedView(model, role_rules=PEFT_LORA_RULES)          # the map is found from the model's class
+# `component:mlp.out & layers:-4:` selects the same tensors on a Llama, an OPT or a Gemma model
+```
 
 ## Tunable views
 
