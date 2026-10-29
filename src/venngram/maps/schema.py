@@ -47,6 +47,8 @@ from typing import Any
 
 import yaml
 
+from venngram.maps.rules import rules_from_document
+
 _DATA_DIR = Path(__file__).parent / "data"
 
 #: The shared component names: a convention for the parts most architectures have, so an address ports across them. A
@@ -202,6 +204,9 @@ class ComponentMap:
     stacks: dict[str, str] = field(default_factory=dict)
     """Further block stacks: name -> module template (the primary stack is implied)."""
     schema_version: int = COMPONENT_MAP_SCHEMA_VERSION
+    verification: Any = None
+    """The document's own verification rules (a :class:`~venngram.maps.rules.RuleSet`), layered over the core ones;
+    ``None`` when it states none."""
     deprecated_since: str | None = None
     """Set when the map is retired: loading it warns, strict lookup refuses, and ``replacement`` names what to use."""
     replacement: str | None = None
@@ -399,8 +404,14 @@ def from_document(doc: Any, source: str = "<document>") -> ComponentMap:
             raise ValueError(f"{source}: `facts` was renamed to `properties` in schema 2")
         properties = _properties(doc.get("properties"), source, "properties")
     kinds, stacks = _kinds(doc.get("kinds"), source), _stacks(doc.get("stacks"), source)
+    # `verification:` is descriptive (it selects no rows), so it needs no schema bump; an older reader ignores it
+    verification = doc.get("verification")
+    if verification is not None:
+        verification = rules_from_document({"name": f"map:{architecture}", **verification}, f"{source}: verification",
+                                           section=True)
     cmap = ComponentMap(architecture=architecture, components=_rows(rows, source, kinds, stacks, version),
                         properties=properties, source=source, kinds=kinds, stacks=stacks, schema_version=version,
+                        verification=verification,
                         deprecated_since=doc.get("deprecated_since"), replacement=doc.get("replacement"))
     if cmap.deprecated_since is not None:
         warnings.warn(f"{source}: the component map for {architecture!r} is deprecated since {cmap.deprecated_since}"

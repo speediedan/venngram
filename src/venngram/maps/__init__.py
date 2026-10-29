@@ -21,6 +21,7 @@ hand (or derived from another source) and registered.
 - :mod:`~venngram.maps.schema`: the document schema, its reader, the vocabulary and the registry of maps;
 - :mod:`~venngram.maps.check`: checking a map against a model (every row's module exists where it says);
 - :mod:`~venngram.maps.structure`: :class:`~venngram.maps.structure.MapStructure`, the map-backed structure provider;
+- :mod:`~venngram.maps.rules`: what verification expects of an architecture, as layered data documents;
 - :mod:`~venngram.maps.verification`: verifying a map against an architecture without weights (partition, widths
   from the configuration, forward order), and its verification record;
 - :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over it;

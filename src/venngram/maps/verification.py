@@ -21,18 +21,21 @@ of the same architecture.
   (:func:`~venngram.maps.check.check_map_against_model`);
 - **partition**: every parameter is located at a component, and no two rows name the same module. A coarse map passes
   this trivially, which is why it is not the only check;
-- **shapes**: widths a vocabulary component must have, read from the configuration: ``attn.q`` from the head count
-  and head size, ``attn.k`` and ``attn.v`` from the key-value head count (so a swapped ``q`` and ``k`` fails under
-  grouped-query attention), the MLP's from its intermediate size, norms one-dimensional;
-- **order**: forward pre-hooks confirm the conventional order within a block, every fired component of a rule's
-  earlier side starting before every one of its later side (attention norm, the q/k/v projections,
-  ``attn.o``, the MLP norm, ``mlp.gate``/``mlp.in``, ``mlp.out``), which catches swapped labels that shapes cannot
+- **shapes**: the widths each row's module must have, as expressions over meanings read from the configuration (under
+  grouped-query attention ``attn.q`` and ``attn.k`` differ, so a swap fails);
+- **order**: forward pre-hooks on the modules no other mapped module sits under record when each component starts,
+  and every order chain is checked where its components fired, which catches swapped labels that widths cannot
   (``ln1`` for ``ln2``).
 
-A rule applies only where the map names its component and the configuration states what it needs, so a map for an
-architecture outside the vocabulary's conventions is verified as far as its rows allow and reported ``partial``, never
-failed for what it does not claim. A report produces a verification record (:meth:`VerificationReport.record`): checks,
-configuration fingerprint, venngram version and date, written only by this verifier.
+What the shapes and order checks expect is data, not code: a rule set (:mod:`~venngram.maps.rules`), layered from the
+bundled ``core`` set, the map's own ``verification:`` section and any the caller passes. So a map for an architecture
+nobody anticipated states its own widths and orders, or removes a core rule that does not hold for it. A rule applies
+only where the map names its component and the configuration states what it needs; a map is verified as far as its
+rules reach and reported ``partial``, never failed for what nothing claims.
+
+A report produces a verification record (:meth:`VerificationReport.record`): every check, the rule sets applied, the
+order observed in the first block of each stack that ran, the configuration's fingerprint, venngram's version and the
+date. The observed order is evidence a later run can be compared against without any rule.
 
 Building a model from a configuration needs ``transformers`` (the ``hf`` extra); a model passed in directly does not.
 
@@ -44,7 +47,7 @@ import datetime
 import hashlib
 import json
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,37 +57,13 @@ from torch import nn
 
 from venngram.__about__ import __version__
 from venngram.maps.check import check_map_against_model, MapProblem, stack_length, submodule
+from venngram.maps.rules import config_field, core_rules, evaluate, layered, RuleSet, Unstated
 from venngram.maps.schema import component_map_for, ComponentMap, load_component_map, PRIMARY_STACK
 from venngram.maps.structure import map_for, MapStructure
+from venngram.resolve import component_matches
 
 #: The schema of a verification record.
 RECORD_SCHEMA_VERSION = 1
-
-#: Configuration fields by meaning, under the names architectures spell them; the first one present wins.
-CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
-    "hidden": ("hidden_size", "n_embd", "d_model"),
-    "heads": ("num_attention_heads", "n_head", "num_heads"),
-    "kv_heads": ("num_key_value_heads", "n_head_kv", "num_kv_heads"),
-    "head_dim": ("head_dim",),
-    "intermediate": ("intermediate_size", "ffn_dim", "n_inner", "d_ff"),
-    "vocab": ("vocab_size",),
-}
-
-#: Pairs ``(earlier, later)``: within one block, a component of ``earlier`` starts before one of ``later`` (the
-#: conventional order of a sequential block). A pair is checked only where both fired in the same block.
-ORDER_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("ln1",), ("attn.q", "attn.k", "attn.v", "attn.qkv")),
-    (("attn.q", "attn.k", "attn.v", "attn.qkv"), ("attn.o",)),
-    (("attn.q",), ("attn.q_norm",)),
-    (("attn.k",), ("attn.k_norm",)),
-    (("attn.o",), ("ln1_post", "ln2")),
-    (("ln1_post",), ("ln2",)),
-    (("ln2",), ("mlp.gate", "mlp.in")),
-    (("mlp.gate", "mlp.in"), ("mlp.out",)),
-    (("mlp.out",), ("ln2_post",)),
-)
-
-_CONTAINER_KINDS = ("block", "attn", "mlp")
 
 
 @dataclass(frozen=True)
@@ -96,6 +75,8 @@ class CheckResult:
     status: str
     problems: tuple[MapProblem, ...] = ()
     note: str = ""
+    detail: dict[str, Any] = field(default_factory=dict)
+    """Evidence beyond pass or fail (the order check's observed order)."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +87,8 @@ class VerificationReport:
     checks: tuple[CheckResult, ...]
     config: dict[str, Any] = field(default_factory=dict)
     """Where the configuration came from (``source``) and its fingerprint (``sha256``)."""
+    rules: tuple[str, ...] = ()
+    """The rule sets applied, in layering order."""
 
     @property
     def status(self) -> str:
@@ -132,8 +115,9 @@ class VerificationReport:
             "schema_version": RECORD_SCHEMA_VERSION,
             "architecture": self.architecture,
             "status": self.status,
-            "checks": {c.name: {"status": c.status, "note": c.note, "problems": [str(p) for p in c.problems]}
-                       for c in self.checks},
+            "checks": {c.name: {"status": c.status, "note": c.note, "problems": [str(p) for p in c.problems],
+                                **c.detail} for c in self.checks},
+            "rules": list(self.rules),
             "config": dict(self.config),
             "venngram_version": __version__,
             "date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -147,23 +131,10 @@ class VerificationReport:
         return "\n".join(lines)
 
 
-def config_value(config: Any, meaning: str) -> int | None:
-    """The configuration's value for a :data:`CONFIG_FIELDS` meaning, or ``None`` if it states none."""
-    for name in CONFIG_FIELDS[meaning]:
-        value = getattr(config, name, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-    return None
-
-
-def _dims(module: Any) -> tuple[int, int] | None:
-    """A projection's ``(in, out)`` widths: ``nn.Linear``'s, or a transposed ``Conv1D``'s (GPT-2's)."""
-    if isinstance(getattr(module, "in_features", None), int) and isinstance(getattr(module, "out_features", None), int):
-        return module.in_features, module.out_features
-    weight = getattr(module, "weight", None)
-    if isinstance(getattr(module, "nf", None), int) and weight is not None and weight.dim() == 2:
-        return int(weight.shape[0]), int(weight.shape[1])
-    return None
+def rules_for(cmap: ComponentMap, rules: Iterable[Any] = (), *, core: bool = True) -> RuleSet:
+    """The rule set verifying ``cmap``: the core set (unless ``core`` is false), the map's own ``verification:``
+    section, then ``rules`` (rule sets, documents or paths), each layered over the last."""
+    return layered(core_rules() if core else None, cmap.verification, *rules)
 
 
 def _stack_config(config: Any, stack: str) -> Any | None:
@@ -172,81 +143,64 @@ def _stack_config(config: Any, stack: str) -> Any | None:
     return getattr(config, f"{stack}_config", None)
 
 
-def _shape_rules(cfg: Any) -> dict[str, list[tuple[str, int]]]:
-    """Component -> the widths it must have (``"in"``, ``"out"``, ``"numel"``), from what ``cfg`` states."""
-    hidden, heads = config_value(cfg, "hidden"), config_value(cfg, "heads")
-    kv = config_value(cfg, "kv_heads") or heads
-    head_dim = config_value(cfg, "head_dim") or (hidden // heads if hidden and heads else None)
-    inter, rules = config_value(cfg, "intermediate"), {}
-    if heads and head_dim:
-        rules["attn.q"] = [("out", heads * head_dim)]
-        rules["attn.k"] = rules["attn.v"] = [("out", kv * head_dim)]  # type: ignore[operator]
-        rules["attn.qkv"] = [("out", (heads + 2 * kv) * head_dim)]  # type: ignore[operator]
-        rules["attn.o"] = [("in", heads * head_dim)] + ([("out", hidden)] if hidden else [])
-        rules["attn.q_norm"] = rules["attn.k_norm"] = [("numel", head_dim)]
-    if inter:
-        rules["mlp.gate"] = rules["mlp.in"] = [("out", inter)] + ([("in", hidden)] if hidden else [])
-        rules["mlp.out"] = [("in", inter)] + ([("out", hidden)] if hidden else [])
-    if hidden:
-        for norm in ("ln1", "ln2", "ln1_post", "ln2_post", "ln_final"):
-            rules[norm] = [("numel", hidden)]
-    return rules
+def _measure(module: Any, what: str) -> int | None:
+    """A module's width: ``in``/``out`` of a projection (``nn.Linear``'s, or a transposed ``Conv1D``'s, as GPT-2's), or
+    its weight's ``rows``, ``numel`` or ``ndim``; ``None`` when the module has no such width."""
+    weight = getattr(module, "weight", None)
+    if what in ("in", "out"):
+        if isinstance(getattr(module, "in_features", None), int) and isinstance(getattr(module, "out_features", None),
+                                                                               int):
+            return module.in_features if what == "in" else module.out_features
+        if isinstance(getattr(module, "nf", None), int) and weight is not None and weight.dim() == 2:
+            return int(weight.shape[0 if what == "in" else 1])
+        return None
+    if not isinstance(weight, torch.Tensor):
+        return None
+    if what == "rows":
+        return int(weight.shape[0]) if weight.dim() >= 1 else None
+    return weight.numel() if what == "numel" else weight.dim()
 
 
-def check_shapes(cmap: ComponentMap, model: nn.Module, config: Any) -> CheckResult:
-    """The **shapes** check (see the module docstring)."""
+def check_shapes(cmap: ComponentMap, model: nn.Module, config: Any, rules: RuleSet | None = None) -> CheckResult:
+    """The **shapes** check: every width ``rules`` expects of a row's module, wherever the configuration states it."""
+    rules = rules if rules is not None else rules_for(cmap)
     if config is None:
         return CheckResult("shapes", "skipped", note="no configuration to read widths from")
     problems: list[MapProblem] = []
-    checked = 0
+    checked = unstated = 0
     for stack in cmap.stack_names():
         cfg, template = _stack_config(config, stack), cmap.block_template(stack)
         if cfg is None:
             continue
-        rules = _shape_rules(cfg)
-        depth = stack_length(model, template) if template else 0
+        value, depth = rules.resolver(cfg), stack_length(model, template) if template else 0
         for key, entry in cmap.components.items():
             k = cmap.key(key)
-            if (k.stack or PRIMARY_STACK) != stack or k.component not in rules:
-                continue
+            spec = rules.widths_for(k.component, entry.kind) if (k.stack or PRIMARY_STACK) == stack else {}
             layers = [None] if not k.in_block else [i for i in range(depth)
                                                      if entry.layers is None or entry.layers.covers(i)]
-            for layer in layers:
+            for layer in layers if spec else ():
                 module = submodule(model, entry.module if layer is None else entry.module.replace("{i}", str(layer)))
-                if module is None:
-                    continue  # the exists check names it
-                checked += 1
-                problems += _shape_problems(key, layer, entry.kind, module, rules[k.component])
-        for key in ("embed", "unembed"):
-            entry, vocab = cmap.components.get(key), config_value(cfg, "vocab")
-            module = submodule(model, entry.module) if entry is not None and stack == PRIMARY_STACK else None
-            weight = getattr(module, "weight", None)
-            if weight is not None and vocab and weight.dim() == 2:
-                checked += 1
-                if int(weight.shape[0]) != vocab:
-                    problems.append(MapProblem(key, None, f"has {int(weight.shape[0])} rows, the vocabulary is "
-                                               f"{vocab}"))
+                for what, expr in spec.items() if module is not None else ():  # the exists check names a missing one
+                    try:
+                        expected = evaluate(expr, value)
+                    except Unstated:
+                        unstated += 1
+                        continue
+                    actual = _measure(module, what)
+                    if actual is None:
+                        continue
+                    checked += 1
+                    if actual != expected:
+                        problems.append(MapProblem(key, layer, f"{what} is {actual}, the rules expect {expected} "
+                                                   f"({expr})"))
+    note = f"{checked} widths checked" + (f", {unstated} not stated by the configuration" if unstated else "")
     if not checked:
-        return CheckResult("shapes", "skipped", note="no row the shape rules cover")
-    return CheckResult("shapes", "failed" if problems else "passed", tuple(problems), f"{checked} modules checked")
-
-
-def _shape_problems(key: str, layer: int | None, kind: str, module: Any, rules: list[tuple[str, int]]):
-    weight = getattr(module, "weight", None)
-    if kind == "norm" and weight is not None and weight.dim() != 1:
-        yield MapProblem(key, layer, f"is a norm, but its weight is {weight.dim()}-dimensional")
-    dims = _dims(module)
-    for what, expected in rules:
-        if what == "numel":
-            actual = None if weight is None else weight.numel()
-        else:
-            actual = None if dims is None else dims[0 if what == "in" else 1]
-        if actual is not None and actual != expected:
-            yield MapProblem(key, layer, f"{what} width is {actual}, the configuration says {expected}")
+        return CheckResult("shapes", "skipped", note=f"no width the rules expect could be measured; {note}")
+    return CheckResult("shapes", "failed" if problems else "passed", tuple(problems), note)
 
 
 def check_partition(cmap: ComponentMap, model: nn.Module) -> CheckResult:
-    """The **partition** check (see the module docstring)."""
+    """The **partition** check: every parameter is located at a component, and no two rows name one module."""
     structure = MapStructure(model, cmap)
     if structure.refusal is not None:
         return CheckResult("partition", "failed", (MapProblem("map", None, structure.refusal.reason),))
@@ -267,22 +221,26 @@ def check_partition(cmap: ComponentMap, model: nn.Module) -> CheckResult:
     return CheckResult("partition", "failed" if problems else "passed", tuple(problems), f"{total} parameters")
 
 
+def _leaves(placed: dict[str, Any]) -> dict[str, Any]:
+    """The placed modules inside a block that no other placed module sits under (a container's pre-hook fires before
+    its children, so only leaves say when a component's own computation starts)."""
+    containers = {p for q in placed for p in placed if p != q and q.startswith(f"{p}.")}
+    return {p: loc for p, loc in placed.items() if p not in containers and loc.layer is not None and loc.component}
+
+
 def check_order(cmap: ComponentMap, model: nn.Module, run: Callable[[nn.Module], Any],
-                rules: Sequence[tuple[tuple[str, ...], tuple[str, ...]]] = ORDER_RULES) -> CheckResult:
-    """The **order** check: ``run(model)`` performs one forward while pre-hooks record when each mapped component of
-    every block first starts; each rule is checked where both its sides fired in the same block."""
-    structure = MapStructure(model, cmap)
+                rules: RuleSet | None = None) -> CheckResult:
+    """The **order** check: ``run(model)`` performs one forward while pre-hooks record when each mapped leaf component
+    of every block first starts; each consecutive pair of groups in each order chain is checked where both fired in
+    the same block."""
+    rules = rules if rules is not None else rules_for(cmap)
     started: dict[tuple[str | None, int], dict[str, int]] = {}
     handles = []
     tick = iter(range(1 << 30))
-    for path, loc in structure.placed().items():
-        if loc.layer is None or not loc.component or cmap.kind_of(loc.component, loc.layer, loc.stack) in (
-                None, *_CONTAINER_KINDS):
-            continue
+    for path, loc in _leaves(MapStructure(model, cmap).placed()).items():
         module = submodule(model, path)
         if not isinstance(module, nn.Module):
             continue
-
         block, component = (loc.stack, int(loc.layer)), str(loc.component)
 
         def hook(_m, _a, block=block, component=component):
@@ -296,40 +254,55 @@ def check_order(cmap: ComponentMap, model: nn.Module, run: Callable[[nn.Module],
     finally:
         for h in handles:
             h.remove()
+    observed: dict[str, list[str]] = {}
+    for (stack, _layer), times in sorted(started.items(), key=lambda kv: (kv[0][0] or "", kv[0][1])):
+        observed.setdefault(stack or PRIMARY_STACK, sorted(times, key=times.__getitem__))
     problems, compared = [], 0
     for (stack, layer), times in sorted(started.items(), key=lambda kv: (kv[0][0] or "", kv[0][1])):
-        for earlier, later in rules:
-            a = [c for c in earlier if c in times]
-            b = [c for c in later if c in times]
-            if a and b:
+        for name, chain in rules.order.items():
+            for earlier, later in zip(chain, chain[1:]):
+                a = [c for c in times if any(component_matches(p, c) for p in earlier)]
+                b = [c for c in times if any(component_matches(p, c) for p in later)]
+                if not (a and b):
+                    continue
                 compared += 1
                 last_a, first_b = max(a, key=times.__getitem__), min(b, key=times.__getitem__)
                 if times[last_a] > times[first_b]:
                     where = f"{stack}.blocks.{{i}}" if stack else "blocks.{i}"
-                    problems.append(MapProblem(f"{where}.{last_a}", layer, f"started after {first_b!r}; "
-                                               f"{'/'.join(earlier)} come before {'/'.join(later)} in a block"))
+                    problems.append(MapProblem(f"{where}.{last_a}", layer, f"started after {first_b!r}, against "
+                                               f"order chain {name!r} ({'/'.join(earlier)} before {'/'.join(later)})"))
+    detail = {"observed_order": observed}
     if not compared:
-        return CheckResult("order", "skipped", note="no order rule had both sides fire in one block")
+        return CheckResult("order", "skipped", note="no order chain had both sides fire in one block", detail=detail)
     return CheckResult("order", "failed" if problems else "passed", tuple(problems),
-                       f"{compared} ordered pairs over {len(started)} blocks")
+                       f"{compared} ordered pairs over {len(started)} blocks", detail)
 
 
-def tiny_config(config: Any, layers: int = 4) -> Any:
-    """A copy of ``config`` small enough to run on a CPU: four heads of size 8 (two key-value heads where the original
-    groups its queries), an intermediate size of 64, and at most ``layers`` layers. Nested ``*_config`` sections are
-    shrunk too; a field the configuration does not have is left alone."""
+#: The small sizes :func:`tiny_config` sets, by meaning; the key-value head count keeps grouped queries grouped.
+TINY: dict[str, int] = {"heads": 4, "head_dim": 8, "hidden": 32, "intermediate": 64}
+
+
+def tiny_config(config: Any, layers: int = 4, rules: RuleSet | None = None) -> Any:
+    """A copy of ``config`` small enough to run on a CPU, for the order check: the configuration fields ``rules`` (the
+    core set by default) names for each :data:`TINY` meaning are set to its size, the key-value head count to 2 where
+    the original groups its queries (4 otherwise), and the layer count to at most ``layers``. Nested ``*_config``
+    sections are shrunk too; a field the configuration does not have is left alone."""
+    rules = rules if rules is not None else core_rules()
     config = copy.deepcopy(config)
     for section in [config, *(v for k, v in vars(config).items() if k.endswith("_config") and v is not None)]:
-        heads, kv = config_value(section, "heads"), config_value(section, "kv_heads")
-        values = {"heads": 4, "kv_heads": 2 if heads and kv and kv < heads else 4, "head_dim": 8, "hidden": 32,
-                  "intermediate": 64}
-        for meaning, value in values.items():
-            for name in CONFIG_FIELDS[meaning]:
-                if isinstance(getattr(section, name, None), int):
-                    setattr(section, name, value)
+        value = rules.resolver(section)
+        try:
+            grouped = value("kv_heads") < value("heads")
+        except Unstated:
+            grouped = False
+        sizes = {**TINY, "kv_heads": 2 if grouped else TINY["heads"]}
+        for meaning, size in sizes.items():
+            for source in rules.config.get(meaning, ()):
+                if isinstance(source, str) and config_field(section, source) is not None:
+                    setattr(section, source, size)
         for name in ("num_hidden_layers", "n_layer", "num_layers"):
-            n = getattr(section, name, None)
-            if isinstance(n, int) and n > layers:
+            n = config_field(section, name)
+            if n is not None and n > layers:
                 setattr(section, name, layers)
                 if isinstance(getattr(section, "layer_types", None), list):
                     section.layer_types = section.layer_types[:layers]
@@ -347,10 +320,10 @@ def _build(config: Any, architecture: str, device: str) -> nn.Module:
 
 
 def default_inputs(model: nn.Module) -> None:
-    """A forward of four tokens, for a model whose configuration states a vocabulary."""
+    """A forward of four tokens, for a model whose configuration states a vocabulary size."""
     config = getattr(model, "config", None)
     cfg = getattr(config, "text_config", None) or config
-    vocab = config_value(cfg, "vocab") if cfg is not None else None
+    vocab = config_field(cfg, "vocab_size") if cfg is not None else None
     if not vocab:
         raise ValueError("the model states no vocabulary size; pass `inputs`")
     model(input_ids=torch.randint(0, min(vocab, 32), (1, 4)))
@@ -363,8 +336,9 @@ def _fingerprint(config: Any) -> str | None:
     return hashlib.sha256(json.dumps(to_dict(), sort_keys=True, default=str).encode()).hexdigest()
 
 
-def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str | None = None,
-           inputs: Callable[[nn.Module], Any] | None = None, order: bool = True) -> VerificationReport:
+def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str | None = None, config: Any = None,
+           rules: Iterable[Any] = (), core: bool = True, inputs: Callable[[nn.Module], Any] | None = None,
+           order: bool = True) -> VerificationReport:
     """Verify a component map against an architecture.
 
     Args:
@@ -372,6 +346,11 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
             model. A model is checked as it is; a configuration is built on the meta device.
         cmap: The map; looked up from ``architecture`` or the target (:func:`~venngram.maps.map_for`) when ``None``.
         architecture: The architecture class name, when the target does not state it.
+        config: The configuration widths are read from, for a model without a ``config`` of its own (an object or a
+            mapping).
+        rules: Further rule sets (:class:`~venngram.maps.rules.RuleSet`, documents or paths), layered over the core set
+            and the map's own section.
+        core: Start from the bundled core rule set; ``False`` verifies against the map's and ``rules`` alone.
         inputs: Runs one forward of a model for the order check (``inputs(model)``); the default feeds four tokens.
             The order check runs on ``target`` itself when it is a model and ``inputs`` is given, and otherwise on a
             small random-init model built from the configuration (:func:`tiny_config`).
@@ -380,13 +359,13 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
     Returns:
         The report; :attr:`VerificationReport.passed` is false when any check failed.
     """
-    model, config, source = None, None, "module"
+    model, source = None, "module"
     if isinstance(target, str):
         from transformers import AutoConfig  # an optional dependency
 
         config, source = AutoConfig.from_pretrained(target), f"hf:{target}"
     elif isinstance(target, nn.Module):
-        model, config = target, getattr(target, "config", None)
+        model, config = target, config if config is not None else getattr(target, "config", None)
     else:
         config, source = target, "config"
     if architecture is None and model is None:
@@ -394,45 +373,50 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
     if cmap is None:
         cmap = map_for(model, architecture) if model is not None else component_map_for(str(architecture))
     arch = architecture or cmap.architecture
+    ruleset = rules_for(cmap, rules, core=core)
     if model is None:
         model = _build(config, arch, "meta")
     checks = [CheckResult("exists", *_status(check_map_against_model(cmap, model))), check_partition(cmap, model),
-              check_shapes(cmap, model, config)]
+              check_shapes(cmap, model, config, ruleset)]
     if order:
-        checks.append(_order(cmap, target, model, config, arch, inputs))
-    return VerificationReport(cmap.architecture, tuple(checks), {"source": source, "sha256": _fingerprint(config)})
+        checks.append(_order(cmap, target, config, arch, inputs, ruleset))
+    return VerificationReport(cmap.architecture, tuple(checks), {"source": source, "sha256": _fingerprint(config)},
+                              ruleset.sources)
 
 
 def _status(problems: list[MapProblem]) -> tuple[str, tuple[MapProblem, ...]]:
     return ("failed" if problems else "passed"), tuple(problems)
 
 
-def _order(cmap: ComponentMap, target: Any, model: nn.Module, config: Any, arch: str,
-           inputs: Callable[[nn.Module], Any] | None) -> CheckResult:
+def _order(cmap: ComponentMap, target: Any, config: Any, arch: str, inputs: Callable[[nn.Module], Any] | None,
+           rules: RuleSet) -> CheckResult:
     if isinstance(target, nn.Module) and inputs is not None:
-        return check_order(cmap, target, inputs)
-    if config is None:
+        return check_order(cmap, target, inputs, rules)
+    if config is None or not hasattr(config, "to_dict"):
         return CheckResult("order", "skipped", note="no configuration to build a small model from; pass `inputs`")
     try:
-        small = _build(tiny_config(config), arch, "cpu").eval()
+        small = _build(tiny_config(config, rules=rules), arch, "cpu").eval()
     except Exception as err:
         return CheckResult("order", "skipped", note=f"could not build a small model: {type(err).__name__}: {err}"[:300])
-    return check_order(cmap, small, inputs or default_inputs)
+    return check_order(cmap, small, inputs or default_inputs, rules)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """``python -m venngram.maps.verification <model id> [--map FILE] [--record FILE]``: exit 1 when a check fails,
-    2 when there is no map to verify."""
+    """``python -m venngram.maps.verification <model id> [--map FILE] [--rules FILE ...] [--record FILE]``: exit 1 when
+    a check fails, 2 when there is no map to verify."""
     parser = argparse.ArgumentParser(prog="python -m venngram.maps.verification", description=main.__doc__)
     parser.add_argument("model", help="a Hugging Face model id (only its configuration is fetched)")
     parser.add_argument("--map", help="a component map document (default: the registered or bundled one)")
     parser.add_argument("--architecture", help="the architecture class name, when the configuration lacks it")
+    parser.add_argument("--rules", action="append", default=[], help="a rule set document to layer on (repeatable)")
+    parser.add_argument("--no-core", action="store_true", help="do not start from the bundled core rule set")
     parser.add_argument("--record", help="write the verification record to this YAML file")
     parser.add_argument("--no-order", action="store_true", help="skip the forward-order check")
     args = parser.parse_args(argv)
     cmap = load_component_map(args.map) if args.map else None
     try:
-        report = verify(args.model, cmap, architecture=args.architecture, order=not args.no_order)
+        report = verify(args.model, cmap, architecture=args.architecture, rules=args.rules, core=not args.no_core,
+                        order=not args.no_order)
     except KeyError as err:
         print(f"{args.model}: {err.args[0]}", file=sys.stderr)
         return 2
@@ -448,11 +432,10 @@ __all__ = [
     "check_partition",
     "check_shapes",
     "CheckResult",
-    "CONFIG_FIELDS",
-    "config_value",
     "default_inputs",
-    "ORDER_RULES",
     "RECORD_SCHEMA_VERSION",
+    "rules_for",
+    "TINY",
     "tiny_config",
     "verify",
     "VerificationReport",

@@ -17,3 +17,7 @@ components:
   blocks.{i}.mlp.out: {module: "transformer.h.{i}.mlp.c_proj",   kind: linear}
   ln_final:           {module: "transformer.ln_f",               kind: norm}
   unembed:            {module: "lm_head",                        kind: unembed}
+# GPT-2's configuration leaves `n_inner` null, meaning four times the hidden width.
+verification:
+  config:
+    intermediate: [n_inner, "4 * hidden"]
