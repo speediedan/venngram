@@ -1,0 +1,97 @@
+name: PyPI
+
+# Builds the distributions on every push to main, so a packaging break surfaces before a release. A published GitHub
+# release attaches them to the release, then publishes to TestPyPI and, after that succeeds, to PyPI. Both publishes
+# use trusted publishing (OIDC): no API tokens, and each runs in its own environment so the publisher registered on
+# TestPyPI and on PyPI can be scoped to it.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install the build tools
+        run: python -m pip install --upgrade build twine
+      - name: Build
+        run: |
+          python -m build
+          ls -lh dist/
+      - name: Check the distributions
+        run: twine check --strict dist/*
+      - name: Check the release tag against the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(python -c "import runpy; print(runpy.run_path('src/venngram/__about__.py')['__version__'])")
+          if [ "${TAG#v}" != "${version}" ]; then
+            echo "::error::release tag ${TAG} does not match venngram.__about__.__version__ ${version}"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
+
+  upload-release-assets:
+    runs-on: ubuntu-22.04
+    needs: build-package
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
+      - name: Attach the distributions to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${TAG}" dist/* --repo "${{ github.repository }}"
+
+  publish-testpypi:
+    runs-on: ubuntu-22.04
+    needs: build-package
+    if: github.event_name == 'release'
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/venngram
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    runs-on: ubuntu-22.04
+    needs: publish-testpypi
+    if: github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/venngram
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
