@@ -59,6 +59,8 @@ def test_imports_are_namespaced_and_keep_their_own_references(model, tmp_path):
     ({"schema_version": 1, "portability": "checkpoint", "sets": {"a": "role:adapter"}}, "pins"),
     ({"schema_version": 1, "portability": "anywhere", "sets": {"a": "role:adapter"}}, "portability"),
     ({"schema_version": 1, "requires": {"structure": "magic"}, "sets": {"a": "role:adapter"}}, "requires.structure"),
+    ({"schema_version": 1, "requires": {"naming_scheme": ""}, "sets": {"a": "role:adapter"}}, "requires.naming_scheme"),
+    ({"schema_version": 1, "requires": {"naming_scheme": 3}, "sets": {"a": "role:adapter"}}, "requires.naming_scheme"),
     ({"schema_version": 1, "imports": {"x": "hub://org/repo"}, "sets": {"a": "role:adapter"}}, "no registered"),
 ])
 def test_malformed_books_are_refused(doc, match):
@@ -105,3 +107,19 @@ def test_locks_detect_drift():
     assert diff_lock(lock, {"top": {"layers.5.w": (4, 4)}}) == []
     drift = diff_lock(lock, {"top": {"layers.5.w": (8, 4), "layers.6.w": (4, 4)}})
     assert drift == ["@top: layers.6.w is newly selected", "@top: layers.5.w changed shape (4, 4) -> (8, 4)"]
+
+
+def test_a_book_written_in_one_vocabulary_is_refused_through_a_view_with_another(tmp_path):
+    write(tmp_path / "tl.yaml", {"schema_version": 1, "requires": {"naming_scheme": "tl"},
+                                 "sets": {"q": {"name": r"blocks\.\d+\.attn\.W_Q"}}})
+    outer = write(tmp_path / "outer.yaml", {"schema_version": 1, "imports": {"tl": "tl.yaml"},
+                                            "sets": {"top": {"role": "adapter", "layers": "-2:"}}})
+    book = AddressBook.from_file(outer)
+    book.check_requires(naming_scheme="tl")
+    book.check_requires(naming_scheme=None)
+    # the requirement is the imported book's, and it binds through the import
+    with pytest.raises(AddressError, match="written in `tl` names, so it requires a view whose naming scheme is `tl`, "
+                                           "not `physical`"):
+        book.check_requires(naming_scheme="physical")
+    # a book of vocabulary-neutral sets declares none and applies through any view
+    AddressBook.from_mapping({"schema_version": 1, "sets": {"a": "role:adapter"}}).check_requires(naming_scheme="tl")

@@ -67,6 +67,10 @@ sets:
 - A book is **data only**: loading it runs no code, so it is safe to share.
 - `portability: checkpoint` books carry unit indices meaningful in one checkpoint, so they must pin
   `applies_to.models` with an `id` and a `revision`.
+- A book whose `name`, `module` or `leaf` values are written in a view's own vocabulary (TransformerLens names, say)
+  declares it: `requires: {naming_scheme: tl}`. A consumer calls `book.check_requires(naming_scheme=...)` with its
+  view's scheme, and a mismatched book is refused by name instead of matching the wrong tensors. Books of `role`,
+  `layers` and `component` sets are vocabulary-neutral and declare none.
 - **Keep run parameters out of books.** Doses, learning rates and intervention strengths belong in the consumer's
   configuration. A book names sets, nothing else.
 - In finetuning-scheduler, a schedule's top-level `addresses:` key names a book file (relative to the schedule) or

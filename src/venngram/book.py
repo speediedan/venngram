@@ -22,7 +22,7 @@ composable (books import books, by namespace) and versioned.
     name: qwen3-tuning-sets
     portability: family          # family: roles, layers, modules, components; checkpoint: units of one model revision
     applies_to: {architectures: [Qwen3ForCausalLM]}
-    requires: {structure: physical}
+    requires: {structure: physical, naming_scheme: physical}
     imports: {base: ./common.yaml}
     sets:
       top:  {role: adapter, layers: "-4:"}
@@ -31,6 +31,13 @@ composable (books import books, by namespace) and versioned.
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
 version; a key that changes what a set selects does.
+
+**Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
+indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
+``module`` and ``leaf`` values are written in (a tunable view's naming scheme: ``physical`` for a model's own parameter
+names, ``tl`` for TransformerLens names); a consumer calls :meth:`AddressBook.check_requires` with its view's scheme,
+and a book written in another vocabulary is refused by name rather than matching the wrong tensors. A book that uses
+only vocabulary-neutral fields (``role``, ``layers``, ``component``) need not declare one.
 
 **Portability is declared.** A ``checkpoint`` book carries unit indices meaningful in one checkpoint only, so it must
 pin ``applies_to.models`` with an ``id`` and a ``revision`` (and may give the ``basis`` its units were found in); it is
@@ -157,6 +164,10 @@ class AddressBook:
         if structure not in STRUCTURE_LEVELS:
             raise AddressError(f"{source}: `requires.structure` is one of {', '.join(STRUCTURE_LEVELS)}, got "
                                f"{structure!r}.")
+        scheme = requires.get("naming_scheme")
+        if scheme is not None and (not isinstance(scheme, str) or not scheme):
+            raise AddressError(f"{source}: `requires.naming_scheme` is a view's naming scheme, a non-empty string"
+                               f" such as `physical` or `tl`, got {scheme!r}.")
         raw_sets = doc.get("sets")
         if not isinstance(raw_sets, Mapping) or not raw_sets:
             raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses.")
@@ -240,6 +251,23 @@ class AddressBook:
 
         for name in self.own_sets:
             visit(name, ())
+
+    def check_requires(self, *, naming_scheme: str | None = None) -> None:
+        """Refuse a consumer that cannot provide what this book, or any book it imports, requires.
+
+        Args:
+            naming_scheme: The naming scheme of the view the book's sets will resolve through (``None`` skips the
+                check).
+
+        Raises:
+            AddressError: If a book requires a different naming scheme, naming the book and both schemes.
+        """
+        want = self.requires.get("naming_scheme")
+        if naming_scheme is not None and want is not None and want != naming_scheme:
+            raise AddressError(f"{self.source}: its sets are written in `{want}` names, so it requires a view whose"
+                               f" naming scheme is `{want}`, not `{naming_scheme}`.")
+        for book in self.imports.values():
+            book.check_requires(naming_scheme=naming_scheme)
 
     def check_applies(self, *, architecture: str | None = None, model_id: str | None = None,
                       revision: str | None = None, basis: str | None = None) -> None:
