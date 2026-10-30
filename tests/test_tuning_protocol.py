@@ -29,7 +29,8 @@ ALLOWED = {"torch", "yaml", "venngram"}
 #: Optional dependencies (each an extra in ``pyproject.toml``), importable inside a function of the named modules only.
 OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"}}
 TORCH_FREE = ("__init__.py", "__about__.py", "address.py", "book.py", "errors.py", "resolve.py", "roles.py", "units.py",
-              "recipe.py", "manifest.py", "store.py", "sources.py")
+              "recipe.py", "manifest.py", "store.py", "sources.py",
+              "ops.py", "operands.py")
 
 
 def _names(node: ast.AST) -> set[str]:

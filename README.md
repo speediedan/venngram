@@ -76,11 +76,15 @@ sorted index array or a packed bitmask per set, read with the standard library (
 or a set written for another axis width, is refused. `venngram.units.units_value` keeps small sets inline and writes
 large ones to a sidecar.
 
-A **recipe** is a treatment over a book's sets: the op (`add`, `mul`, or one registered with
-`venngram.recipe.register_op`), the activation point, the dose normalization and which tokens, plus a dose per set or
-per unit, sampling, evidence and metadata. A recipe pins a model revision. `compose` unites several recipes. Doses on a
-shared unit combine by their op, and mixing ops on one unit is refused unless the composition gives an order. Applying a
-recipe is the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
+A **recipe** is a treatment over a book's sets: ordered **stages**, each applying ordered **ops** at one site under one
+token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
+**operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
+a per-unit table, or a column of recorded evidence through declared transforms). Ops are declared specs
+(`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, and any registered); venngram
+validates and composes them and never executes one. A consumer declares what it honours as a `Support` record, and
+`check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
+do not commute unless the composition gives an order. Schema 1 recipes are read through `migrate`. Applying a recipe is
+the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
 
 ### Sharing documents: manifests and stores
 

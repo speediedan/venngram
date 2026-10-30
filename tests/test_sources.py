@@ -37,10 +37,14 @@ class ToyFormat:
                 "sets": {"toy": {"point": "mlp.out.hook_in", "layers": sorted(units),
                                  "units": {k: {"file": "toy.safetensors", "key": f"L{k}", "sha256": None}
                                            for k in sorted(units)}}}}
-        recipe = {"schema_version": 1, "kind": "recipe", "name": "toy",
+        doses: dict = {}
+        for layer, u, d in neurons:
+            doses.setdefault(layer, {})[u] = d
+        recipe = {"schema_version": 2, "kind": "recipe", "name": "toy",
                   "model": {"id": doc["model"], "revision": revision, "revision_source": "resolved-at-import"},
-                  "book": "toy.yaml", "method": {"op": "add", "site": "mlp.out.hook_in"},
-                  "treatments": [{"set": "toy", "doses": {layer: {u: d} for layer, u, d in neurons}}],
+                  "book": "toy.yaml",
+                  "stages": [{"site": "mlp.out.hook_in",
+                              "ops": [{"op": "add", "target": {"set": "toy"}, "value": {"doses": doses}}]}],
                   "metadata": {"unexpressed": [str(r) for r in skipped]} if skipped else {}}
         sha = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
         return Translation({"toy.yaml": ("address_book", book), "toy_recipe.yaml": ("recipe", recipe)},
@@ -81,7 +85,8 @@ def test_a_translation_is_written_listed_published_and_loaded(tmp_path):
     assert {e.path for e in manifest.documents} == {"toy.yaml", "toy_recipe.yaml", "toy.safetensors"}
     publish("local", str(tmp_path / "pub"), tmp_path / "src", documents=documents)
     recipe = load(f"local:{tmp_path / 'pub'}:toy_recipe.yaml")
-    assert isinstance(recipe, Recipe) and recipe.stage().doses == {(13, 7): -1.0, (14, 9): 0.5}
+    assert isinstance(recipe, Recipe)
+    assert recipe.stages[0].ops[0].unit_doses(recipe.book) == {(13, 7): -1.0, (14, 9): 0.5}
     assert translation.provenance.to_mapping()["revision_source"] == "resolved-at-import"
 
 
