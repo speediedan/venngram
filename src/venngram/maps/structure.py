@@ -30,7 +30,7 @@ from torch import nn
 
 from venngram.errors import Refusal
 from venngram.maps.check import stack_length, submodule
-from venngram.maps.schema import component_map_for, ComponentMap, known_architectures, PRIMARY_STACK
+from venngram.maps.schema import component_map_for, ComponentMap, PRIMARY_STACK
 from venngram.resolve import Location, strip_wrappers
 
 
@@ -53,10 +53,13 @@ def map_for(model: nn.Module, architecture: str | None = None, *, strict: bool =
         return component_map_for(architecture, strict=strict)
     tried = architecture_of(model)
     for name in tried:
-        if name in known_architectures():
+        try:
             return component_map_for(name, strict=strict)
-    raise KeyError(f"no component map for {tried}; known: {known_architectures()}. Pass `architecture` to name the map "
-                   "meant (a base model inside a task head is mapped under the head's class), or register one.")
+        except KeyError:
+            continue
+    raise KeyError(f"no component map for {tried} registered in this process or indexed by the registries. Pass "
+                   "`architecture` to name the map meant (a base model inside a task head is mapped under the head's "
+                   "class), register one, or draft one (`venngram.maps.drafter.draft_map`).")
 
 
 def _block_prefix(root: nn.Module, template: str, inner: list[str]) -> str | None:

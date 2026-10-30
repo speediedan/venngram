@@ -39,7 +39,7 @@ every listed file must carry a sha256, so a fetch is checked even when the refer
 :func:`publish` writes a directory's documents and its manifest to a store. An address book may import another book by
 reference, so books on different stores compose.
 
-The Hub stores need ``huggingface_hub`` (the ``hf`` extra).
+The Hub stores use ``huggingface_hub``.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -58,6 +58,7 @@ from venngram.errors import StoreError
 from venngram.manifest import build_manifest, DocumentEntry, Manifest, MANIFEST_NAME, sha256_of
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 _STORE_NAME = re.compile(r"[a-z][a-z0-9-]+")
 
 
@@ -342,7 +343,9 @@ class HubRepoStore:
         self.name = f"hub-{repo_type}"
 
     def resolve_revision(self, ref: str, revision: str | None) -> str | None:
-        from huggingface_hub import HfApi  # an optional dependency: the `hf` extra
+        if revision is not None and _COMMIT.fullmatch(revision):
+            return revision  # already a commit: no request, so a pinned reference reads offline from the Hub's cache
+        from huggingface_hub import HfApi
 
         repo, _ = _split_hub(ref, self.name)
         sha = HfApi().repo_info(repo, repo_type=self.repo_type, revision=revision).sha

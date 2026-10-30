@@ -26,8 +26,10 @@ from venngram.errors import RoleError, VenngramError
 
 PKG_DIR = Path(venngram.__file__).parent
 ALLOWED = {"torch", "yaml", "venngram"}
-#: Optional dependencies (each an extra in ``pyproject.toml``), importable inside a function of the named modules only.
-OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"}}
+#: Dependencies importable inside a function of the named modules only (so ``import venngram`` stays light): each an
+#: extra in ``pyproject.toml`` or, for the registry's readers, a core dependency.
+OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"},
+            "registry.py": {"huggingface_hub", "pyarrow"}}
 TORCH_FREE = ("__init__.py", "__about__.py", "address.py", "book.py", "errors.py", "resolve.py", "roles.py", "units.py",
               "recipe.py", "manifest.py", "store.py", "sources.py",
               "ops.py", "operands.py")
@@ -61,8 +63,9 @@ def test_imports_only_stdlib_torch_and_yaml(module):
 def test_optional_dependencies_are_declared_extras():
     import tomllib
 
-    extras = tomllib.loads((PKG_DIR.parents[1] / "pyproject.toml").read_text())["project"]["optional-dependencies"]
-    declared = {req.split(">")[0].split("=")[0].split("[")[0].strip() for reqs in extras.values() for req in reqs}
+    project = tomllib.loads((PKG_DIR.parents[1] / "pyproject.toml").read_text())["project"]
+    reqs = [r for rs in project["optional-dependencies"].values() for r in rs] + project["dependencies"]
+    declared = {req.split(">")[0].split("=")[0].split("[")[0].strip() for req in reqs}
     assert set().union(*OPTIONAL.values()) <= declared
 
 

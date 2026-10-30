@@ -9,9 +9,42 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from pathlib import Path
+
 import pytest
 import torch
 from torch import nn
+
+FIXTURE_MAPS = Path(__file__).parent / "fixtures" / "maps"
+
+
+@pytest.fixture(scope="session")
+def seed_registry(tmp_path_factory) -> str:
+    """The seed maps (``fixtures/maps``) published to a local store and indexed: what the Hub registry serves."""
+    import os
+
+    from venngram import registry
+    from venngram.store import publish
+
+    root = tmp_path_factory.mktemp("registry")
+    os.environ.setdefault("VENNGRAM_CACHE", str(root / "cache"))
+    maps = root / "maps"
+    maps.mkdir()
+    for path in sorted(FIXTURE_MAPS.glob("*.yaml")):
+        (maps / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    publish("local", str(maps), maps, documents=[("component_map", p.name) for p in sorted(maps.glob("*.yaml"))])
+    registry.write_index(registry.crawl([f"local:{maps}"]), root / "index", name="test-seeds")
+    return f"local:{root / 'index'}"
+
+
+@pytest.fixture(autouse=True)
+def _registries(seed_registry):
+    """Every test looks maps up in the local seed registry, never the Hub."""
+    from venngram import registry
+
+    registry.set_registries([seed_registry])
+    yield
+    registry.set_registries([seed_registry])
 
 
 class Attn(nn.Module):

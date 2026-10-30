@@ -1,7 +1,7 @@
-name: Published examples
+name: Published examples and registry
 
-# Checks the documents venngram's example repositories publish on the Hub, from the outside, as a reader meets them:
-# every listed document loads at one revision. Weekly, and by hand; never on a pull request, so a Hub outage cannot
+# Checks the documents venngram's example and registry repositories publish on the Hub, from the outside, as a reader
+# meets them: every listed document loads at one revision, and the default registry serves a map for each seed. Weekly, and by hand; never on a pull request, so a Hub outage cannot
 # block one.
 on:
   schedule:
@@ -28,3 +28,13 @@ jobs:
           hub-dataset:speediedan/venngram-examples/adapters
           hub-model:speediedan/venngram-qwen3.5-4b/examples
           hub-model:speediedan/venngram-qwen3.5-4b/neuronary
+          hub-dataset:speediedan/venngram-registry
+      - name: Default registry lookup
+        run: |
+          python - <<'PY'
+          from venngram.maps import component_map_for, known_architectures
+          architectures = known_architectures()
+          assert len(architectures) >= 8, architectures
+          for a in architectures:
+              print(a, len(component_map_for(a, strict=True).components))
+          PY

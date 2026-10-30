@@ -33,11 +33,12 @@ component's *kind*. Block-relative rows are keyed ``blocks.{i}.<component>``; a 
 address (``component:mlp.out``) selects the same part on every architecture that has it. Use a vocabulary name when a
 component plays that part, and a name of your own otherwise.
 
-Sources, in precedence order: a runtime registration (:func:`register`), then the documents bundled under ``data/``.
-The bundled documents are seeds for common architectures, several of them cross-checked against TransformerLens's
-architecture adapters (:mod:`~venngram.maps.transformer_lens` derives a map from one); nothing here depends on
-TransformerLens. The schema is the one interpretune's activation points were first written in, so a document either
-package wrote reads in the other.
+Sources, in precedence order: a registration in this process (:func:`register`), then the configured registries
+(:mod:`venngram.registry`), which index published maps from any source: the seeds for common architectures (several
+cross-checked against TransformerLens's architecture adapters, which :mod:`~venngram.maps.transformer_lens` derives a
+map from), maps drafted from a module tree, and maps written by hand. No map is bundled with venngram, so a new or
+corrected map needs no release; nothing here depends on TransformerLens. The schema is the one interpretune's activation
+points were first written in, so a document either package wrote reads in the other.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -50,7 +51,6 @@ import yaml
 
 from venngram.maps.rules import rules_from_document
 
-_DATA_DIR = Path(__file__).parent / "data"
 
 #: The shared component names: a convention for the parts most architectures have, so an address ports across them. A
 #: map may name any other component. The names follow the ones TransformerLens's bridge and interpretune's activation
@@ -203,7 +203,7 @@ class ComponentMap:
     architecture: str
     components: dict[str, ComponentEntry]
     properties: dict[str, Any] = field(default_factory=dict)
-    source: str = "bundled"
+    source: str = "inline"
     kinds: dict[str, KindSpec] = field(default_factory=lambda: dict(BUNDLED_KINDS))
     """The bundled kinds merged with the document's own declarations."""
     stacks: dict[str, str] = field(default_factory=dict)
@@ -438,46 +438,56 @@ def load_component_map(path: str | Path) -> ComponentMap:
 
 
 _REGISTRY: dict[str, ComponentMap] = {}
-_BUNDLED: dict[str, ComponentMap] = {}
-
-
-def _bundled() -> dict[str, ComponentMap]:
-    if not _BUNDLED:
-        for path in sorted(_DATA_DIR.glob("*.yaml")):
-            cmap = load_component_map(path)
-            _BUNDLED.setdefault(cmap.architecture, cmap)
-    return _BUNDLED
 
 
 def register(cmap: ComponentMap) -> None:
-    """Register (or replace) the map for an architecture at runtime; it takes precedence over a bundled one."""
+    """Register (or replace) the map for an architecture in this process; it takes precedence over the registries."""
     _REGISTRY[cmap.architecture] = cmap
 
 
+def unregister(architecture: str) -> None:
+    """Remove an in-process registration (for tests and replacements)."""
+    _REGISTRY.pop(architecture, None)
+
+
 def component_map_for(architecture: str, *, strict: bool = False) -> ComponentMap:
-    """The map for an architecture class name (``LlamaForCausalLM``).
+    """The map for an architecture class name (``LlamaForCausalLM``): one registered in this process, else the best one
+    the configured registries index (:func:`venngram.registry.lookup_map`).
 
     Args:
         architecture: The architecture class name.
-        strict: Refuse a retired map (one carrying ``deprecated_since``) rather than serving it with a warning.
+        strict: Refuse a retired map (one carrying ``deprecated_since``) rather than serving it with a warning, and
+            take only a ``verified`` map from a registry.
 
     Raises:
-        KeyError: If no map is registered or bundled for ``architecture``, naming the known ones.
+        KeyError: If no map is registered or indexed for ``architecture``.
         ValueError: If ``strict`` and the map is retired.
+        venngram.registry.RegistryError: If a registry cannot be read and was never fetched before.
     """
-    cmap = _REGISTRY.get(architecture) or _bundled().get(architecture)
+    from venngram.registry import lookup_map, registries
+
+    cmap = _REGISTRY.get(architecture) or lookup_map(architecture, strict=strict)
     if cmap is None:
-        raise KeyError(f"no component map for architecture {architecture!r}; known: {known_architectures()}. Register "
-                       "one with `venngram.maps.register`.")
+        raise KeyError(f"no component map for architecture {architecture!r} registered in this process "
+                       f"({registered_architectures()}) or indexed by the registries {registries()}. Register one with "
+                       "`venngram.maps.register`, draft one with `venngram.maps.drafter.draft_map`, or publish one and "
+                       "add its location to a registry.")
     if strict and cmap.deprecated_since is not None:
         raise ValueError(f"the component map for {architecture!r} is deprecated since {cmap.deprecated_since}"
                          + (f"; use {cmap.replacement!r}" if cmap.replacement else "") + " (refused by strict lookup)")
     return cmap
 
 
+def registered_architectures() -> list[str]:
+    """Every architecture with a map registered in this process."""
+    return sorted(_REGISTRY)
+
+
 def known_architectures() -> list[str]:
-    """Every architecture with a registered or bundled map."""
-    return sorted({*_bundled(), *_REGISTRY})
+    """Every architecture with a map registered in this process or indexed by a configured registry."""
+    from venngram.registry import subjects
+
+    return sorted({*_REGISTRY, *subjects("component_map")})
 
 
 __all__ = [
@@ -496,6 +506,8 @@ __all__ = [
     "load_component_map",
     "PRIMARY_STACK",
     "register",
+    "registered_architectures",
     "RowLayers",
+    "unregister",
     "VOCABULARY",
 ]

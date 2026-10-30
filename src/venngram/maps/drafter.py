@@ -44,6 +44,7 @@ service.
 """
 import json
 import re
+import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -56,7 +57,7 @@ from torch import nn
 
 from venngram.maps.check import check_map_against_model, MapProblem
 from venngram.maps.schema import (BUNDLED_KINDS, component_map_for, ComponentEntry, ComponentKey, ComponentMap,
-                                  from_document, KindSpec, known_architectures, VOCABULARY)
+                                  from_document, KindSpec, registered_architectures, VOCABULARY)
 from venngram.sources import SourceError
 
 #: The drafting-rules document schema this code reads.
@@ -104,14 +105,39 @@ class DraftingRules:
         try:
             containers = tuple(ContainerRule(str(c["match"]), str(c["component"]), str(c["kind"]))
                                for c in doc.get("containers") or ())
-            leaves = {str(scope): tuple(Rule(str(r["match"]), str(r["component"]), r.get("when_sibling"))
-                                        for r in rules) for scope, rules in (doc.get("leaves") or {}).items()}
+            leaves = {str(scope): tuple(Rule(str(r["match"]), str(r["component"]), r.get("when_sibling"),
+                                             float(r["share"]) if r.get("share") is not None else None,
+                                             tuple(str(a) for a in r.get("alternatives") or ()))
+                                        for r in rules)
+                      for scope, rules in (doc.get("leaves") or {}).items()}
             kinds = {str(k): KindSpec(**v) for k, v in (doc.get("kinds") or {}).items()}
             for pattern in [c.match for c in containers] + [r.match for rs in leaves.values() for r in rs]:
                 re.compile(pattern)
         except (KeyError, TypeError, re.error) as e:
             raise SourceError(f"{source}: malformed drafting rule: {e}") from e
         return cls(str(doc.get("name") or source), containers, leaves, kinds)
+
+    def to_mapping(self) -> dict[str, Any]:
+        """The ``drafting_rules`` document (a mined rule keeps its share and alternatives)."""
+        def leaf(r: Rule) -> dict[str, Any]:
+            out: dict[str, Any] = {"match": r.match, "component": r.component}
+            if r.when_sibling is not None:
+                out["when_sibling"] = r.when_sibling
+            if r.share is not None:
+                out["share"] = r.share
+            if r.alternatives:
+                out["alternatives"] = list(r.alternatives)
+            return out
+
+        doc: dict[str, Any] = {"schema_version": DRAFTING_RULES_SCHEMA_VERSION, "kind": "drafting_rules",
+                               "name": self.name}
+        if self.containers:
+            doc["containers"] = [{"match": c.match, "component": c.component, "kind": c.kind} for c in self.containers]
+        if self.leaves:
+            doc["leaves"] = {scope: [leaf(r) for r in rules] for scope, rules in self.leaves.items()}
+        if self.kinds:
+            doc["kinds"] = {k: {"output": v.output, "sublayer": v.sublayer} for k, v in self.kinds.items()}
+        return doc
 
 
 def load_drafting_rules(path: str | Path) -> DraftingRules:
@@ -128,14 +154,15 @@ def bundled_drafting_rules() -> list[DraftingRules]:
 
 
 def mine_rules(maps: Iterable[ComponentMap] | None = None) -> DraftingRules:
-    """Drafting rules learned from component maps (by default every registered one).
+    """Drafting rules learned from component maps (by default the maps registered in this process; the registries
+    publish the rules mined from all of theirs, :func:`venngram.registry.mined_rules`).
 
     Each primary-stack row teaches a leaf rule (its module's last name, within its container's component or the block)
     and each container row a container rule; rows outside the stack teach ``outer`` rules. Where maps disagree on one
     name in one scope, the majority's reading is the plain rule and each other reading becomes a conditional rule on a
     sibling only its maps have (sandwich norms are learned this way), when one exists.
     """
-    maps = list(maps) if maps is not None else [component_map_for(a) for a in known_architectures()]
+    maps = list(maps) if maps is not None else [component_map_for(a) for a in registered_architectures()]
     votes: dict[tuple[str, str], Counter] = defaultdict(Counter)
     siblings: dict[tuple[str, str, str], list[set[str]]] = defaultdict(list)
     containers: dict[str, tuple[str, str]] = {}
@@ -189,8 +216,17 @@ def mine_rules(maps: Iterable[ComponentMap] | None = None) -> DraftingRules:
 
 
 def default_rules() -> list[DraftingRules]:
-    """Rules mined from the registry, then the bundled rule documents."""
-    return [mine_rules(), *bundled_drafting_rules()]
+    """Rules mined from the maps registered in this process, then those the configured registries mined from theirs,
+    then the bundled rule documents. A registry that cannot be read is skipped with a warning."""
+    from venngram.registry import mined_rules, RegistryError
+
+    try:
+        published = mined_rules()
+    except RegistryError as err:
+        warnings.warn(f"drafting without registry-mined rules: {err}", stacklevel=2)
+        published = []
+    local = [mine_rules()] if registered_architectures() else []
+    return [*local, *published, *bundled_drafting_rules()]
 
 
 def _block_stack(model: nn.Module) -> tuple[str, nn.ModuleList]:

@@ -10,6 +10,7 @@ from test_maps import CONFIGS, tiny  # noqa: E402
 from venngram.maps import component_map_for, known_architectures  # noqa: E402
 from venngram.maps.drafter import (bundled_drafting_rules, draft_map, draft_with_model, DraftingRules,  # noqa: E402
                                    map_document, mine_rules, ModuleTreeSource)
+from venngram.registry import mined_rules  # noqa: E402
 from venngram.sources import derive_map, register_map_source, SourceError, unregister  # noqa: E402
 
 TEXT = ["GPT2LMHeadModel", "Gemma2ForCausalLM", "LlamaForCausalLM", "OPTForCausalLM", "Qwen3ForCausalLM"]
@@ -34,7 +35,8 @@ def test_a_draft_from_other_architectures_rules_agrees_with_the_bundled_map(arch
 
 
 def test_sandwich_norms_are_learned_from_the_registry_alone():
-    rules = mine_rules()
+    (rules,) = mined_rules()  # what the registry mined from all its maps when it was built, read back as a document
+    assert rules == mine_rules([component_map_for(a) for a in known_architectures()])
     conditional = [r for r in rules.leaves["block"] if r.match == "post_attention_layernorm"]
     assert [(r.component, r.when_sibling is not None) for r in conditional] == [("ln1_post", True), ("ln2", False)]
     llama = draft_map(tiny("LlamaForCausalLM"), rules=[rules])

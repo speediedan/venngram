@@ -108,7 +108,7 @@ the exact reference it resolves to (a commit and the content hash), for records 
 stores the ref may name a directory of a repository or bucket (`me/my-sets/qwen3`), each with its own manifest, so one
 repository can hold many small manifests. Fetching reads the manifest first, at one revision, and refuses a path it does
 not list or a file whose content differs from what the manifest or the reference cites. A book can import another book
-by reference. The Hub stores need the `hf` extra; a new place to keep
+by reference. The Hub stores use `huggingface_hub`; a new place to keep
 documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
@@ -173,10 +173,26 @@ A shared vocabulary (`embed`, `ln1`, `attn.q`, `attn.k`, `attn.v`, `attn.o`, `ln
 the same part on all of them; its names match the ones TransformerLens's bridge and interpretune's activation points
 emit. A component outside it simply uses a name of its own.
 
-Seed maps are bundled for GPT-2, Llama, Qwen3, Qwen3.5 (hybrid linear and softmax attention, multimodal), OPT, Gemma 2,
-Gemma 3 and Gemma 3 multimodal, each checked against a
-model of its architecture and cross-checked against TransformerLens's adapter for it. TransformerLens is one source of
-seeds (`venngram.maps.transformer_lens` derives a map from an adapter); venngram does not depend on it.
+**Maps are found through registries, not bundled.** A map is looked up first among those registered in the running
+process, then in the configured registries (`VENNGRAM_REGISTRIES`, a list of index locations; unset, it is the seed
+registry, and empty, none). A registry is an index over published maps, rebuilt by a crawler from manifest locations
+and from Hub repositories tagged `venngram`, so a map from any source (written by hand, drafted from a module tree, or
+derived from TransformerLens or another package) is indexed and found like the seeds. Several maps may serve one
+architecture: lookup serves the best verified one, and `venngram.registry.rows` lists every candidate. The index is a
+parquet dataset partitioned by kind and subject (architecture, or model id for checkpoint documents), so a lookup reads
+one small file however large the registry grows; the last revision read is served from the cache, with a warning, when
+the store is unreachable.
+
+```bash
+python -m venngram.registry build --source hub-dataset:<owner>/<repo>/maps --discover-hub --out ./index
+python -m venngram.registry publish ./index hub-dataset:<owner>/<repo>/index
+python -m venngram.registry lookup Qwen3ForCausalLM     # every candidate, and the one served
+```
+
+The seeds cover GPT-2, Llama, Qwen3, Qwen3.5 (hybrid linear and softmax attention, multimodal), OPT, Gemma 2, Gemma 3
+and Gemma 3 multimodal, each checked against a model of its architecture and cross-checked against TransformerLens's
+adapter for it. TransformerLens is one source of seeds (`venngram.maps.transformer_lens` derives a map from an
+adapter); venngram does not depend on it.
 
 A map is verified against an architecture without downloading weights: on a meta-device model built from the
 configuration, every row's module exists, every parameter is claimed by exactly one component, and the widths the
@@ -209,7 +225,7 @@ A map is all a tunable view needs, so a mapped architecture needs no view code:
 ```python
 from venngram.maps import from_document, MappedView, PEFT_LORA_RULES, register
 
-register(from_document(yaml.safe_load(open("hybrid.yaml"))))  # a bundled architecture needs no registration
+register(from_document(yaml.safe_load(open("hybrid.yaml"))))  # an indexed architecture needs no registration
 view = MappedView(model, role_rules=PEFT_LORA_RULES)          # the map is found from the model's class
 # `component:mlp.out & layers:-4:` selects the same tensors on a Llama, an OPT or a Gemma model
 ```
