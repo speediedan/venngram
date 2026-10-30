@@ -79,8 +79,8 @@ large ones to a sidecar.
 A **recipe** is a treatment over a book's sets: the op (`add`, `mul`, or one registered with
 `venngram.recipe.register_op`), the activation point, the dose normalization and which tokens, plus a dose per set or
 per unit, sampling, evidence and metadata. A recipe pins a model revision. `compose` unites several recipes. Doses on a
-shared unit combine by their op, and mixing ops on one unit is refused unless the composition gives an order.
-`from_neuronary` imports a [neuronary](https://github.com/lyramakesmusic/neuronary) recipe.
+shared unit combine by their op, and mixing ops on one unit is refused unless the composition gives an order. Applying a
+recipe is the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
 
 ## What resolves where
 

@@ -32,12 +32,16 @@ carry several treatments and a treatment can be re-run against a revised selecti
     evidence: {examples: [...]}
     metadata: {...}
 
-Applying a recipe to a model belongs to the consumer (interpretune steers, finetuning-scheduler tunes a unit adapter);
-this module reads, writes and composes the documents. :func:`compose` unites several recipes' selections and merges
-their doses per unit: doses add under ``add`` and multiply under ``mul`` (:data:`OPS`, extensible with
-:func:`register_op`), and mixing ops on one unit is refused unless the composition states an order, since they do not
-commute. :func:`from_neuronary` imports a `neuronary <https://github.com/lyramakesmusic/neuronary>`_ recipe, the first
-concrete format the schema reads.
+Applying a recipe to a model belongs to the consumer (e.g. interpretune steers, finetuning-scheduler tunes a unit
+adapter); this module reads, writes and composes the documents, and knows no consumer and no other recipe format. A
+format another tool writes is read by an adapter outside this module, which emits a book and a recipe as documents.
+:func:`compose` unites several recipes' selections and merges their doses per unit: doses add under ``add`` and
+multiply under ``mul`` (:data:`OPS`, extensible with :func:`register_op`), and mixing ops on one unit is refused unless
+the composition states an order, since they do not commute.
+
+``method`` is schema 1's shape: one op with a scalar dose per unit. Ops that take an operand (a direction, a pair of
+directions, a subspace), parameters, a basis, a token scope or several ordered ops at one site need a richer op
+declaration, a later schema of this document.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -58,11 +62,6 @@ RECIPE_SCHEMA_VERSION = 1
 
 #: Ops by name, each with how two doses on one unit combine.
 OPS: dict[str, Callable[[float, float], float]] = {"add": operator.add, "mul": operator.mul}
-
-#: neuronary sites -> venngram activation points. neuronary has one site today.
-NEURONARY_SITES = {"mlp.down_proj.input": "mlp.out.hook_in"}
-
-_NEURONARY_METADATA = ("id", "description", "tags", "author", "date", "aliases", "source", "notes", "conditional")
 
 
 def register_op(name: str, combine: Callable[[float, float], float], *, replace: bool = False) -> None:
@@ -336,69 +335,11 @@ def load_recipe(path: str | Path) -> Recipe | Composition:
     return Recipe.from_mapping(doc, source=str(path), base_dir=path.parent)
 
 
-def _resolve_revision(model_id: str) -> str:
-    from huggingface_hub import HfApi  # an optional dependency: only resolving a revision at import needs it
-
-    sha = HfApi().model_info(model_id).sha
-    if not sha:
-        raise AddressError(f"could not resolve a revision for {model_id}; pass `revision`.")
-    return sha
-
-
-def from_neuronary(doc: Mapping[str, Any], *, revision: str | None = None,
-                   resolve_revision: Callable[[str], str] = _resolve_revision) -> tuple[dict, dict]:
-    """A neuronary recipe as an address book and a venngram recipe (both mappings, for writing as documents).
-
-    The neurons become a checkpoint book's per-layer units, their doses one dose (when they agree) or a per-unit table,
-    the examples the evidence, and the descriptive fields metadata. neuronary pins no revision: unless ``revision`` is
-    given, the model's current commit is resolved now and recorded as ``revision_source: resolved-at-import``.
-
-    Raises:
-        AddressError: If a neuron names an MoE expert (no venngram address field for one yet) or the site is unknown.
-    """
-    model_id, neurons = doc["model"], doc["neurons"]
-    if any("expert" in n for n in neurons):
-        raise AddressError(f"{doc.get('id')}: a neuron names an MoE expert, which venngram does not address yet.")
-    method = {"op": "add", "site": "mlp.down_proj.input", "normalization": "layer_residual_median_over_down_column_l2",
-              "apply_to": "all_tokens", **(doc.get("method") or {})}
-    if method["site"] not in NEURONARY_SITES:
-        raise AddressError(f"{doc.get('id')}: unknown neuronary site {method['site']!r}; known: "
-                           f"{sorted(NEURONARY_SITES)}.")
-    method["site"] = NEURONARY_SITES[method["site"]]
-    source = "given" if revision is not None else "resolved-at-import"
-    revision = revision if revision is not None else resolve_revision(model_id)
-    per_layer: dict[int, list[int]] = {}
-    for n in neurons:
-        per_layer.setdefault(int(n["layer"]), []).append(int(n["neuron"]))
-    name = str(doc["id"])
-    book = {"schema_version": 1, "name": name, "portability": "checkpoint",
-            "applies_to": {"models": [{"id": model_id, "revision": revision}]},
-            "sets": {name: {"point": method["site"], "layers": sorted(per_layer),
-                            "units": {k: sorted(set(v)) for k, v in sorted(per_layer.items())}}}}
-    doses = {float(n["dose"]) for n in neurons}
-    treatment: dict[str, Any] = {"set": name}
-    if len(doses) == 1:
-        treatment["dose"] = doses.pop()
-    else:
-        table: dict[int, dict[int, float]] = {}
-        for n in neurons:
-            table.setdefault(int(n["layer"]), {})[int(n["neuron"])] = float(n["dose"])
-        treatment["doses"] = table
-    recipe = {"schema_version": RECIPE_SCHEMA_VERSION, "kind": "recipe", "name": doc.get("name", name),
-              "model": {"id": model_id, "revision": revision, "revision_source": source}, "book": book,
-              "method": method, "treatments": [treatment], "sampling": dict(doc.get("sampling") or {}),
-              "evidence": {"examples": list(doc.get("examples") or [])},
-              "metadata": {"imported_from": "neuronary", **{k: doc[k] for k in _NEURONARY_METADATA if k in doc}}}
-    return book, recipe
-
-
 __all__ = [
     "compose",
     "Composition",
-    "from_neuronary",
     "load_recipe",
     "Method",
-    "NEURONARY_SITES",
     "OPS",
     "Recipe",
     "RECIPE_SCHEMA_VERSION",
