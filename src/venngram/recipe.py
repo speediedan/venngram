@@ -28,7 +28,7 @@ names), so one selection can carry several treatments and a treatment can be re-
       concept: {file: dirs.safetensors, key: concept, sha256: ..., shape: [2560], basis: unfolded}
     stages:                                  # in order; a stage applies at one site
       - site: mlp.out.hook_in
-        tokens: all                          # all | last | {positions: [...]} | {slice: "-4:"}
+        tokens: all                          # all | last | prompt | generated | {positions: [...]} | {slice: "-4:"}
         ops:                                 # in order; each sees the previous op's output
           - {op: add, target: {set: chess}, value: {dose: 0.8}}
           - {op: add, target: {set: openings}, value: {doses: {15: {4041: 0.5}}}}
@@ -46,7 +46,8 @@ module (:mod:`venngram.sources`).
 latent space a book set names (its ``space`` and ``features``; the consumer supplies the space's encoder). **Values**:
 a ``dose``, a per-unit ``doses`` table, or ``from`` a column of recorded evidence through a ``transform`` pipeline of
 declared transforms (:data:`~venngram.ops.TRANSFORMS`). **Tokens** are set per stage; an op may override them only if
-its spec allows.
+its spec allows. ``prompt`` is every position of the input before any generated token; ``generated`` is every
+position the consumer generates, at each decode step (a consumer that does not generate refuses it by name).
 
 **Composition** (:func:`compose`): recipes on one model revision compose stage by stage. Without an order, ops from
 different recipes at one site must commute (the same summing or multiplying op, or disjoint unit sets); otherwise the
@@ -77,7 +78,9 @@ RECIPE_SCHEMA_VERSION = 2
 #: The recipe schemas this code reads (schema 1 through :func:`migrate`).
 RECIPE_WINDOW = (1, 2)
 
-_APPLY_TO = {"all_tokens": "all", "last_token": "last"}
+#: Token scopes written as a bare string.
+_BARE_SCOPES = ("all", "last", "prompt", "generated")
+_APPLY_TO = {"all_tokens": "all", "last_token": "last", "prompt_tokens": "prompt", "generated_tokens": "generated"}
 
 
 class RecipeSchemaWarning(DeprecationWarning):
@@ -126,14 +129,14 @@ class Operand:
 
 @dataclass(frozen=True)
 class Tokens:
-    """A token scope: ``all``, ``last``, explicit ``positions``, or a ``slice``."""
+    """A token scope: ``all``, ``last``, ``prompt``, ``generated``, explicit ``positions``, or a ``slice``."""
 
     kind: str = "all"
     positions: tuple[int, ...] | None = None
     slice: str | None = None
 
     def to_doc(self) -> Any:
-        if self.kind in ("all", "last"):
+        if self.kind in _BARE_SCOPES:
             return self.kind
         return {"positions": list(self.positions or ())} if self.kind == "positions" else {"slice": self.slice}
 
@@ -381,14 +384,15 @@ def _operand(name: str, raw: Any, source: str) -> Operand:
 def _tokens(raw: Any, where: str) -> Tokens:
     if raw in (None, "all"):
         return Tokens("all")
-    if raw == "last":
-        return Tokens("last")
+    if raw in _BARE_SCOPES:
+        return Tokens(raw)
     if isinstance(raw, Mapping) and isinstance(raw.get("positions"), list) \
             and all(isinstance(p, int) for p in raw["positions"]):
         return Tokens("positions", positions=tuple(raw["positions"]))
     if isinstance(raw, Mapping) and isinstance(raw.get("slice"), str):
         return Tokens("slice", slice=raw["slice"])
-    raise AddressError(f"{where}: `tokens` is all, last, {{positions: [...]}} or {{slice: \"a:b\"}}, got {raw!r}.")
+    raise AddressError(f"{where}: `tokens` is all, last, prompt, generated, {{positions: [...]}} or "
+                       f"{{slice: \"a:b\"}}, got {raw!r}.")
 
 
 def _params(raw: Any, specs: Mapping[str, Any], where: str) -> dict[str, Any]:
