@@ -1,0 +1,43 @@
+# The core verification rules: the conventional parts of a decoder block, keyed by the shared component vocabulary.
+# A map's own `verification:` section, or a rule set the caller passes, layers over these: an entry with the same key
+# replaces this one, and a `null` removes it. Nothing here selects rows; a rule whose component a map does not name, or
+# whose expression names a meaning a configuration does not state, is skipped.
+schema_version: 1
+name: core
+config:
+  hidden: [hidden_size, n_embd, d_model]
+  heads: [num_attention_heads, n_head, num_heads]
+  kv_heads: [num_key_value_heads, n_head_kv, num_kv_heads, heads]
+  head_dim: [head_dim, "hidden // heads"]
+  intermediate: [intermediate_size, ffn_dim, n_inner, d_ff]
+  vocab: [vocab_size]
+widths:
+  attn.q: {out: "heads * head_dim"}
+  attn.k: {out: "kv_heads * head_dim"}
+  attn.v: {out: "kv_heads * head_dim"}
+  attn.qkv: {out: "(heads + 2 * kv_heads) * head_dim"}
+  attn.o: {in: "heads * head_dim", out: hidden}
+  attn.q_norm: {numel: head_dim}
+  attn.k_norm: {numel: head_dim}
+  mlp.gate: {in: hidden, out: intermediate}
+  mlp.in: {in: hidden, out: intermediate}
+  mlp.out: {in: intermediate, out: hidden}
+  ln1: {numel: hidden}
+  ln2: {numel: hidden}
+  ln1_post: {numel: hidden}
+  ln2_post: {numel: hidden}
+  ln_final: {numel: hidden}
+  embed: {rows: vocab}
+  unembed: {out: vocab}
+kinds:
+  norm: {ndim: 1}
+order:
+  norm_then_attention: [ln1, [attn.q, attn.k, attn.v, attn.qkv]]
+  projections_then_output: [[attn.q, attn.k, attn.v, attn.qkv], attn.o]
+  q_then_q_norm: [attn.q, attn.q_norm]
+  k_then_k_norm: [attn.k, attn.k_norm]
+  attn_then_mlp: [attn.o, [ln1_post, ln2]]
+  post_norm_then_mlp_norm: [ln1_post, ln2]
+  norm_then_mlp: [ln2, [mlp.gate, mlp.in]]
+  mlp_input_then_output: [[mlp.gate, mlp.in], mlp.out]
+  mlp_then_post_norm: [mlp.out, ln2_post]

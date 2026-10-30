@@ -113,6 +113,31 @@ Seed maps are bundled for GPT-2, Llama, Qwen3, OPT, Gemma 2, Gemma 3 and Gemma 3
 model of its architecture and cross-checked against TransformerLens's adapter for it. TransformerLens is one source of
 seeds (`venngram.maps.transformer_lens` derives a map from an adapter); venngram does not depend on it.
 
+A map is verified against an architecture without downloading weights: on a meta-device model built from the
+configuration, every row's module exists, every parameter is claimed by exactly one component, and the widths the
+configuration implies hold (`attn.q` and `attn.k` differ under grouped-query attention, so a swap fails); a forward on
+a small random-init model confirms the order within a block, which catches swapped labels that widths cannot. What the
+width and order checks expect is data, not code: rule sets layered from a bundled `core` set (the conventional decoder
+parts), the map's own `verification:` section, and any the caller passes, where a later layer replaces an entry by key
+and `null` removes one. A map for an architecture nobody anticipated states its own widths and orders, and a
+parallel-residual one drops the core chain that does not hold for it:
+
+```yaml
+verification:
+  config:  {experts: [num_experts]}                       # a meaning: configuration fields, or arithmetic
+  widths:  {moe.router: {in: hidden, out: experts}}       # expressions over the meanings
+  order:   {attn_then_mlp: null,                           # remove a core chain
+            parallel_mlp: [ln2, mlp.in, mlp.out]}          # add one of its own
+```
+
+A rule applies only where the map names its component and the configuration states what it needs, so a map is
+reported `partial` rather than failed for what nothing claims. Each record keeps the order observed in the first block,
+evidence a later checkpoint can be compared against without any rule.
+
+```bash
+python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or venngram.maps.verify(config_or_model)
+```
+
 A map is all a tunable view needs, so a mapped architecture needs no view code:
 
 ```python
