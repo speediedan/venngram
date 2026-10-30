@@ -133,8 +133,11 @@ class MapStructure:
                 self._table[path] = Location(stack=k.stack, component=k.component)
                 continue
             for layer in range(self._depths.get(k.stack or PRIMARY_STACK, 0)):
+                concrete = path.replace("{i}", str(layer))
+                if entry.optional and submodule(root, concrete) is None:
+                    continue
                 if entry.layers is None or entry.layers.covers(layer):
-                    self._table[path.replace("{i}", str(layer))] = Location(k.stack, layer, k.component or None)
+                    self._table[concrete] = Location(k.stack, layer, k.component or None)
 
     def _relative(self, path: str | None) -> str | None:
         if path is None or not self.prefix:

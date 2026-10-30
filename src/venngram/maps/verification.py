@@ -35,7 +35,8 @@ rules reach and reported ``partial``, never failed for what nothing claims.
 
 A report produces a verification record (:meth:`VerificationReport.record`): every check, the rule sets applied, the
 order observed in the first block of each stack that ran, the configuration's fingerprint, venngram's version and the
-date. The observed order is evidence a later run can be compared against without any rule.
+date. The observed order is evidence a later run is compared against without any rule (``verify(..., against=record)``,
+the **against_record** check).
 
 Building a model from a configuration needs ``transformers`` (the ``hf`` extra); a model passed in directly does not.
 
@@ -329,6 +330,23 @@ def default_inputs(model: nn.Module) -> None:
     model(input_ids=torch.randint(0, min(vocab, 32), (1, 4)))
 
 
+def check_against(report_order: CheckResult, record: dict[str, Any], architecture: str) -> CheckResult:
+    """The **against_record** check: the order this run observed equals the one a stored verification record observed
+    (a later checkpoint or library release that reorders a block is caught without any order rule)."""
+    if record.get("architecture") != architecture:
+        return CheckResult("against_record", "failed", (MapProblem("record", None, f"is for "
+                           f"{record.get('architecture')!r}, not {architecture!r}"),))
+    expected = ((record.get("checks") or {}).get("order") or {}).get("observed_order")
+    observed = report_order.detail.get("observed_order")
+    if not expected or not observed:
+        return CheckResult("against_record", "skipped", note="the record or this run observed no order")
+    problems = tuple(MapProblem(f"stack {stack!r}", None, f"observed {observed.get(stack)}, the record observed "
+                                f"{expected.get(stack)}")
+                     for stack in sorted({*expected, *observed}) if expected.get(stack) != observed.get(stack))
+    return CheckResult("against_record", "failed" if problems else "passed", problems,
+                       f"record of {record.get('date', '?')}")
+
+
 def _fingerprint(config: Any) -> str | None:
     to_dict = getattr(config, "to_dict", None)
     if to_dict is None:
@@ -338,7 +356,7 @@ def _fingerprint(config: Any) -> str | None:
 
 def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str | None = None, config: Any = None,
            rules: Iterable[Any] = (), core: bool = True, inputs: Callable[[nn.Module], Any] | None = None,
-           order: bool = True) -> VerificationReport:
+           order: bool = True, against: dict[str, Any] | None = None) -> VerificationReport:
     """Verify a component map against an architecture.
 
     Args:
@@ -355,6 +373,8 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
             The order check runs on ``target`` itself when it is a model and ``inputs`` is given, and otherwise on a
             small random-init model built from the configuration (:func:`tiny_config`).
         order: Run the order check.
+        against: A stored verification record (:meth:`VerificationReport.record`) whose observed order this run's must
+            equal (the ``against_record`` check; needs ``order``).
 
     Returns:
         The report; :attr:`VerificationReport.passed` is false when any check failed.
@@ -380,6 +400,8 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
               check_shapes(cmap, model, config, ruleset)]
     if order:
         checks.append(_order(cmap, target, config, arch, inputs, ruleset))
+        if against is not None:
+            checks.append(check_against(checks[-1], against, cmap.architecture))
     return VerificationReport(cmap.architecture, tuple(checks), {"source": source, "sha256": _fingerprint(config)},
                               ruleset.sources)
 
@@ -402,8 +424,8 @@ def _order(cmap: ComponentMap, target: Any, config: Any, arch: str, inputs: Call
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """``python -m venngram.maps.verification <model id> [--map FILE] [--rules FILE ...] [--record FILE]``: exit 1 when
-    a check fails, 2 when there is no map to verify."""
+    """``python -m venngram.maps.verification <model id> [--map FILE] [--rules FILE ...] [--record FILE]
+    [--against RECORD]``: exit 1 when a check fails, 2 when there is no map to verify."""
     parser = argparse.ArgumentParser(prog="python -m venngram.maps.verification", description=main.__doc__)
     parser.add_argument("model", help="a Hugging Face model id (only its configuration is fetched)")
     parser.add_argument("--map", help="a component map document (default: the registered or bundled one)")
@@ -412,11 +434,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-core", action="store_true", help="do not start from the bundled core rule set")
     parser.add_argument("--record", help="write the verification record to this YAML file")
     parser.add_argument("--no-order", action="store_true", help="skip the forward-order check")
+    parser.add_argument("--against", help="a stored verification record whose observed order this run's must equal")
     args = parser.parse_args(argv)
     cmap = load_component_map(args.map) if args.map else None
+    against = None
+    if args.against:
+        with open(args.against, encoding="utf-8") as fh:
+            against = yaml.safe_load(fh)
     try:
         report = verify(args.model, cmap, architecture=args.architecture, rules=args.rules, core=not args.no_core,
-                        order=not args.no_order)
+                        order=not args.no_order, against=against)
     except KeyError as err:
         print(f"{args.model}: {err.args[0]}", file=sys.stderr)
         return 2
@@ -428,6 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "check_against",
     "check_order",
     "check_partition",
     "check_shapes",

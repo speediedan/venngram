@@ -22,7 +22,8 @@ PyTorch module tree: a decoder, an encoder-decoder, a state-space or convolution
 vision tower, or something no library anticipated. Its rows name whatever components the model has
 (``mixer.conv``, ``router``, ``projector``); a component with behaviour the bundled kinds do not describe gets a kind
 of its own, declared in the document (``kinds:``); a heterogeneous stack restricts a row to the layers that have it
-(``layers:``); and a model with several block lists declares each further one (``stacks:``).
+(``layers:``) or marks it ``optional`` (it applies wherever its module exists); and a model with several block lists
+declares each further one (``stacks:``).
 
 One document per architecture: a component path, the module path it names (with ``{i}`` for the layer), and the
 component's *kind*. Block-relative rows are keyed ``blocks.{i}.<component>``; a further block stack is keyed
@@ -64,8 +65,9 @@ VOCABULARY: tuple[str, ...] = (
 #: The schema this code writes and reads by default. An additive descriptive key (a property, an annotation) never
 #: bumps it, because readers ignore unknown keys of that class; an applicability key (one that changes which rows apply
 #: or how a row resolves, such as a per-row layer predicate or a second block stack) always does, because a reader that
-#: skipped one would resolve the wrong rows silently.
-COMPONENT_MAP_SCHEMA_VERSION = 2
+#: skipped one would resolve the wrong rows silently. 2 added ``kinds``, ``stacks`` and per-row ``layers``; 3 added
+#: per-row ``optional``.
+COMPONENT_MAP_SCHEMA_VERSION = 3
 
 #: The oldest schema this code reads. Published maps outlive the code that wrote them, so the reader accepts a window.
 COMPONENT_MAP_SCHEMA_MIN_READABLE = 1
@@ -163,6 +165,9 @@ class ComponentEntry:
     module: str
     kind: str
     layers: RowLayers | None = None
+    optional: bool = False
+    """The row applies at the covered layers where its module exists (a hybrid stack whose attention and
+    linear-attention layers alternate in a pattern that varies by model size). It must exist on at least one."""
 
 
 @dataclass(frozen=True)
@@ -373,12 +378,18 @@ def _rows(rows: Any, source: str, kinds: dict[str, KindSpec], stacks: dict[str, 
                 raise ValueError(f"{where}: `layers` is a schema-2 key (a reader that skipped it would resolve the row "
                                  "for every layer); declare schema_version: 2")
             layers = RowLayers.parse(row["layers"], where)
+        optional = row.get("optional", False)
+        if "optional" in row and (version < 3 or not isinstance(optional, bool)):
+            raise ValueError(f"{where}: `optional` is a schema-3 boolean (a reader that skipped it would expect the "
+                             "row's module on every layer); declare schema_version: 3")
+        if optional and "{i}" not in row["module"]:
+            raise ValueError(f"{where}: only a block-relative row can be `optional`")
         head, sep, _ = name.partition(".blocks.{i}")
         if sep and head not in stacks:
             raise ValueError(f"{where}: names the block stack {head!r}, which the document does not declare under "
                              "`stacks:`")
-        # only `module`, `kind` and `layers` are read: a later schema may annotate rows, at no cost to this reader
-        components[name] = ComponentEntry(module=row["module"], kind=row["kind"], layers=layers)
+        # only `module`, `kind`, `layers` and `optional` are read: a later schema may annotate rows at no cost here
+        components[name] = ComponentEntry(module=row["module"], kind=row["kind"], layers=layers, optional=optional)
     return components
 
 

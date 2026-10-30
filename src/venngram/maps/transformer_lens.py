@@ -42,6 +42,7 @@ TL_KINDS: dict[str, str] = {
     "GatedMLPBridge": "mlp",
     "LinearBridge": "linear",
     "UnembeddingBridge": "unembed",
+    "GatedDeltaNetBridge": "linear_attn",  # a kind a map declares (Qwen3.5's), not a bundled one
 }
 
 #: Bridge classes deliberately left out of a derived map: a rotary table holds no tensor a map addresses, and
@@ -49,7 +50,7 @@ TL_KINDS: dict[str, str] = {
 #: skipped, because a silently skipped class narrows every comparison built on the result.
 TL_UNADDRESSED: frozenset[str] = frozenset({
     "RotaryEmbeddingBridge", "SiglipVisionEncoderBridge", "SiglipVisionEncoderLayerBridge", "VisionProjectionBridge",
-    "GeneralizedComponent",
+    "Qwen3_5VisionEncoderBridge", "GeneralizedComponent",
 })
 
 

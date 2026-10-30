@@ -16,14 +16,11 @@ from venngram.maps.transformer_lens import from_transformer_lens
 
 pytest.importorskip("transformer_lens")
 
-#: Bundled rows with no TransformerLens counterpart, with the reason: TransformerLens bridges a vision tower as one
-#: opaque component, so the multimodal document's vision stack and projector are venngram's alone.
-WITHOUT_COUNTERPART: dict[str, set[str]] = {a: set() for a in CONFIGS}
-
-
-def _vision_rows() -> set[str]:
-    return {k for k in component_map_for("Gemma3ForConditionalGeneration").components
-            if k.startswith("vision.") or k == "projector"}
+def _without_counterpart(architecture: str) -> set[str]:
+    """TransformerLens bridges a vision tower as one opaque component, and Qwen3.5's linear attention as one
+    component without parts, so those rows are venngram's alone."""
+    return {k for k in component_map_for(architecture).components
+            if k.startswith("vision.") or k == "projector" or ".linear_attn." in k}
 
 
 def _adapter(architecture: str):
@@ -43,10 +40,13 @@ def _adapter(architecture: str):
 
 @pytest.mark.parametrize("architecture", sorted(CONFIGS))
 def test_every_bundled_row_agrees_with_transformer_lens(architecture):
+    import transformers
+
+    if not hasattr(transformers, architecture):
+        pytest.skip(f"this transformers ({transformers.__version__}) has no {architecture}")
     bundled = component_map_for(architecture).components
     derived = from_transformer_lens(_adapter(architecture), architecture).components
     mismatches = {k: (bundled[k], derived[k]) for k in set(bundled) & set(derived)
                   if (bundled[k].module, bundled[k].kind) != (derived[k].module, derived[k].kind)}
     assert not mismatches
-    expected = _vision_rows() if architecture == "Gemma3ForConditionalGeneration" else WITHOUT_COUNTERPART[architecture]
-    assert set(bundled) - set(derived) == expected
+    assert set(bundled) - set(derived) == _without_counterpart(architecture)

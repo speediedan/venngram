@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 
 import pytest
@@ -117,3 +118,15 @@ def test_a_model_on_the_meta_device_and_no_config_skips_order_without_failing():
     report = verify(tiny("LlamaForCausalLM"), order=True)
     assert report.check("order").status in ("passed", "skipped")
     assert report.passed
+
+
+def test_a_run_is_compared_against_a_stored_record():
+    config = CONFIGS["LlamaForCausalLM"]()
+    record = verify(config, architecture="LlamaForCausalLM").record()
+    assert verify(config, architecture="LlamaForCausalLM", against=record).check("against_record").status == "passed"
+    reordered = copy.deepcopy(record)
+    reordered["checks"]["order"]["observed_order"]["blocks"].reverse()
+    check = verify(config, architecture="LlamaForCausalLM", against=reordered).check("against_record")
+    assert check.status == "failed" and "stack 'blocks'" in str(check.problems[0])
+    other = verify(config, architecture="LlamaForCausalLM", against={**record, "architecture": "OPTForCausalLM"})
+    assert other.check("against_record").status == "failed"
