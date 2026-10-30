@@ -68,6 +68,20 @@ book = AddressBook.from_file("qwen3.yaml")
 select("@rest", space, book.sets())
 ```
 
+### Large unit sets and recipes
+
+A `units` value may name a sidecar instead of listing indices:
+`units: {file: units.safetensors, key: L15, sha256: ...}`, flat or per layer. A sidecar is a safetensors file holding a
+sorted index array or a packed bitmask per set, read with the standard library (no `torch`, no pickle). A changed file,
+or a set written for another axis width, is refused. `venngram.units.units_value` keeps small sets inline and writes
+large ones to a sidecar.
+
+A **recipe** is a treatment over a book's sets: the op (`add`, `mul`, or one registered with
+`venngram.recipe.register_op`), the activation point, the dose normalization and which tokens, plus a dose per set or
+per unit, sampling, evidence and metadata. A recipe pins a model revision. `compose` unites several recipes. Doses on a
+shared unit combine by their op, and mixing ops on one unit is refused unless the composition gives an order.
+`from_neuronary` imports a [neuronary](https://github.com/lyramakesmusic/neuronary) recipe.
+
 ## What resolves where
 
 The grammar, the algebra and the book schema know no model library or interpretability package. Knowledge of an

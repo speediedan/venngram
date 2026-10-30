@@ -59,6 +59,7 @@ from typing import Any
 
 from venngram.address import Expr, parse, references, rename_refs
 from venngram.errors import AddressError, VenngramError
+from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
 SCHEMA_WINDOW = (1, 1)
@@ -172,13 +173,15 @@ class AddressBook:
         if not isinstance(raw_sets, Mapping) or not raw_sets:
             raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses.")
         own: dict[str, Expr] = {}
-        for set_name, address in raw_sets.items():
-            if not isinstance(set_name, str) or not _SET_NAME.fullmatch(set_name):
-                raise AddressError(f"{source}: {set_name!r} is not a valid set name (letters, digits, `_` and `-`).")
-            try:
-                own[set_name] = parse(address)
-            except VenngramError as err:
-                raise AddressError(f"{source}: set `{set_name}`: {err}") from err
+        with sidecar_root(base_dir):  # a sidecar unit set's path is relative to the book
+            for set_name, address in raw_sets.items():
+                if not isinstance(set_name, str) or not _SET_NAME.fullmatch(set_name):
+                    raise AddressError(f"{source}: {set_name!r} is not a valid set name (letters, digits, `_` and "
+                                       "`-`).")
+                try:
+                    own[set_name] = parse(address)
+                except VenngramError as err:
+                    raise AddressError(f"{source}: set `{set_name}`: {err}") from err
         imports = cls._load_imports(doc.get("imports") or {}, source, base_dir, _loading)
         known = {k for k in own} | {f"{ns}.{s}" for ns, book in imports.items() for s in book.sets()}
         extra = {k: v for k, v in doc.items() if k not in _KNOWN_KEYS}

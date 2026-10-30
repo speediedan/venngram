@@ -67,6 +67,7 @@ from typing import Any, Union
 
 from venngram.errors import AddressError
 from venngram.roles import parse_selector
+from venngram.units import SidecarRef
 
 FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "features", "subspace", "space", "leaf",
           "units")
@@ -169,7 +170,8 @@ class LayerSet:
 
 @dataclass(frozen=True)
 class UnitSet:
-    """Indices along a target's unit axis: a list or a slice, for every selected layer or per layer.
+    """Indices along a target's unit axis: a list or a slice, for every selected layer or per layer. A large set may
+    instead name a sidecar file (``{file, key, sha256}``, :mod:`venngram.units`), alone or as one layer's value.
 
     >>> UnitSet.parse("[431, 1007]").for_layer(12, 4096)
     (431, 1007)
@@ -180,6 +182,8 @@ class UnitSet:
     spec: str
     flat: LayerSet | None = None
     per_layer: tuple[tuple[int, LayerSet], ...] | None = None
+    sidecars: tuple[tuple[int | None, SidecarRef, int], ...] = ()
+    """The sidecar references this set was read from: (layer, or ``None`` for every layer; reference; axis length)."""
 
     def __repr__(self) -> str:
         return f"UnitSet({self.spec!r})"
@@ -195,18 +199,33 @@ class UnitSet:
             return raw
         if isinstance(raw, str) and raw.strip().startswith("{"):
             raw = _literal(raw.strip(), "units")
+        if isinstance(raw, Mapping) and "file" in raw:  # one sidecar set for every selected layer
+            ref, indices, axis = cls._sidecar(raw)
+            return cls(spec=repr(ref.mapping()), flat=indices, sidecars=((None, ref, axis),))
         if isinstance(raw, Mapping):
             if not raw:
                 raise AddressError("A per-layer unit set must name at least one layer.")
-            per = []
+            per, sidecars, specs = [], [], []
             for layer, units in raw.items():
                 if not isinstance(layer, int) or isinstance(layer, bool):
                     raise AddressError(f"A per-layer unit set is keyed by layer index, got {layer!r}.")
-                per.append((layer, cls._indices(units)))
-            spec = "{" + ", ".join(f"{k}: {v.spec}" for k, v in per) + "}"
-            return cls(spec=spec, per_layer=tuple(per))
+                if isinstance(units, Mapping):
+                    ref, indices, axis = cls._sidecar(units)
+                    sidecars.append((layer, ref, axis))
+                    specs.append(f"{layer}: {ref.mapping()!r}")
+                else:
+                    indices = cls._indices(units)
+                    specs.append(f"{layer}: {indices.spec}")
+                per.append((layer, indices))
+            return cls(spec="{" + ", ".join(specs) + "}", per_layer=tuple(per), sidecars=tuple(sidecars))
         flat = cls._indices(raw)
         return cls(spec=flat.spec, flat=flat)
+
+    @staticmethod
+    def _sidecar(raw: Mapping[str, Any]) -> tuple[SidecarRef, LayerSet, int]:
+        ref = SidecarRef.parse(raw)
+        units, axis = ref.load()
+        return ref, LayerSet(spec=f"<{len(units)} units of {ref.file}:{ref.key}>", indices=units), axis
 
     @staticmethod
     def _indices(raw: Any) -> LayerSet:
@@ -226,7 +245,15 @@ class UnitSet:
         return None if self.per_layer is None else tuple(k for k, _ in self.per_layer)
 
     def for_layer(self, layer: int | None, width: int) -> tuple[int, ...]:
-        """The unit indices at ``layer`` along an axis of ``width`` units (empty for a layer the set does not name)."""
+        """The unit indices at ``layer`` along an axis of ``width`` units (empty for a layer the set does not name).
+
+        Raises:
+            AddressError: If a sidecar set for ``layer`` was written for an axis of another width.
+        """
+        for at, ref, axis in self.sidecars:
+            if (at is None or at == layer) and axis != width:
+                raise AddressError(f"The sidecar unit set {ref.file}:{ref.key} indexes an axis of {axis} units, but "
+                                   f"the target at layer {layer} has {width}.")
         if self.flat is not None:
             return self.flat.select(width)
         for k, units in self.per_layer or ():
@@ -554,9 +581,10 @@ def _mapping_value(name: str, value: Any) -> Any:
             return value.spec
         return indices[0] if len(indices) == 1 else list(indices)
     if isinstance(value, UnitSet):
+        refs = {at: ref.mapping() for at, ref, _ in value.sidecars}
         if value.per_layer is not None:
-            return {k: _mapping_value("layers", v) for k, v in value.per_layer}
-        return _mapping_value("layers", value.flat)
+            return {k: refs[k] if k in refs else _mapping_value("layers", v) for k, v in value.per_layer}
+        return refs[None] if None in refs else _mapping_value("layers", value.flat)
     return value
 
 
