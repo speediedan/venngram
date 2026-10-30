@@ -108,7 +108,7 @@ the exact reference it resolves to (a commit and the content hash), for records 
 stores the ref may name a directory of a repository or bucket (`me/my-sets/qwen3`), each with its own manifest, so one
 repository can hold many small manifests. Fetching reads the manifest first, at one revision, and refuses a path it does
 not list or a file whose content differs from what the manifest or the reference cites. A book can import another book
-by reference. The Hub stores need `huggingface_hub` (the `registry` or `hf` extra); a new place to keep
+by reference. The Hub stores use `huggingface_hub`; a new place to keep
 documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
@@ -181,7 +181,7 @@ derived from TransformerLens or another package) is indexed and found like the s
 architecture: lookup serves the best verified one, and `venngram.registry.rows` lists every candidate. The index is a
 parquet dataset partitioned by kind and subject (architecture, or model id for checkpoint documents), so a lookup reads
 one small file however large the registry grows; the last revision read is served from the cache, with a warning, when
-the store is unreachable. It needs the `registry` extra (`pip install venngram[registry]`).
+the store is unreachable.
 
 ```bash
 python -m venngram.registry build --source hub-dataset:<owner>/<repo>/maps --discover-hub --out ./index

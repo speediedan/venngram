@@ -11,7 +11,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Daniel Dale" }]
 requires-python = ">=3.11"
-dependencies = ["torch>=2.12.0", "PyYAML>=6.0.2"]
+dependencies = ["torch>=2.12.0", "PyYAML>=6.0.2", "huggingface_hub>=1.0", "pyarrow>=18"]
 keywords = ["interpretability", "fine-tuning", "steering", "pytorch", "sparse autoencoders"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -28,9 +28,8 @@ Homepage = "https://github.com/speediedan/venngram"
 Issues = "https://github.com/speediedan/venngram/issues"
 
 [project.optional-dependencies]
-hf = ["transformers>=4.57", "huggingface_hub>=1.0", "pyarrow>=18"]
-registry = ["huggingface_hub>=1.0", "pyarrow>=18"]
-test = ["pytest>=8", "transformers>=4.57", "pyarrow>=18"]
+hf = ["transformers>=4.57"]
+test = ["pytest>=8", "transformers>=4.57"]
 
 [tool.setuptools.dynamic]
 version = { attr = "venngram.__about__.__version__" }

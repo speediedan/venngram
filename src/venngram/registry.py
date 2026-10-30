@@ -46,7 +46,7 @@ order of the sources the index was crawled from. ``strict`` serves only ``verifi
 (or ``HF_HUB_OFFLINE`` is set), the last revision is served from the cache with a :class:`RegistryOfflineWarning`
 naming it; a registry never fetched before fails by name.
 
-Needs ``pyarrow`` (and ``huggingface_hub`` for the Hub stores).
+Uses ``pyarrow`` and, for the Hub stores, ``huggingface_hub`` (both venngram dependencies, imported on first use).
 
 .. code-block:: bash
 
@@ -231,8 +231,8 @@ def _parquet() -> Any:
     try:
         import pyarrow.parquet as pq
     except ImportError as err:
-        raise RegistryError("reading a registry index needs pyarrow: install venngram's `registry` extra "
-                            "(`pip install venngram[registry]`), or register maps in process.") from err
+        raise RegistryError("reading a registry index needs pyarrow, a venngram dependency: reinstall venngram, or "
+                            "register maps in process.") from err
     return pq
 
 
@@ -466,7 +466,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
-            locations = list(args.source) + (discover_hub() if args.discover_hub else [])
+            locations = list(dict.fromkeys(list(args.source) + (discover_hub() if args.discover_hub else [])))
             found = crawl(locations)
             print(write_index(found, args.out, name=args.name, sources=locations))
             print(json.dumps({k: sum(r.kind == k for r in found) for k in sorted({r.kind for r in found})}))
