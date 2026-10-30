@@ -422,6 +422,12 @@ def _load_map(path: Path) -> Any:
     return load_component_map(path)
 
 
+def _load_adapter_listing(path: Path) -> Any:
+    from venngram.sources import AdapterListing
+
+    return AdapterListing.from_file(path)
+
+
 def _load_rules(path: Path) -> Any:
     from venngram.maps.rules import load_rules
 
@@ -433,7 +439,8 @@ register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
-                       ("rules", _load_rules), ("verification_record", _read_yaml)):
+                       ("rules", _load_rules), ("verification_record", _read_yaml),
+                       ("format_adapter", _load_adapter_listing)):
     register_loader(_kind, _loader)
 
 

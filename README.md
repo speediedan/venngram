@@ -105,6 +105,16 @@ not list or a file whose content differs from what the manifest or the reference
 by reference. The Hub stores need the `hf` extra; a new place to keep
 documents is a new store (`venngram.store.register_store`).
 
+### Sources: map sources and formats
+
+A **map source** derives a component map from something that knows an architecture (TransformerLens's adapters through
+`venngram.maps.transformer_lens.TransformerLensSource`, or any package's own); a **format** translates documents
+another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
+entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
+provenance. A format's translation is written to a directory (`venngram.sources.write_translation`) and published like
+any other documents. A manifest can list an installable format as data (`kind: format_adapter`), so a reader can say how
+to read a foreign document without running anything.
+
 ## What resolves where
 
 The grammar, the algebra and the book schema know no model library or interpretability package. Knowledge of an

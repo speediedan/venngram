@@ -22,9 +22,11 @@ never imports TransformerLens.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from venngram.maps.schema import ComponentEntry, ComponentMap
+from venngram.sources import SourceError
 
 #: Bridge classes -> component kinds, for the classes that wrap a module a map row names. A component without a module
 #: of its own (a virtual q/k/v split) has no ``name`` and is skipped: a row must name a real module.
@@ -99,4 +101,36 @@ def from_transformer_lens(adapter: Any, architecture: str) -> ComponentMap:
                         properties={"sandwich_norms": "blocks.{i}.ln2_post" in rows})
 
 
-__all__ = ["from_transformer_lens", "TL_KINDS", "TL_SYMBOLIC", "TL_UNADDRESSED"]
+class TransformerLensSource:
+    """The TransformerLens derivation as a map source.
+
+    Args:
+        select_adapter: ``(architecture, config) -> adapter``, TransformerLens's adapter selection (its
+            ``ArchitectureAdapterFactory``, configured by the caller), so venngram imports nothing of TransformerLens.
+        architectures: The architectures TransformerLens adapts, for :meth:`architectures`.
+        version: TransformerLens's version, recorded as provenance.
+    """
+
+    name = "transformer_lens"
+    unexpressed = tuple(sorted(TL_UNADDRESSED))
+
+    def __init__(self, select_adapter: Callable[[str, Any], Any], architectures: Iterable[str] = (), *,
+                 version: str = "unknown") -> None:
+        self._select = select_adapter
+        self._architectures = tuple(architectures)
+        self.version = version
+
+    def architectures(self) -> Iterable[str]:
+        return self._architectures
+
+    def derive(self, architecture: str, *, config: Any = None, model: Any = None) -> ComponentMap:
+        if config is None and model is not None:
+            config = getattr(model, "config", None)
+        try:
+            adapter = self._select(architecture, config)
+        except Exception as e:
+            raise SourceError(f"transformer_lens: no adapter for {architecture}: {e}") from e
+        return from_transformer_lens(adapter, architecture)
+
+
+__all__ = ["from_transformer_lens", "TL_KINDS", "TL_SYMBOLIC", "TL_UNADDRESSED", "TransformerLensSource"]
