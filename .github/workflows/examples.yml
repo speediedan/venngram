@@ -1,0 +1,30 @@
+name: Published examples
+
+# Checks the documents venngram's example repositories publish on the Hub, from the outside, as a reader meets them:
+# every listed document loads at one revision. Weekly, and by hand; never on a pull request, so a Hub outage cannot
+# block one.
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[hf]"
+      - name: Conformance
+        run: >-
+          python -m venngram.conformance
+          hub-dataset:speediedan/venngram-examples/maps
+          hub-dataset:speediedan/venngram-examples/adapters
+          hub-model:speediedan/venngram-qwen3.5-4b/examples
+          hub-model:speediedan/venngram-qwen3.5-4b/neuronary

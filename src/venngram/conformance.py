@@ -74,7 +74,8 @@ class ConformanceReport:
 
     def render(self) -> str:
         at = f" @ {self.revision}" if self.revision else ""
-        lines = [f"{self.location}{at}: {len(self.documents)} documents, "
+        n = len(self.documents)
+        lines = [f"{self.location}{at}: {n} document{'' if n == 1 else 's'}, "
                  f"{sum(not d.ok for d in self.documents)} failing"]
         for d in self.documents:
             lines.append(f"  {'ok  ' if d.ok else 'FAIL'}  {d.kind:<20} {d.path}")
