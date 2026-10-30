@@ -26,6 +26,7 @@ specification of the neural traces it targets.
 - :mod:`venngram.recipe`: recipes, treatments over a book's sets, and their composition;
 - :mod:`venngram.manifest`: the manifest (``venngram.yaml``) that lists a directory's documents;
 - :mod:`venngram.store`: document references, and the stores (a directory, Hub repositories and buckets) they name;
+- :mod:`venngram.sources`: map sources and formats, which turn something outside venngram into venngram documents;
 - :mod:`venngram.resolve`: resolution over a model's tensors, and the provider interfaces;
 - :mod:`venngram.physical`: the structure provider every PyTorch model gets;
 - :mod:`venngram.maps`: per-architecture component maps, the structure provider and the generic view built from them;
