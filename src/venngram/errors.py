@@ -37,6 +37,11 @@ class AddressError(VenngramError):
     """Raised when an address, an address book or a reference is malformed."""
 
 
+class StoreError(VenngramError):
+    """Raised when a manifest, a document reference or a store refuses: a malformed or unlisted document, a content
+    hash that does not match, or a store that cannot provide what a reference names."""
+
+
 @dataclass(frozen=True)
 class Refusal:
     """Why an address (or one of its fields) did not resolve, as a value.
@@ -70,4 +75,4 @@ class AddressUnresolvable(VenngramError):
         super().__init__(f"The address `{address}` does not resolve: {detail}")
 
 
-__all__ = ["AddressError", "AddressUnresolvable", "Refusal", "RoleError", "VenngramError"]
+__all__ = ["AddressError", "AddressUnresolvable", "Refusal", "RoleError", "StoreError", "VenngramError"]
