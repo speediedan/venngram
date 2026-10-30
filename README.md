@@ -107,8 +107,9 @@ documents is a new store (`venngram.store.register_store`).
 
 ### Sources: map sources and formats
 
-A **map source** derives a component map from something that knows an architecture (TransformerLens's adapters through
-`venngram.maps.transformer_lens.TransformerLensSource`, or any package's own); a **format** translates documents
+A **map source** derives a component map from something that knows an architecture (a model's own module tree through
+`venngram.maps.drafter.ModuleTreeSource`, which drafts rows for a person or an agent to confirm; TransformerLens's
+adapters through `venngram.maps.transformer_lens.TransformerLensSource`; or any package's own); a **format** translates documents
 another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
 entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
 provenance. A format's translation is written to a directory (`venngram.sources.write_translation`) and published like
