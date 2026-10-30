@@ -15,8 +15,9 @@ Component Maps
 
 Per-architecture component maps, and what is built from them: a vocabulary structure provider, so ``component`` and
 ``stack`` resolve, and a tunable view that needs no per-model code. A map is a data document that can describe any
-PyTorch module tree: the bundled ones are seeds for common architectures, and a map for any other model is written by
-hand (or derived from another source) and registered.
+PyTorch module tree. Maps are found through the registries (:mod:`venngram.registry`), which index seeds for common
+architectures and maps from any other source; a map for any other model is written by hand (or derived from another
+source) and registered in process, or published and indexed.
 
 - :mod:`~venngram.maps.schema`: the document schema, its reader, the vocabulary and the registry of maps;
 - :mod:`~venngram.maps.check`: checking a map against a model (every row's module exists where it says);
@@ -37,7 +38,7 @@ Maps are data: loading one runs no code.
 from venngram.maps.check import (check_map_against_model, ComponentMapModelMismatch, MapProblem,
                                  validate_map_against_model)
 from venngram.maps.schema import (component_map_for, ComponentMap, from_document, known_architectures,
-                                  load_component_map, register, VOCABULARY)
+                                  load_component_map, register, registered_architectures, unregister, VOCABULARY)
 from venngram.maps.structure import map_for, map_structure, MapStructure
 from venngram.maps.verification import VerificationReport, verify
 from venngram.maps.view import MappedView, PEFT_LORA_RULES
@@ -57,6 +58,8 @@ __all__ = [
     "MapStructure",
     "PEFT_LORA_RULES",
     "register",
+    "registered_architectures",
+    "unregister",
     "validate_map_against_model",
     "VerificationReport",
     "verify",

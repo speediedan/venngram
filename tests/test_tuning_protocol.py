@@ -27,7 +27,8 @@ from venngram.errors import RoleError, VenngramError
 PKG_DIR = Path(venngram.__file__).parent
 ALLOWED = {"torch", "yaml", "venngram"}
 #: Optional dependencies (each an extra in ``pyproject.toml``), importable inside a function of the named modules only.
-OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"}}
+OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"},
+            "registry.py": {"huggingface_hub", "pyarrow"}}
 TORCH_FREE = ("__init__.py", "__about__.py", "address.py", "book.py", "errors.py", "resolve.py", "roles.py", "units.py",
               "recipe.py", "manifest.py", "store.py", "sources.py",
               "ops.py", "operands.py")

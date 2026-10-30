@@ -28,8 +28,9 @@ Homepage = "https://github.com/speediedan/venngram"
 Issues = "https://github.com/speediedan/venngram/issues"
 
 [project.optional-dependencies]
-hf = ["transformers>=4.57", "huggingface_hub>=1.0"]
-test = ["pytest>=8", "transformers>=4.57"]
+hf = ["transformers>=4.57", "huggingface_hub>=1.0", "pyarrow>=18"]
+registry = ["huggingface_hub>=1.0", "pyarrow>=18"]
+test = ["pytest>=8", "transformers>=4.57", "pyarrow>=18"]
 
 [tool.setuptools.dynamic]
 version = { attr = "venngram.__about__.__version__" }
@@ -38,7 +39,7 @@ version = { attr = "venngram.__about__.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-venngram = ["py.typed", "maps/data/*.yaml", "maps/data/rules/*.yaml", "maps/data/drafting/*.yaml"]
+venngram = ["py.typed", "maps/data/rules/*.yaml", "maps/data/drafting/*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "--doctest-modules --strict-markers"

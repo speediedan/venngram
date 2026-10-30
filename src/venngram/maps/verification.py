@@ -428,7 +428,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     [--against RECORD]``: exit 1 when a check fails, 2 when there is no map to verify."""
     parser = argparse.ArgumentParser(prog="python -m venngram.maps.verification", description=main.__doc__)
     parser.add_argument("model", help="a Hugging Face model id (only its configuration is fetched)")
-    parser.add_argument("--map", help="a component map document (default: the registered or bundled one)")
+    parser.add_argument("--map", help="a component map document (default: the registered or indexed one)")
     parser.add_argument("--architecture", help="the architecture class name, when the configuration lacks it")
     parser.add_argument("--rules", action="append", default=[], help="a rule set document to layer on (repeatable)")
     parser.add_argument("--no-core", action="store_true", help="do not start from the bundled core rule set")
