@@ -130,7 +130,19 @@ def test_schema_1_migrates_to_schema_2_and_reads_with_a_warning():
         recipe = Recipe.from_mapping(SCHEMA_1)
     assert recipe.to_mapping()["stages"] == SCHEMA_1_AS_2["stages"]
     with pytest.raises(AddressError, match="no schema 2 token scope"):
-        migrate({**SCHEMA_1, "method": {**SCHEMA_1["method"], "apply_to": "prompt_tokens"}})
+        migrate({**SCHEMA_1, "method": {**SCHEMA_1["method"], "apply_to": "first_token"}})
+
+
+@pytest.mark.parametrize("apply_to, scope", [("prompt_tokens", "prompt"), ("generated_tokens", "generated")])
+def test_prompt_and_generated_scopes_read_migrate_and_need_support(apply_to, scope):
+    migrated = migrate({**SCHEMA_1, "method": {**SCHEMA_1["method"], "apply_to": apply_to}})
+    assert migrated["stages"][0]["tokens"] == scope
+    recipe = Recipe.from_mapping(migrated)
+    assert recipe.stages[0].tokens.kind == scope and recipe.to_mapping()["stages"][0]["tokens"] == scope
+    refusals = check_support(recipe, Support(ops=frozenset(OPS), transforms=frozenset({"statistic"})))
+    assert refusals == [f"stage 0 (mlp.out.hook_in) op 0 (`scale`): token scope `{scope}` is not supported"]
+    assert not check_support(recipe, Support(ops=frozenset(OPS), tokens=frozenset({"all", scope}),
+                                             transforms=frozenset({"statistic"})))
 
 
 def test_operands_round_trip_through_a_sidecar(tmp_path):

@@ -165,6 +165,11 @@ def register_loader(kind: str, loader: Callable[[Path], Any], *, replace: bool =
     _LOADERS[kind] = loader
 
 
+def loader_kinds() -> frozenset[str]:
+    """The document kinds :func:`load` can read (the registered loaders)."""
+    return frozenset(_LOADERS)
+
+
 def cache_dir() -> Path:
     """Where fetched documents are cached: ``$VENNGRAM_CACHE``, else ``~/.cache/venngram``."""
     return Path(os.environ.get("VENNGRAM_CACHE") or Path.home() / ".cache" / "venngram")
@@ -434,6 +439,12 @@ def _load_drafting_rules(path: Path) -> Any:
     return load_drafting_rules(path)
 
 
+def _load_support(path: Path) -> Any:
+    from venngram.ops import Support
+
+    return Support.from_file(path)
+
+
 def _load_rules(path: Path) -> Any:
     from venngram.maps.rules import load_rules
 
@@ -446,7 +457,8 @@ register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
-                       ("format_adapter", _load_adapter_listing), ("drafting_rules", _load_drafting_rules)):
+                       ("format_adapter", _load_adapter_listing), ("drafting_rules", _load_drafting_rules),
+                       ("support_record", _load_support)):
     register_loader(_kind, _loader)
 
 
@@ -458,6 +470,7 @@ __all__ = [
     "HubBucketStore",
     "HubRepoStore",
     "is_reference",
+    "loader_kinds",
     "load",
     "LocalStore",
     "pin",

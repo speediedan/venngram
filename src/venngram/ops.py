@@ -26,19 +26,23 @@ Values derived from evidence pass through a **transform pipeline** from a small 
 (:data:`TRANSFORMS`); a transform a consumer computes from the model (a dose normalized by a layer statistic) is a
 ``statistic`` the consumer names and declares it supports.
 
-A consumer declares what it honours as a :class:`Support` record; :func:`check_support` lists every refusal by name
-before anything runs.
+A consumer declares what it honours as a :class:`Support` record, in code or as a ``support_record`` document;
+:func:`check_support` lists every refusal by name before anything runs.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
 import builtins
+import fnmatch
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+import yaml
+
 OPERAND_KINDS = ("none", "vector", "pair", "subspace")
 TARGETS = ("activation", "units", "features")
-TOKEN_SCOPES = ("all", "last", "positions", "slice")
+TOKEN_SCOPES = ("all", "last", "prompt", "generated", "positions", "slice")
 VALUE_SOURCES = ("dose", "doses", "from")
 COMPOSITION = ("sum", "product", "max", "min", "ordered")
 _COMBINE: dict[str, Callable[[float, float], float]] = {"sum": lambda a, b: a + b, "product": lambda a, b: a * b,
@@ -122,7 +126,24 @@ def register_op(spec: OpSpec, *, replace: bool = False) -> None:
 
 @dataclass(frozen=True)
 class Support:
-    """What a consumer honours. ``sites`` is a set of site names, or a predicate over them; ``None`` fields mean any."""
+    """What a consumer honours. ``sites`` is a set of site names, or a predicate over them; ``None`` fields mean any.
+
+    A consumer may publish its record as a ``support_record`` document (:meth:`from_mapping`), so a recipe can be
+    checked against it without the consumer installed:
+
+    .. code-block:: yaml
+
+        schema_version: 1
+        kind: support_record
+        name: example-steerer
+        ops: [add, scale]
+        targets: [units]                  # default: every target
+        tokens: [all, prompt]             # default: [all]
+        values: [dose, doses]             # default: [dose, doses]
+        transforms: [statistic]           # default: none
+        sites: [mlp.out.hook_in, "blocks.*"]   # names or fnmatch patterns; default: any
+        bases: [unfolded]                 # default: any
+    """
 
     ops: frozenset[str]
     targets: frozenset[str] = frozenset(TARGETS)
@@ -131,11 +152,58 @@ class Support:
     transforms: frozenset[str] = frozenset()
     sites: frozenset[str] | Callable[[str], bool] | None = None
     bases: frozenset[str] | None = None
+    name: str | None = None
 
     def site_ok(self, site: str) -> bool:
         if self.sites is None:
             return True
-        return self.sites(site) if callable(self.sites) else site in self.sites
+        if callable(self.sites):
+            return self.sites(site)
+        return site in self.sites or any(fnmatch.fnmatchcase(site, p) for p in self.sites if _GLOB.search(p))
+
+    @classmethod
+    def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "Support":
+        """Read a ``support_record`` document, refusing a malformed one by name.
+
+        Raises:
+            ValueError: If the document is not a schema 1 ``support_record``, has unknown keys, or names a target,
+                token scope or value source venngram does not define.
+        """
+        if not isinstance(doc, Mapping) or doc.get("kind") != "support_record" or doc.get("schema_version") != 1:
+            raise ValueError(f"{source}: a support record is `kind: support_record`, `schema_version: 1`.")
+        unknown = set(doc) - {"schema_version", "kind", "name", "ops", *_SUPPORT_FIELDS}
+        if unknown:
+            raise ValueError(f"{source}: unknown support record keys {sorted(unknown)}.")
+        if "ops" not in doc:
+            raise ValueError(f"{source}: a support record lists the `ops` its consumer honours.")
+        fields: dict[str, Any] = {}
+        for key in ("ops", *_SUPPORT_FIELDS):
+            if key not in doc:
+                continue
+            raw = doc[key]
+            if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+                raise ValueError(f"{source}: `{key}` is a list of names, got {raw!r}.")
+            allowed = _SUPPORT_FIELDS.get(key)
+            bad = sorted(set(raw) - set(allowed)) if allowed else []
+            if bad:
+                raise ValueError(f"{source}: `{key}` names {bad}, which venngram does not define (known: "
+                                 f"{list(allowed or ())}).")
+            fields[key] = frozenset(raw)
+        name = doc.get("name")
+        return cls(**fields, name=str(name) if name is not None else None)
+
+    @classmethod
+    def from_file(cls, path: Any) -> "Support":
+        """Read a ``support_record`` document from YAML (loading runs no code)."""
+        with open(path, encoding="utf-8") as fh:
+            return cls.from_mapping(yaml.safe_load(fh), source=str(path))
+
+
+#: Support record fields beyond ``ops``, with the names each may take (``None``: any name).
+_SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "tokens": TOKEN_SCOPES,
+                                                      "values": VALUE_SOURCES, "transforms": None, "sites": None,
+                                                      "bases": None}
+_GLOB = re.compile(r"[*?\[]")
 
 
 def check_support(recipe: Any, support: Support) -> list[str]:

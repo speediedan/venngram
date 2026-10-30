@@ -81,8 +81,10 @@ token scope. An op acts on the whole activation, a set's units or a latent space
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
 a per-unit table, or a column of recorded evidence through declared transforms). Ops are declared specs
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, and any registered); venngram
-validates and composes them and never executes one. A consumer declares what it honours as a `Support` record, and
-`check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
+validates and composes them and never executes one. A token scope is `all`, `last`, `prompt` (the input, before any
+generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
+a `Support` record, in code or published as a `support_record` document, and `check_support` names everything a recipe
+asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
 do not commute unless the composition gives an order. Schema 1 recipes are read through `migrate`. Applying a recipe is
 the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
 
@@ -108,6 +110,11 @@ repository can hold many small manifests. Fetching reads the manifest first, at 
 not list or a file whose content differs from what the manifest or the reference cites. A book can import another book
 by reference. The Hub stores need the `hf` extra; a new place to keep
 documents is a new store (`venngram.store.register_store`).
+
+`python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
+reader meets it: every listed document is fetched at one revision and loaded by its kind, and every recipe is checked
+against each support record given. It exits non-zero when a document fails to load or a recipe asks for more than a
+given record honours, so a format adapter's CI, or a scheduled job over published examples, can run it.
 
 ### Sources: map sources and formats
 
