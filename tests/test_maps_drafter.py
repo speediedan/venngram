@@ -41,6 +41,10 @@ def test_sandwich_norms_are_learned_from_the_registry_alone():
     gemma = draft_map(tiny("Gemma2ForCausalLM"), rules=[rules])
     assert llama.components["blocks.{i}.ln2"].module.endswith("post_attention_layernorm")
     assert gemma.components["blocks.{i}.ln1_post"].module.endswith("post_attention_layernorm")
+    # the vote is split, so the draft says how sure it is and what else maps called it
+    assert 0 < llama.properties["confidence"]["blocks.{i}.ln2"] < 1
+    assert llama.properties["alternatives"]["blocks.{i}.ln2"] == ["ln1_post"]
+    assert llama.properties["confidence"]["blocks.{i}.attn.q"] == 1.0
 
 
 def test_a_hybrid_stack_drafts_optional_rows():
@@ -59,6 +63,12 @@ def test_a_state_space_model_drafts_from_its_own_rule_source():
             "blocks.{i}.ln1", "embed", "ln_final", "unembed"} <= set(draft.components)
     assert draft.components["blocks.{i}.mixer"].kind == "ssm" and "ssm" in draft.kinds
     assert draft.properties["unconfirmed"] == []
+    assert set(draft.properties["confidence"].values()) == {1.0}  # declared rules
+
+
+def test_unnamed_modules_have_no_confidence():
+    draft = draft_map(tiny("Qwen3_5ForConditionalGeneration"), rules=leave_one_out("Qwen3_5ForConditionalGeneration"))
+    assert all(draft.properties["confidence"][row] == 0.0 for row in draft.properties["unconfirmed"])
 
 
 def test_rule_documents_are_refused_by_name_when_malformed():

@@ -30,7 +30,9 @@ introduces.
 
 The drafter reads every block of the stack: a module present in only some blocks (a hybrid stack's alternating mixers)
 becomes an ``optional`` row. Every module with parameters that no rule names becomes a ``draft.<path>`` row. The draft
-says ``draft: true`` and lists its ``unconfirmed`` rows and any other stacks it left ``unmapped_stacks``.
+says ``draft: true`` and lists its ``unconfirmed`` rows and any other stacks it left ``unmapped_stacks``. Each row
+carries a ``confidence`` (a mined rule's share of the maps' votes; 1 for a declared rule; 0 for an unnamed module) and,
+where maps disagreed on the name, the ``alternatives`` they chose, so a reviewer starts with the least certain rows.
 
 **Model-assisted drafting** (:func:`draft_with_model`) is the fallback for an architecture no rule describes well: the
 caller supplies a completion function for whatever model or service it uses, and venngram gives it the module tree, the
@@ -68,6 +70,10 @@ class Rule:
     match: str
     component: str
     when_sibling: str | None = None
+    share: float | None = None
+    """For a mined rule, the share of the maps' votes for this reading (its confidence); ``None`` for a declared one."""
+    alternatives: tuple[str, ...] = ()
+    """Other components maps have given the same name in the same scope."""
 
     def matches(self, name: str, siblings: set[str]) -> bool:
         return bool(re.fullmatch(self.match, name)) and (self.when_sibling is None or self.when_sibling in siblings)
@@ -171,8 +177,13 @@ def mine_rules(maps: Iterable[ComponentMap] | None = None) -> DraftingRules:
         # without a marker (else the majority), and a marked reading never shadows it
         plain = [c for c in ranked if not markers[c]]
         default = plain[0] if len(plain) == 1 else ranked[0]
-        leaves[scope] += [Rule(re.escape(leaf), c, markers[c][0]) for c in ranked if c != default and markers[c]]
-        leaves[scope].append(Rule(re.escape(leaf), default))
+        total = sum(counter.values())
+
+        def rule(c: str, marker: str | None = None) -> Rule:
+            return Rule(re.escape(leaf), c, marker, counter[c] / total, tuple(o for o in ranked if o != c))
+
+        leaves[scope] += [rule(c, markers[c][0]) for c in ranked if c != default and markers[c]]
+        leaves[scope].append(rule(default))
     return DraftingRules("registry", tuple(ContainerRule(re.escape(n), c, k) for n, (c, k) in containers.items()),
                          {s: tuple(rs) for s, rs in leaves.items()})
 
@@ -210,6 +221,8 @@ def draft_map(model: nn.Module, architecture: str | None = None,
     rows: dict[str, ComponentEntry] = {"blocks.{i}": ComponentEntry(f"{blocks_path}.{{i}}", "block")}
     kinds = dict(BUNDLED_KINDS)
     unconfirmed: list[str] = []
+    confidence: dict[str, float] = {}
+    alternatives: dict[str, list[str]] = {}
     # every block's modules: a module in only some blocks is an optional row
     seen: dict[str, nn.Module] = {}
     count: Counter = Counter()
@@ -242,10 +255,9 @@ def draft_map(model: nn.Module, architecture: str | None = None,
         parent, _, leaf = rel.rpartition(".")
         top = rel.split(".", 1)[0]
         scope = containers.get(top, "block") if parent else "block"
-        component = _first(rules, scope, leaf, names_by_parent[parent], taken)
-        if component is None:
-            component = f"draft.{rel}"
-            unconfirmed.append(f"blocks.{{i}}.{component}")
+        hit = _first(rules, scope, leaf, names_by_parent[parent], taken)
+        component = hit.component if hit else f"draft.{rel}"
+        _annotate(f"blocks.{{i}}.{component}", hit, confidence, alternatives, unconfirmed)
         taken.add(component)
         rows[f"blocks.{{i}}.{component}"] = ComponentEntry(f"{blocks_path}.{{i}}.{rel}", _kind(module, component),
                                                            optional=count[rel] < len(blocks))
@@ -256,26 +268,38 @@ def draft_map(model: nn.Module, architecture: str | None = None,
         if not path or path == blocks_path or path.startswith(f"{blocks_path}.") \
                 or any(path == o or path.startswith(f"{o}.") for o in others) or not _has_params(module):
             continue
-        component = _first(rules, "outer", path.rsplit(".", 1)[-1], outer_names, taken)
-        if component is None:
-            component = f"draft.{path}"
-            unconfirmed.append(component)
+        hit = _first(rules, "outer", path.rsplit(".", 1)[-1], outer_names, taken)
+        component = hit.component if hit else f"draft.{path}"
+        _annotate(component, hit, confidence, alternatives, unconfirmed)
         taken.add(component)
         rows[component] = ComponentEntry(path, _kind(module, component))
     unmapped = sorted(o for o in others if not any(o.startswith(f"{p}.") for p in others if p != o))
-    properties: dict[str, Any] = {"draft": True, "unconfirmed": unconfirmed,
-                                  "drafting_rules": [r.name for r in rules]}
+    properties: dict[str, Any] = {"draft": True, "unconfirmed": unconfirmed, "confidence": confidence,
+                                  "alternatives": alternatives, "drafting_rules": [r.name for r in rules]}
     if unmapped:
         properties["unmapped_stacks"] = unmapped
     return ComponentMap(architecture=architecture, components=rows, source="module_tree", kinds=kinds,
                         properties=properties)
 
 
-def _first(rules: Sequence[DraftingRules], scope: str, name: str, siblings: set[str], taken: set[str]) -> str | None:
+def _annotate(row: str, hit: Rule | None, confidence: dict[str, float], alternatives: dict[str, list[str]],
+              unconfirmed: list[str]) -> None:
+    """Record how sure the draft is of ``row``: a mined rule's vote share (a declared rule's is 1), its alternatives,
+    and no confidence at all for an unnamed module, which is unconfirmed."""
+    if hit is None:
+        unconfirmed.append(row)
+        confidence[row] = 0.0
+        return
+    confidence[row] = hit.share if hit.share is not None else 1.0
+    if hit.alternatives:
+        alternatives[row] = list(hit.alternatives)
+
+
+def _first(rules: Sequence[DraftingRules], scope: str, name: str, siblings: set[str], taken: set[str]) -> Rule | None:
     for rs in rules:
         for rule in rs.leaves.get(scope, ()):
             if rule.component not in taken and rule.matches(name, siblings):
-                return rule.component
+                return rule
     return None
 
 
