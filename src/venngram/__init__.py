@@ -22,6 +22,8 @@ specification of the neural traces it targets.
 
 - :mod:`venngram.address`: the address record, its string form and its algebra;
 - :mod:`venngram.book`: address books, the shareable documents of named sets;
+- :mod:`venngram.units`: large unit sets as sidecar files an address book names;
+- :mod:`venngram.recipe`: recipes, treatments over a book's sets, and their composition;
 - :mod:`venngram.resolve`: resolution over a model's tensors, and the provider interfaces;
 - :mod:`venngram.physical`: the structure provider every PyTorch model gets;
 - :mod:`venngram.maps`: per-architecture component maps, the structure provider and the generic view built from them;
