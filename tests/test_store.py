@@ -8,7 +8,7 @@ from venngram.book import AddressBook
 from venngram.errors import AddressError, StoreError
 from venngram.manifest import build_manifest, Manifest, MANIFEST_NAME, satisfies, sha256_of, UnknownKindWarning
 from venngram.recipe import Recipe
-from venngram.store import fetch, fetch_manifest, load, publish, Reference
+from venngram.store import fetch, fetch_manifest, load, pin, publish, Reference
 from venngram.units import units_value
 
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
@@ -121,8 +121,6 @@ def test_a_published_book_and_recipe_load_by_reference(tmp_path):
 def test_fetching_refuses_what_it_cannot_vouch_for(tmp_path):
     dest, manifest = published(tmp_path)
     sha = {e.path: e.sha256 for e in manifest.documents}
-    with pytest.raises(StoreError, match="carries the document's sha256"):
-        fetch(f"local:{dest}:books/chess.yaml")
     with pytest.raises(StoreError, match="is not listed"):
         fetch(f"local:{dest}:books/other.yaml#{'0' * 64}")
     with pytest.raises(StoreError, match="cites another content"):
@@ -132,6 +130,17 @@ def test_fetching_refuses_what_it_cannot_vouch_for(tmp_path):
     (dest / "books" / "common.yaml").write_text("schema_version: 1\nname: changed\nsets: {}\n")
     with pytest.raises(StoreError, match="changed after it was cited"):  # a needed file changed under its manifest
         fetch(f"local:{dest}:books/chess.yaml#{sha['books/chess.yaml']}")
+
+
+def test_a_reference_without_a_hash_follows_the_latest_snapshot_and_pins(tmp_path):
+    dest, manifest = published(tmp_path)
+    sha = {e.path: e.sha256 for e in manifest.documents}["books/chess.yaml"]
+    path, entry = fetch(f"local:{dest}:books/chess.yaml")  # latest: checked against the current manifest
+    assert entry.sha256 == sha and path == dest / "books" / "chess.yaml"
+    assert pin(f"local:{dest}:books/chess.yaml") == Reference("local", str(dest), "books/chess.yaml", None, sha)
+    (dest / "books" / "common.yaml").write_text("schema_version: 1\nname: changed\nsets: {}\n")
+    with pytest.raises(StoreError, match="changed after it was cited"):  # still checked against the manifest
+        fetch(f"local:{dest}:books/chess.yaml")
 
 
 def test_a_book_imports_another_by_reference(tmp_path):
@@ -191,25 +200,27 @@ def test_a_hub_repository_is_read_manifest_first_at_one_commit(tmp_path, monkeyp
     pytest.importorskip("huggingface_hub")
     hub = FakeHub(tmp_path, monkeypatch)
     dest, manifest = published(tmp_path)
-    hub.repos[("me/sets", "1" * 40)] = dest
+    hub.repos[("me/sets", "1" * 40)] = dest.parent  # the documents sit in the repository's `pub` directory
     hub.branches[("me/sets", "main")] = "1" * 40
-    book = load("hub-model:me/sets:books/chess.yaml")  # no revision: main resolves to its commit first
+    book = load("hub-model:me/sets/pub:books/chess.yaml")  # no revision: main resolves to its commit first
     assert book.sets()["chess"].units.for_layer(16, 9216) == (7, 8)
-    _, root, revision = fetch_manifest("hub-model", "me/sets")
-    assert revision == "1" * 40 and root.name == "1" * 40
-    _, written = publish("hub-dataset", "me/sets", dest, message="seed")
-    assert written == "c" * 40 and hub.commits[-1][1] == "dataset"
-    assert set(hub.commits[-1][2]) == {e.path for e in manifest.documents} | {MANIFEST_NAME}
+    _, root, revision = fetch_manifest("hub-model", "me/sets/pub")
+    assert revision == "1" * 40 and root.name == "pub" and root.parent.name == "1" * 40
+    sha = {e.path: e.sha256 for e in manifest.documents}["books/chess.yaml"]
+    pinned = f"hub-model:me/sets/pub@{'1' * 40}:books/chess.yaml#{sha}"
+    assert str(pin("hub-model:me/sets/pub:books/chess.yaml")) == pinned
+    _, written = publish("hub-dataset", "me/sets/pub", dest, message="seed")
+    assert written == "c" * 40 and hub.commits[-1][0] == "me/sets" and hub.commits[-1][1] == "dataset"
+    assert set(hub.commits[-1][2]) == {f"pub/{e.path}" for e in manifest.documents} | {f"pub/{MANIFEST_NAME}"}
 
 
-def test_a_hub_bucket_needs_hashes_and_caches_by_manifest(tmp_path, monkeypatch):
+def test_a_hub_bucket_is_cached_by_its_manifest(tmp_path, monkeypatch):
     pytest.importorskip("huggingface_hub")
     hub = FakeHub(tmp_path, monkeypatch)
     dest, manifest = published(tmp_path)
     hub.repos[("me/bucket", None)] = dest.parent
     sha = {e.path: e.sha256 for e in manifest.documents}["books/chess.yaml"]
-    with pytest.raises(StoreError, match="carries the document's sha256"):
-        fetch("hub-bucket:me/bucket/pub:books/chess.yaml")
     path, _ = fetch(f"hub-bucket:me/bucket/pub:books/chess.yaml#{sha}")
+    assert fetch("hub-bucket:me/bucket/pub:books/chess.yaml")[0] == path  # latest resolves to the same snapshot
     assert path.parent.parent.name == sha256_of(dest / MANIFEST_NAME)
     assert AddressBook.from_file(path).sets()["chess"].units.for_layer(16, 9216) == (7, 8)

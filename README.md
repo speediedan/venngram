@@ -97,9 +97,12 @@ publish("hub-dataset", "me/my-sets", "./sets", documents=[("recipe", "recipes/ch
 book = load("hub-dataset:me/my-sets:books/chess.yaml")
 ```
 
-Fetching reads the manifest first, at one revision, and refuses a path it does not list or a file whose content differs
-from what the manifest or the reference cites. A store without revisions (a bucket, a local directory) needs the sha256
-in the reference. A book can import another book by reference. The Hub stores need the `hf` extra; a new place to keep
+A reference without `@<revision>` or `#<sha256>` follows the latest published snapshot; `venngram.store.pin` returns
+the exact reference it resolves to (a commit and the content hash), for records that must be reproducible. On the Hub
+stores the ref may name a directory of a repository or bucket (`me/my-sets/qwen3`), each with its own manifest, so one
+repository can hold many small manifests. Fetching reads the manifest first, at one revision, and refuses a path it does
+not list or a file whose content differs from what the manifest or the reference cites. A book can import another book
+by reference. The Hub stores need the `hf` extra; a new place to keep
 documents is a new store (`venngram.store.register_store`).
 
 ## What resolves where
