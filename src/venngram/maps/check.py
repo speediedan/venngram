@@ -17,7 +17,8 @@ A map that is wrong about its model fails here, named, rather than later as a pl
 exist. The assertions are cheap and need no forward pass, so they run on a meta-device model:
 
 - every row's module exists for every layer it covers, and does not exist for a layer its ``layers`` predicate excludes
-  (a row declared for all layers of a heterogeneous stack fails on the first layer that lacks it);
+  (a row declared for all layers of a heterogeneous stack fails on the first layer that lacks it); an ``optional`` row's
+  module exists on at least one layer it covers;
 - every derived property agrees with the model (a document may state one as a cross-check; the model decides);
 - every declared stack's template addresses at least one layer.
 
@@ -104,15 +105,20 @@ def check_map_against_model(cmap: ComponentMap, model: Any) -> list[MapProblem]:
                 problems.append(MapProblem(name, None, f"module {entry.module!r} does not exist"))
             continue
         stack = cmap.key(name).stack or PRIMARY_STACK
+        present = 0
         for layer in range(lengths.get(stack, 0)):
             exists = submodule(model, entry.module.replace("{i}", str(layer))) is not None
             covered = entry.layers is None or entry.layers.covers(layer)
-            if covered and not exists:
+            present += covered and exists
+            if covered and not exists and not entry.optional:
                 problems.append(MapProblem(name, layer, f"row covers this layer but {entry.module!r} does not exist "
                                            "here"))
             elif exists and not covered:
                 problems.append(MapProblem(name, layer, f"row excludes this layer ({entry.layers.describe()}) but "  # type: ignore[union-attr]
                                            "the module exists"))
+        if entry.optional and lengths.get(stack, 0) and not present:
+            problems.append(MapProblem(name, None, f"optional row's module {entry.module!r} exists on no layer it "
+                                       "covers"))
     declared = cmap.properties.get("rmsnorm_offset")
     derived = derive_rmsnorm_offset(model, cmap) if declared is not None else None
     if derived is not None and derived != declared:

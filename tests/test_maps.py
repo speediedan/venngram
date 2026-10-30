@@ -26,12 +26,21 @@ def _gemma3_multimodal():
         mm_tokens_per_image=4)
 
 
+def _qwen3_5():
+    text = dict(TEXT, linear_num_key_heads=2, linear_num_value_heads=4, linear_key_head_dim=4, linear_value_head_dim=4,
+                full_attention_interval=2)  # layers: linear, full, linear
+    return transformers.Qwen3_5Config(text_config=text, vision_config=dict(
+        depth=2, hidden_size=16, intermediate_size=32, num_heads=4, out_hidden_size=16, num_position_embeddings=16,
+        patch_size=4))
+
+
 CONFIGS = {
     "LlamaForCausalLM": lambda: transformers.LlamaConfig(**TEXT),
     "Qwen3ForCausalLM": lambda: transformers.Qwen3Config(**TEXT),
     "Gemma2ForCausalLM": lambda: transformers.Gemma2Config(**TEXT),
     "Gemma3ForCausalLM": lambda: transformers.Gemma3TextConfig(**TEXT),
     "Gemma3ForConditionalGeneration": _gemma3_multimodal,
+    "Qwen3_5ForConditionalGeneration": _qwen3_5,
     "GPT2LMHeadModel": lambda: transformers.GPT2Config(vocab_size=64, n_embd=16, n_layer=3, n_head=4, n_positions=32,
                                                        bos_token_id=0, eos_token_id=0),
     "OPTForCausalLM": lambda: transformers.OPTConfig(vocab_size=64, hidden_size=16, ffn_dim=32, num_hidden_layers=3,
@@ -71,7 +80,7 @@ def test_bundled_components_are_in_the_vocabulary(architecture):
     cmap = component_map_for(architecture)
     # a convention the bundled seeds follow so addresses port across them; a map may name any component it has
     outside = {cmap.key(k).component for k in cmap.components} - set(VOCABULARY) - {""}
-    assert outside <= {"projector"}
+    assert all(c == "projector" or c.split(".")[0] == "linear_attn" for c in outside), outside
 
 
 def test_a_wrong_map_is_refused_naming_every_problem():
@@ -210,3 +219,26 @@ def test_a_map_derives_from_a_transformer_lens_adapter():
 
 def _named(cls: str, name: str, subs: dict):
     return type(cls, (), {"name": name, "submodules": subs})()
+
+
+def test_optional_rows_place_each_mixer_on_the_layers_that_have_it():
+    model = tiny("Qwen3_5ForConditionalGeneration")
+    structure = MapStructure(model, map_for(model))
+    layer = "model.language_model.layers.{}.{}.weight"
+    assert structure.locate(layer.format(1, "self_attn.q_proj")) == Location(layer=1, component="attn.q")
+    assert structure.locate(layer.format(0, "linear_attn.out_proj")) == Location(layer=0, component="linear_attn.out")
+    assert structure.locate(layer.format(2, "mlp.down_proj")) == Location(layer=2, component="mlp.out")
+    s = ParamSpace([n for n, _ in model.named_parameters()], structure=structure)
+    assert {n.split(".")[3] for n in select("component:attn.q", s)} == {"1"}
+    assert {n.split(".")[3] for n in select("component:linear_attn.*", s)} == {"0", "2"}
+
+
+def test_an_optional_row_must_exist_somewhere_and_needs_schema_3():
+    model = tiny("LlamaForCausalLM")
+    rows = {"blocks.{i}": {"module": "model.layers.{i}", "kind": "block"},
+            "blocks.{i}.mixer": {"module": "model.layers.{i}.mixer", "kind": "linear", "optional": True}}
+    problems = check_map_against_model(from_document({"schema_version": 3, "architecture": "X", "components": rows}),
+                                       model)
+    assert [p.row for p in problems] == ["blocks.{i}.mixer"] and "exists on no layer" in problems[0].reason
+    with pytest.raises(ValueError, match="schema-3 boolean"):
+        from_document({"schema_version": 2, "architecture": "X", "components": rows})

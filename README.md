@@ -88,7 +88,8 @@ its module tree. A map can describe any PyTorch model, not only the architecture
 
 - rows name whatever components the model has (`mixer.conv`, `moe.router`, `projector`);
 - a component whose behaviour the bundled kinds do not describe gets a kind declared in the document (`kinds:`);
-- a heterogeneous stack restricts a row to the layers that have it (`layers: odd`);
+- a heterogeneous stack restricts a row to the layers that have it (`layers: odd`), or marks it `optional` so it
+  applies wherever its module exists (a hybrid stack whose layout varies with the model's size);
 - further block lists (an encoder and a decoder, a vision tower) are declared as named stacks (`stacks:`), and a model
   with no block list is mapped by its other rows.
 
@@ -109,7 +110,8 @@ A shared vocabulary (`embed`, `ln1`, `attn.q`, `attn.k`, `attn.v`, `attn.o`, `ln
 the same part on all of them; its names match the ones TransformerLens's bridge and interpretune's activation points
 emit. A component outside it simply uses a name of its own.
 
-Seed maps are bundled for GPT-2, Llama, Qwen3, OPT, Gemma 2, Gemma 3 and Gemma 3 multimodal, each checked against a
+Seed maps are bundled for GPT-2, Llama, Qwen3, Qwen3.5 (hybrid linear and softmax attention, multimodal), OPT, Gemma 2,
+Gemma 3 and Gemma 3 multimodal, each checked against a
 model of its architecture and cross-checked against TransformerLens's adapter for it. TransformerLens is one source of
 seeds (`venngram.maps.transformer_lens` derives a map from an adapter); venngram does not depend on it.
 
@@ -136,6 +138,7 @@ evidence a later checkpoint can be compared against without any rule.
 
 ```bash
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or venngram.maps.verify(config_or_model)
+python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a later run must observe the same order
 ```
 
 A map is all a tunable view needs, so a mapped architecture needs no view code:
