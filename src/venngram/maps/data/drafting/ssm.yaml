@@ -1,0 +1,18 @@
+# Drafting rules for selective state-space (Mamba-style) blocks, whose token mixer is a `mixer` rather than attention.
+# A second family, to show drafting is not tied to transformer primitives; its component names are its own.
+schema_version: 1
+kind: drafting_rules
+name: ssm
+containers:
+  - {match: "mixer", component: mixer, kind: ssm}
+kinds:
+  ssm: {output: tensor, sublayer: true}
+leaves:
+  mixer:
+    - {match: "in_proj", component: mixer.in}
+    - {match: "conv1d", component: mixer.conv}
+    - {match: "x_proj", component: mixer.x}
+    - {match: "dt_proj", component: mixer.dt}
+    - {match: "out_proj", component: mixer.out}
+  block:
+    - {match: "norm", component: ln1}

@@ -38,7 +38,7 @@ version = { attr = "venngram.__about__.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-venngram = ["py.typed", "maps/data/*.yaml", "maps/data/rules/*.yaml"]
+venngram = ["py.typed", "maps/data/*.yaml", "maps/data/rules/*.yaml", "maps/data/drafting/*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "--doctest-modules --strict-markers"

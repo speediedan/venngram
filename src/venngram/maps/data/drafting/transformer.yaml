@@ -1,0 +1,33 @@
+# Drafting rules for transformer blocks: aliases beyond what the registry's maps already teach (rules mined from
+# registered maps come first). One rule source among others; any architecture family can ship its own.
+schema_version: 1
+kind: drafting_rules
+name: transformer
+containers:
+  - {match: "self_attn|attn|attention|self_attention", component: attn, kind: attn}
+  - {match: "mlp|feed_forward|ffn|mlp_block", component: mlp, kind: mlp}
+leaves:
+  attn:
+    - {match: "q_proj|query|wq|q", component: attn.q}
+    - {match: "k_proj|key|wk|k", component: attn.k}
+    - {match: "v_proj|value|wv|v", component: attn.v}
+    - {match: "c_attn|qkv|query_key_value|wqkv|qkv_proj", component: attn.qkv}
+    - {match: "o_proj|out_proj|dense|wo|c_proj|o", component: attn.o}
+    - {match: "q_norm", component: attn.q_norm}
+    - {match: "k_norm", component: attn.k_norm}
+  mlp:
+    - {match: "gate_proj|w1|gate", component: mlp.gate}
+    - {match: "up_proj|fc1|c_fc|w3|dense_h_to_4h|fc_in", component: mlp.in}
+    - {match: "down_proj|fc2|c_proj|w2|dense_4h_to_h|fc_out", component: mlp.out}
+  block:
+    - {match: "post_attention_layernorm", component: ln1_post, when_sibling: pre_feedforward_layernorm}
+    - {match: "input_layernorm|ln_1|self_attn_layer_norm|attention_norm|norm1", component: ln1}
+    - {match: "pre_feedforward_layernorm|post_attention_layernorm|ln_2|final_layer_norm|ffn_norm|norm2", component: ln2}
+    - {match: "post_feedforward_layernorm", component: ln2_post}
+    - {match: "fc1", component: mlp.in}
+    - {match: "fc2", component: mlp.out}
+  outer:
+    - {match: "embed_tokens|wte|word_embeddings|embed_in|embeddings", component: embed}
+    - {match: "wpe|embed_positions|position_embeddings", component: pos_embed}
+    - {match: "norm|ln_f|final_layernorm|final_layer_norm|norm_f", component: ln_final}
+    - {match: "lm_head|embed_out", component: unembed}
