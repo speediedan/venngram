@@ -28,7 +28,7 @@ Homepage = "https://github.com/speediedan/venngram"
 Issues = "https://github.com/speediedan/venngram/issues"
 
 [project.optional-dependencies]
-hf = ["transformers>=4.57"]
+hf = ["transformers>=4.57", "huggingface_hub>=1.0"]
 test = ["pytest>=8", "transformers>=4.57"]
 
 [tool.setuptools.dynamic]

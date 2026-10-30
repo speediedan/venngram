@@ -46,8 +46,9 @@ refused against any other model.
 **References.** ``@<set>`` resolves within the book, ``@<import>.<set>`` within an import. Every reference is checked
 when the book loads, and cycles are refused, naming the cycle.
 
-**Imports** are paths relative to the importing book, or URIs whose scheme has a registered resolver
-(:func:`register_uri_resolver`), which is how a consumer adds ``hub://``.
+**Imports** are paths relative to the importing book, document references (``<store>:<ref>[@<revision>]:<path>``,
+:mod:`venngram.store`), fetched with the files they need, or URIs whose scheme has a registered resolver
+(:func:`register_uri_resolver`).
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -214,14 +215,24 @@ class AddressBook:
                 raise AddressError(f"{source}: {ns!r} is not a valid import namespace.")
             if not isinstance(target, str):
                 raise AddressError(f"{source}: import `{ns}` names a path or URI, got {target!r}.")
-            key = target if _URI.match(target) else str((Path(base_dir or ".") / target).resolve())
+            from venngram.store import fetch, is_reference  # the store loads books, so it is imported here
+
+            remote = _URI.match(target) or is_reference(target)
+            key = target if remote else str((Path(base_dir or ".") / target).resolve())
             if key in loading or key == source:
                 raise AddressError(f"{source}: imports form a cycle through {target}.")
-            if _URI.match(target):
+            if is_reference(target):
+                try:
+                    path, _ = fetch(target)
+                except VenngramError as e:
+                    raise AddressError(f"{source}: import `{ns}` ({target}) did not fetch: {e}") from e
+                out[ns] = cls.from_mapping(_load_yaml(path), source=target, base_dir=path.parent,
+                                           _loading=loading + (key,))
+            elif _URI.match(target):
                 scheme = target.split("://", 1)[0]
                 if scheme not in _URI_RESOLVERS:
                     raise AddressError(f"{source}: import `{ns}` uses `{scheme}://`, which has no registered resolver "
-                                       "(interpretune registers `hub://`).")
+                                       "(register one with `venngram.book.register_uri_resolver`).")
                 out[ns] = cls.from_mapping(_URI_RESOLVERS[scheme](target), source=target, _loading=loading + (key,))
             else:
                 path = Path(key)

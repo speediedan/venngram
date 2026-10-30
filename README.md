@@ -82,6 +82,26 @@ per unit, sampling, evidence and metadata. A recipe pins a model revision. `comp
 shared unit combine by their op, and mixing ops on one unit is refused unless the composition gives an order. Applying a
 recipe is the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
 
+### Sharing documents: manifests and stores
+
+A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
+each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars and imports, a recipe's
+book). A **document reference** names one document wherever it lives:
+`<store>:<ref>[@<revision>]:<path>[#<sha256>]`, for example
+`hub-model:speediedan/venngram-maps@3f1e...:maps/Qwen3ForCausalLM.yaml`.
+
+```python
+from venngram.store import load, publish
+
+publish("hub-dataset", "me/my-sets", "./sets", documents=[("recipe", "recipes/chess.yaml")])
+book = load("hub-dataset:me/my-sets:books/chess.yaml")
+```
+
+Fetching reads the manifest first, at one revision, and refuses a path it does not list or a file whose content differs
+from what the manifest or the reference cites. A store without revisions (a bucket, a local directory) needs the sha256
+in the reference. A book can import another book by reference. The Hub stores need the `hf` extra; a new place to keep
+documents is a new store (`venngram.store.register_store`).
+
 ## What resolves where
 
 The grammar, the algebra and the book schema know no model library or interpretability package. Knowledge of an
