@@ -31,9 +31,10 @@ def write_docs(root: Path) -> None:
         "imports": {"base": "common.yaml"}, "sets": {"chess": {"point": "mlp.out.hook_in", "units": value}}}))
     (root / "recipes").mkdir()
     (root / "recipes" / "chess.yaml").write_text(yaml.safe_dump({
-        "schema_version": 1, "kind": "recipe", "name": "chess", "model": {**MODEL, "revision_source": "pinned"},
-        "book": "../books/chess.yaml", "method": {"op": "add", "site": "mlp.out.hook_in"},
-        "treatments": [{"set": "chess", "dose": 0.8}]}))
+        "schema_version": 2, "kind": "recipe", "name": "chess", "model": {**MODEL, "revision_source": "pinned"},
+        "book": "../books/chess.yaml",
+        "stages": [{"site": "mlp.out.hook_in", "ops": [{"op": "add", "target": {"set": "chess"},
+                                                        "value": {"dose": 0.8}}]}]}))
 
 
 DOCS = [("recipe", "recipes/chess.yaml")]
@@ -46,7 +47,7 @@ def test_a_manifest_lists_each_document_with_what_it_needs(tmp_path):
     assert set(by_path) == {"recipes/chess.yaml", "books/chess.yaml", "books/common.yaml", "books/chess.safetensors"}
     assert by_path["books/chess.yaml"].kind == "address_book" and by_path["books/chess.safetensors"].kind == "units"
     assert by_path["books/chess.yaml"].needs == ("books/chess.safetensors", "books/common.yaml")
-    assert by_path["recipes/chess.yaml"].schema_version == 1
+    assert by_path["recipes/chess.yaml"].schema_version == 2
     assert {e.path for e in manifest.closure("recipes/chess.yaml")} == set(by_path)
     assert all(e.sha256 == sha256_of(tmp_path / e.path) for e in manifest.documents)
     manifest.write(tmp_path)
@@ -115,7 +116,7 @@ def test_a_published_book_and_recipe_load_by_reference(tmp_path):
     assert isinstance(book, AddressBook) and book.sets()["chess"].units.for_layer(16, 9216) == (7, 8)
     assert "base.mlp" in book.sets()
     recipe = load(f"local:{dest}:recipes/chess.yaml#{sha['recipes/chess.yaml']}")
-    assert isinstance(recipe, Recipe) and recipe.stage().doses[(16, 7)] == 0.8
+    assert isinstance(recipe, Recipe) and recipe.stages[0].ops[0].unit_doses(recipe.book)[(16, 7)] == 0.8
 
 
 def test_fetching_refuses_what_it_cannot_vouch_for(tmp_path):

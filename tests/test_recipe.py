@@ -5,126 +5,205 @@ import yaml
 
 from venngram import ParamSpace, select
 from venngram.errors import AddressError
-from venngram.recipe import compose, load_recipe, OPS, Recipe, register_op
+from venngram.operands import read_operand, write_operands
+from venngram.ops import check_support, OPS, OpSpec, register_op, Support
+from venngram.recipe import compose, load_recipe, migrate, Recipe, RecipeSchemaWarning
 
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
 
 
-def book_doc(name, units, model=MODEL):
-    """A checkpoint book holding one set, ``units`` as ``{layer: [unit, ...]}``."""
-    return {"schema_version": 1, "name": name, "portability": "checkpoint",
-            "applies_to": {"models": [{"id": model["id"], "revision": model["revision"]}]},
-            "sets": {name: {"point": "mlp.out.hook_in", "layers": sorted(units),
-                            "units": {k: sorted(v) for k, v in sorted(units.items())}}}}
+def book_doc(sets, model=MODEL):
+    """A checkpoint book; ``sets`` maps a name to ``{layer: [unit, ...]}``, or to a ready set mapping."""
+    out = {}
+    for name, units in sets.items():
+        if isinstance(units, dict) and all(isinstance(k, int) for k in units):
+            out[name] = {"point": "mlp.out.hook_in", "layers": sorted(units),
+                         "units": {k: sorted(v) for k, v in sorted(units.items())}}
+        else:
+            out[name] = units
+    return {"schema_version": 1, "name": "book", "portability": "checkpoint",
+            "applies_to": {"models": [{"id": model["id"], "revision": model["revision"]}]}, "sets": out}
 
 
-def recipe_doc(doses, op="add", model=MODEL, site="mlp.out.hook_in", name="two-units"):
-    """A recipe with an inline book, ``doses`` as ``{(layer, unit): dose}``: one dose when they agree, else a table."""
-    units: dict[int, list[int]] = {}
-    for layer, unit in doses:
-        units.setdefault(layer, []).append(unit)
-    values = set(doses.values())
-    if len(values) == 1:
-        treatment = {"set": name, "dose": values.pop()}
-    else:
-        table: dict[int, dict[int, float]] = {}
-        for (layer, unit), dose in doses.items():
-            table.setdefault(layer, {})[unit] = dose
-        treatment = {"set": name, "doses": table}
-    return {"schema_version": 1, "kind": "recipe", "name": name,
-            "model": {**model, "revision_source": "pinned"}, "book": book_doc(name, units, model),
-            "method": {"op": op, "site": site, "normalization": "raw", "apply_to": "all_tokens"},
-            "treatments": [treatment], "sampling": {"temperature": 0.7},
-            "evidence": {"examples": [{"prompt": "hi", "output": "hello"}]}, "metadata": {"author": "someone"}}
+def recipe_doc(stages, sets=None, operands=None, model=MODEL, name="r"):
+    doc = {"schema_version": 2, "kind": "recipe", "name": name, "model": {**model, "revision_source": "pinned"},
+           "book": book_doc(sets or {"chess": {13: [7956], 14: [8949]}}, model), "stages": stages}
+    if operands:
+        doc["operands"] = operands
+    return doc
 
 
-TWO = {(13, 7956): -1.0, (14, 8949): 1.0}
+def add(target, value, site="mlp.out.hook_in"):
+    return {"site": site, "ops": [{"op": "add", "target": {"set": target}, "value": value}]}
 
 
-def test_a_recipe_reads_and_round_trips():
-    recipe = Recipe.from_mapping(recipe_doc(TWO))
-    assert recipe.method.site == "mlp.out.hook_in" and recipe.method.op == "add"
-    assert recipe.stage().doses == TWO
-    assert recipe.evidence["examples"] == [{"prompt": "hi", "output": "hello"}]
-    assert recipe.sampling == {"temperature": 0.7}
-    assert recipe.metadata == {"author": "someone"} and recipe.revision_source == "pinned"
-    assert Recipe.from_mapping(recipe.to_mapping()).stage() == recipe.stage()
+CONCEPT = {"values": [1.0, 0.0, 0.0, 0.0], "shape": [4], "basis": "unfolded"}
+POLES = {"values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0], "shape": [2, 4], "basis": "paper"}
 
 
-def test_one_dose_covers_every_unit_of_a_set():
-    recipe = Recipe.from_mapping(recipe_doc({(15, 4041): 0.8, (15, 17): 0.8}))
-    assert recipe.to_mapping()["treatments"] == [{"set": "two-units", "dose": 0.8}]
-    assert recipe.stage().doses == {(15, 17): 0.8, (15, 4041): 0.8}
+def test_a_schema_2_recipe_reads_and_round_trips():
+    doc = recipe_doc([
+        add("chess", {"doses": {13: {7956: -1.0}, 14: {8949: 1.0}}}),
+        {"site": "blocks.resid_post", "tokens": "last", "ops": [
+            {"op": "reject", "operand": "concept", "params": {"fraction": 0.5}},
+            {"op": "patch", "operand": "poles"},
+            {"op": "clamp", "operand": "concept", "params": {"max": 2.0}}]}],
+        operands={"concept": CONCEPT, "poles": POLES})
+    recipe = Recipe.from_mapping(doc)
+    first, second = recipe.stages
+    assert first.ops[0].unit_doses(recipe.book) == {(13, 7956): -1.0, (14, 8949): 1.0}
+    assert second.tokens.kind == "last" and [o.op for o in second.ops] == ["reject", "patch", "clamp"]
+    assert recipe.operands["poles"].kind == "pair" and second.ops[0].params == {"fraction": 0.5}
+    again = Recipe.from_mapping(recipe.to_mapping())
+    assert again.to_mapping() == recipe.to_mapping() and again.stages == recipe.stages
 
 
-def test_a_recipe_and_its_book_round_trip_through_files(tmp_path):
-    doc = recipe_doc(TWO)
-    (tmp_path / "book.yaml").write_text(yaml.safe_dump(doc["book"]))
-    (tmp_path / "recipe.yaml").write_text(yaml.safe_dump({**doc, "book": "book.yaml"}))
-    loaded = load_recipe(tmp_path / "recipe.yaml")
-    assert isinstance(loaded, Recipe) and loaded.stage().doses == TWO
-    assert loaded.to_mapping()["book"] == "book.yaml"
+def test_values_from_evidence_and_features_targets():
+    sets = {"top": {"space": "transcoder", "features": "3,7", "layers": [10]}}
+    doc = recipe_doc([{"site": "transcoder.features", "tokens": {"positions": [5, 6]}, "ops": [
+        {"op": "replace", "target": {"set": "top"},
+         "value": {"from": {"evidence": "scores", "column": "score"},
+                   "transform": [{"sign_aware_scale": {"factor": 4.0}}, "abs"]}}]}], sets=sets)
+    recipe = Recipe.from_mapping(doc)
+    op = recipe.stages[0].ops[0]
+    assert op.target_kind(recipe.book) == "features" and [t.name for t in op.value.transform] == [
+        "sign_aware_scale", "abs"]
+    assert recipe.stages[0].tokens.positions == (5, 6)
+
+
+@pytest.mark.parametrize("op, match", [
+    ({"op": "lerp"}, "unknown op 'lerp'"),
+    ({"op": "mul", "value": {"dose": 2.0}}, "`mul` is now `scale`"),
+    ({"op": "reject", "operand": "nobasis"}, "must declare its `basis`"),
+    ({"op": "patch", "operand": "concept"}, "is not a pair operand"),
+    ({"op": "reject", "operand": "concept", "params": {"fraction": 2.0}}, "lies in \\[0.0, 1.0\\]"),
+    ({"op": "reject", "operand": "concept", "params": {"width": 1.0}}, "unknown params"),
+    ({"op": "clamp", "operand": "concept"}, "at least one of \\['min', 'max'\\]"),
+    ({"op": "reject"}, "needs an operand"),
+    ({"op": "add"}, "needs a `value` or an operand"),
+    ({"op": "scale", "operand": "concept", "value": {"dose": 1.0}}, "is not a  operand|is not a valid operand"),
+    ({"op": "project", "operand": "concept", "value": {"dose": 1.0}}, "takes no `value`"),
+    ({"op": "reject", "operand": "concept", "target": {"set": "chess"}}, "acts on \\['activation'\\]"),
+    ({"op": "add", "target": {"set": "missing"}, "value": {"dose": 1.0}}, "names a set of the book"),
+    ({"op": "add", "value": {"dose": 1.0, "doses": {}}}, "exactly one of"),
+    ({"op": "add", "value": {"dose": 1.0, "transform": ["cube"]}}, "unknown transform 'cube'"),
+    ({"op": "add", "value": {"doses": {1: {2: 1.0}}}}, "per-unit `doses` need a target set with `units`"),
+    ({"op": "add", "value": {"dose": 1.0}, "tokens": "last"}, "cannot override its stage's `tokens`"),
+])
+def test_misused_ops_are_refused_by_name(op, match):
+    doc = recipe_doc([{"site": "s", "ops": [op]}],
+                     operands={"concept": CONCEPT, "nobasis": {"values": [1.0, 0.0], "shape": [2]}})
+    with pytest.raises(AddressError, match=match):
+        Recipe.from_mapping(doc)
 
 
 @pytest.mark.parametrize("change, match", [
-    (lambda r: r["method"].update(op="lerp"), "unknown op 'lerp'"),
     (lambda r: r["model"].pop("revision"), "one revision only"),
     (lambda r: r["model"].update(revision="other"), "the book pins"),
-    (lambda r: r["treatments"][0].update(dose=1.0), "not both or neither"),
-    (lambda r: r["treatments"][0].update(set="missing"), "names a set of the book"),
-    (lambda r: r.update(schema_version=2), "`schema_version` must be 1"),
+    (lambda r: r.update(schema_version=3), "must be in 1..2"),
+    (lambda r: r.update(stages=[]), "at least one"),
+    (lambda r: r["stages"][0].update(tokens="first"), "`tokens` is all, last"),
+    (lambda r: r.update(operands={"x": {"values": [1.0], "shape": [2]}}), "1 values for shape"),
 ])
 def test_malformed_recipes_are_refused(change, match):
-    recipe = copy.deepcopy(recipe_doc(TWO))
-    change(recipe)
+    doc = copy.deepcopy(recipe_doc([add("chess", {"dose": 1.0})]))
+    change(doc)
     with pytest.raises(AddressError, match=match):
-        Recipe.from_mapping(recipe)
+        Recipe.from_mapping(doc)
 
 
-def recipe_with(op, doses, revision="abc123"):
-    return Recipe.from_mapping(recipe_doc(doses, op=op, model={**MODEL, "revision": revision}))
+SCHEMA_1 = {"schema_version": 1, "kind": "recipe", "name": "old", "model": {**MODEL, "revision_source": "pinned"},
+            "book": book_doc({"chess": {13: [7956], 14: [8949]}}),
+            "method": {"op": "mul", "site": "mlp.out.hook_in", "normalization": "layer_median",
+                       "apply_to": "all_tokens"},
+            "treatments": [{"set": "chess", "dose": 0.8}]}
+SCHEMA_1_AS_2 = {"schema_version": 2, "kind": "recipe", "name": "old", "model": SCHEMA_1["model"],
+                 "book": SCHEMA_1["book"],
+                 "stages": [{"site": "mlp.out.hook_in", "tokens": "all", "ops": [
+                     {"op": "scale", "target": {"set": "chess"},
+                      "value": {"dose": 0.8, "transform": [{"statistic": {"name": "layer_median"}}]}}]}]}
 
 
-def test_same_op_recipes_merge_and_mixed_ops_need_an_order():
-    a = recipe_with("add", {(15, 1): 0.5, (15, 2): 1.0})
-    b = recipe_with("add", {(15, 1): 0.25})
+def test_schema_1_migrates_to_schema_2_and_reads_with_a_warning():
+    assert migrate(SCHEMA_1) == SCHEMA_1_AS_2  # the golden rewrite
+    with pytest.warns(RecipeSchemaWarning, match="re-write it in schema 2"):
+        recipe = Recipe.from_mapping(SCHEMA_1)
+    assert recipe.to_mapping()["stages"] == SCHEMA_1_AS_2["stages"]
+    with pytest.raises(AddressError, match="no schema 2 token scope"):
+        migrate({**SCHEMA_1, "method": {**SCHEMA_1["method"], "apply_to": "prompt_tokens"}})
+
+
+def test_operands_round_trip_through_a_sidecar(tmp_path):
+    sha = write_operands(tmp_path / "dirs.safetensors", {"concept": ([0.5, -1.0, 2.0, 0.0], [4])})
+    assert read_operand(tmp_path / "dirs.safetensors", "concept", sha256=sha) == ((0.5, -1.0, 2.0, 0.0), (4,))
+    doc = recipe_doc([{"site": "s", "ops": [{"op": "reject", "operand": "concept"}]}], operands={
+        "concept": {"file": "dirs.safetensors", "key": "concept", "sha256": sha, "shape": [4], "basis": "unfolded"}})
+    (tmp_path / "r.yaml").write_text(yaml.safe_dump(doc))
+    recipe = load_recipe(tmp_path / "r.yaml")
+    assert recipe.operands["concept"].load(recipe.base_dir) == ((0.5, -1.0, 2.0, 0.0), (4,))
+    with pytest.raises(AddressError, match="sha256 differs"):
+        write_operands(tmp_path / "dirs.safetensors", {"concept": ([1.0, 1.0, 1.0, 1.0], [4])})
+        recipe.operands["concept"].load(recipe.base_dir)
+
+
+def test_support_records_refuse_by_name():
+    doc = recipe_doc([add("chess", {"dose": 1.0}),
+                      {"site": "resid", "tokens": "last", "ops": [{"op": "reject", "operand": "concept"}]}],
+                     operands={"concept": CONCEPT})
+    recipe = Recipe.from_mapping(doc)
+    tuning = Support(ops=frozenset({"add", "scale"}), targets=frozenset({"units"}),
+                     sites=frozenset({"mlp.out.hook_in"}))
+    refusals = check_support(recipe, tuning)
+    assert any("op is not supported" in r for r in refusals) and any("token scope `last`" in r for r in refusals)
+    assert any("site `resid`" in r for r in refusals) and any("target `activation`" in r for r in refusals)
+    steering = Support(ops=frozenset(OPS), tokens=frozenset({"all", "last"}), bases=frozenset({"unfolded"}))
+    assert check_support(recipe, steering) == []
+
+
+def r(op, doses, name="r", revision="abc123"):
+    sets = {f"s{i}": {layer: [u]} for i, ((layer, u), _) in enumerate(doses.items())}
+    stages = [{"site": "mlp.out.hook_in", "ops": [{"op": op, "target": {"set": f"s{i}"}, "value": {"dose": d}}
+                                                   for i, (_, d) in enumerate(doses.items())]}]
+    return Recipe.from_mapping(recipe_doc(stages, sets, model={**MODEL, "revision": revision}, name=name),
+                               source=name)
+
+
+def test_same_op_recipes_merge_and_non_commuting_ops_need_an_order():
+    a, b = r("add", {(15, 1): 0.5, (15, 2): 1.0}, "a"), r("add", {(15, 1): 0.25}, "b")
     (stage,) = compose([a, b])
-    assert stage.doses == {(15, 1): 0.75, (15, 2): 1.0}
-    m = recipe_with("mul", {(15, 1): 2.0})
-    with pytest.raises(AddressError, match="do not commute"):
+    assert stage.unit_doses("add") == {(15, 1): 0.75, (15, 2): 1.0}
+    m = r("scale", {(15, 1): 2.0}, "m")
+    with pytest.raises(AddressError, match="does not commute"):
         compose([a, m])
-    assert [(s.method.op, dict(s.doses)) for s in compose([a, m], ordered=True)] == [
-        ("add", {(15, 1): 0.5, (15, 2): 1.0}), ("mul", {(15, 1): 2.0})]
-    disjoint = recipe_with("mul", {(16, 9): 2.0})
-    assert {s.method.op for s in compose([a, disjoint])} == {"add", "mul"}
-
-
-def test_a_composition_is_over_one_revision_and_one_site():
+    (ordered,) = compose([a, m], ordered=True)
+    assert [b.op.op for b in ordered.ops] == ["add", "add", "scale"]
+    disjoint = r("scale", {(16, 9): 2.0}, "d")
+    (both,) = compose([a, disjoint])
+    assert both.unit_doses("scale") == {(16, 9): 2.0}
     with pytest.raises(AddressError, match="over one revision"):
-        compose([recipe_with("add", {(1, 1): 1.0}), recipe_with("add", {(1, 1): 1.0}, revision="other")])
-    elsewhere = recipe_with("add", {(1, 1): 1.0}).to_mapping()
-    elsewhere["method"]["site"] = "attn.o.hook_in"
-    with pytest.raises(AddressError, match="only the op may differ"):
-        compose([recipe_with("add", {(1, 1): 1.0}), Recipe.from_mapping(elsewhere)])
+        compose([a, r("add", {(1, 1): 1.0}, "x", revision="other")])
 
 
 def test_a_composition_document_loads_its_parts_in_order(tmp_path):
-    for name, op in (("a", "add"), ("b", "mul")):
-        (tmp_path / f"{name}.yaml").write_text(yaml.safe_dump(recipe_with(op, {(15, 1): 2.0}).to_mapping()))
-    (tmp_path / "both.yaml").write_text(yaml.safe_dump({"schema_version": 1, "compose": ["a.yaml", "b.yaml"],
+    for name, op in (("a", "add"), ("b", "scale")):
+        (tmp_path / f"{name}.yaml").write_text(yaml.safe_dump(r(op, {(15, 1): 2.0}, name).to_mapping()))
+    (tmp_path / "both.yaml").write_text(yaml.safe_dump({"schema_version": 2, "compose": ["a.yaml", "b.yaml"],
                                                          "order": "listed"}))
-    assert [s.method.op for s in load_recipe(tmp_path / "both.yaml").stages()] == ["add", "mul"]
+    (stage,) = load_recipe(tmp_path / "both.yaml").stages()
+    assert [b.op.op for b in stage.ops] == ["add", "scale"]
 
 
-def test_a_new_op_is_registered_with_how_its_doses_combine():
-    register_op("clamp", max)
+def test_a_new_op_is_registered_as_a_spec():
+    register_op(OpSpec("softcap", ("none",), value="required", composition="min"))
     try:
-        stage, = compose([recipe_with("clamp", {(3, 3): 0.2}), recipe_with("clamp", {(3, 3): 0.9})])
-        assert stage.doses == {(3, 3): 0.9}
+        (stage,) = compose([r("softcap", {(3, 3): 0.2}, "x"), r("softcap", {(3, 3): 0.9}, "y")])
+        assert stage.unit_doses("softcap") == {(3, 3): 0.2}
         with pytest.raises(ValueError, match="already registered"):
-            register_op("clamp", min)
+            register_op(OpSpec("softcap"))
+        with pytest.raises(ValueError, match="unknown"):
+            register_op(OpSpec("weird", ("tensor",)), replace=True)
     finally:
-        OPS.pop("clamp")
+        OPS.pop("softcap")
 
 
 def test_a_recipe_selection_lands_on_the_qwen35_mlp_out_it_names():
@@ -134,9 +213,9 @@ def test_a_recipe_selection_lands_on_the_qwen35_mlp_out_it_names():
     from venngram.maps import MapStructure, map_for
 
     model = tiny("Qwen3_5ForConditionalGeneration")
-    recipe = Recipe.from_mapping(recipe_doc({(1, 31): 1.0, (2, 5): 1.0}))
+    recipe = Recipe.from_mapping(recipe_doc([add("chess", {"dose": 1.0})], {"chess": {1: [31], 2: [5]}}))
     space = ParamSpace([n for n, _ in model.named_parameters()], structure=MapStructure(model, map_for(model)))
-    chess = recipe.book.sets()["two-units"]
+    chess = recipe.book.sets()["chess"]
     for layer in (1, 2):
         (weight,) = select(f"component:mlp.out & layers:{layer}", space)
         width = dict(model.named_parameters())[weight].shape[1]  # down_proj's input axis is the units' axis
