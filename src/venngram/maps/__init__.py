@@ -26,7 +26,9 @@ hand (or derived from another source) and registered.
   from the configuration, forward order), and its verification record;
 - :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over it;
 - :mod:`~venngram.maps.transformer_lens`: one source of seed maps, deriving a map from a TransformerLens architecture
-  adapter (read duck-typed: venngram does not depend on TransformerLens).
+  adapter (read duck-typed: venngram does not depend on TransformerLens);
+- :mod:`~venngram.maps.drafter`: a source that needs no library, drafting a map from a model's own module tree for a
+  person or an agent to confirm.
 
 Maps are data: loading one runs no code.
 

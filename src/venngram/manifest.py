@@ -61,8 +61,10 @@ MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_WINDOW = (1, 1)
 
 #: The document kinds this version knows. ``units`` is a sidecar, read through the book that names it; ``index`` is a
-#: registry index; ``format_adapter`` lists an installable format (:class:`venngram.sources.AdapterListing`) as data.
-KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "format_adapter")
+#: registry index; ``format_adapter`` lists an installable format (:class:`venngram.sources.AdapterListing`) as data;
+#: ``drafting_rules`` is a rule source for drafting maps (:mod:`venngram.maps.drafter`).
+KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "format_adapter",
+         "drafting_rules")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
