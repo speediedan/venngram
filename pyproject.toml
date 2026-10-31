@@ -11,7 +11,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Daniel Dale" }]
 requires-python = ">=3.11"
-dependencies = ["torch>=2.12.0", "PyYAML>=6.0.2", "huggingface_hub>=1.0", "pyarrow>=18"]
+dependencies = ["torch>=2.12.0", "PyYAML>=6.0.2", "huggingface_hub>=0.34", "pyarrow>=18"]
 keywords = ["interpretability", "fine-tuning", "steering", "pytorch", "sparse autoencoders"]
 classifiers = [
     "Development Status :: 3 - Alpha",
