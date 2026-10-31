@@ -443,9 +443,9 @@ def _load_drafting_rules(path: Path) -> Any:
 
 
 def _load_support(path: Path) -> Any:
-    from venngram.ops import Support
+    from venngram.support import SupportRecord
 
-    return Support.from_file(path)
+    return SupportRecord.from_file(path)
 
 
 def _load_rules(path: Path) -> Any:
