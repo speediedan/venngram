@@ -15,8 +15,9 @@ Document Conformance
 
 Checks a published directory of venngram documents from the outside, the way a reader meets it: fetch its manifest by
 reference at one revision, load every document through its kind's loader (which validates it against the core schema
-and checks every file it needs by sha256), and check each recipe against consumers' support records
-(:class:`venngram.ops.Support`), so a refusal surfaces before any consumer runs the recipe.
+and checks every file it needs by sha256), and check each recipe and address book against consumers' support records
+(:class:`venngram.support.SupportRecord`: recipes against a record's ``steering`` section, books against its ``tuning``
+section), so a refusal surfaces before any consumer runs the document.
 
 .. code-block:: bash
 
@@ -25,7 +26,7 @@ and checks every file it needs by sha256), and check each recipe against consume
 
 A location is ``<store>:<ref>[@<revision>]`` (a document reference without its path). ``--support`` takes a
 ``support_record`` file or a document reference to one, and may repeat. The command exits non-zero when a document
-fails to load or a recipe asks for something a given consumer does not honour. It is meant to run in a format
+fails to load or a recipe or book asks for something a given consumer does not honour. It is meant to run in a format
 adapter's CI and on a schedule over published example repositories.
 
 Kinds that are read through another document (``units`` sidecars, through the book that names them) or that have no
@@ -40,13 +41,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from venngram.errors import VenngramError
-from venngram.ops import check_support, Support
+from venngram.ops import Support
 from venngram.store import fetch_manifest, get_store, is_reference, load, loader_kinds, Reference
+from venngram.support import as_record, SupportRecord
 
 
 @dataclass(frozen=True)
 class DocumentResult:
-    """One document's outcome: whether it loaded and, for a recipe, each consumer's refusals by consumer name."""
+    """One document's outcome: whether it loaded and, for a recipe or a book, each consumer's refusals by consumer
+    name."""
 
     path: str
     kind: str
@@ -103,15 +106,16 @@ def parse_location(text: str) -> tuple[str, str, str | None]:
     return store, ref, revision or None
 
 
-def check(location: str, *, supports: Sequence[Support] = ()) -> ConformanceReport:
-    """Fetch the manifest at ``location``, load every document at that one revision, and check every recipe against
-    each of ``supports``.
+def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) -> ConformanceReport:
+    """Fetch the manifest at ``location``, load every document at that one revision, and check every recipe and
+    address book against each of ``supports`` (a :class:`venngram.ops.Support` checks recipes only).
 
     Raises:
         VenngramError: If the location is malformed or its manifest cannot be fetched or read (a document that fails
             to load is reported, not raised).
     """
     store, ref, revision = parse_location(location)
+    records = [as_record(s) for s in supports]
     manifest, _, resolved = fetch_manifest(store, ref, revision)
     loadable = loader_kinds()
     results, unloaded = [], []
@@ -126,13 +130,17 @@ def check(location: str, *, supports: Sequence[Support] = ()) -> ConformanceRepo
             continue
         refusals = {}
         if entry.kind == "recipe":
-            refusals = {(s.name or f"support {i}"): tuple(check_support(doc, s)) for i, s in enumerate(supports)}
+            refusals = {(s.name or f"support {i}"): tuple(s.check_recipe(doc)) for i, s in enumerate(records)}
+        elif entry.kind == "address_book":
+            # a steering-only consumer offers no tuning contract, so it does not judge books
+            refusals = {(s.name or f"support {i}"): tuple(s.check_book(doc)) for i, s in enumerate(records)
+                        if s.tuning is not None}
         results.append(DocumentResult(entry.path, entry.kind, refusals=refusals))
     unloaded += [(e.kind, e.path) for e in manifest.skipped]
     return ConformanceReport(location, resolved, tuple(results), tuple(unloaded))
 
 
-def read_support(text: str) -> Support:
+def read_support(text: str) -> SupportRecord:
     """A support record from a file path or a document reference.
 
     Raises:
@@ -140,19 +148,19 @@ def read_support(text: str) -> Support:
     """
     if is_reference(text):
         doc = load(text)
-        if not isinstance(doc, Support):
+        if not isinstance(doc, SupportRecord):
             raise VenngramError(f"{text}: not a support record (loaded {type(doc).__name__}).")
         return doc
-    return Support.from_file(text)
+    return SupportRecord.from_file(text)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m venngram.conformance",
                                      description="Load every document a published venngram manifest lists, and check "
-                                                 "its recipes against consumers' support records.")
+                                                 "its recipes and books against consumers' support records.")
     parser.add_argument("locations", nargs="+", help="<store>:<ref>[@<revision>], one or more")
     parser.add_argument("--support", action="append", default=[], metavar="FILE_OR_REFERENCE",
-                        help="a support_record to check every recipe against (repeatable)")
+                        help="a support_record to check every recipe and book against (repeatable)")
     args = parser.parse_args(argv)
     try:
         supports = [read_support(s) for s in args.support]

@@ -1,4 +1,6 @@
 import shutil
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -213,6 +215,14 @@ def test_a_hub_repository_is_read_manifest_first_at_one_commit(tmp_path, monkeyp
     _, written = publish("hub-dataset", "me/sets/pub", dest, message="seed")
     assert written == "c" * 40 and hub.commits[-1][0] == "me/sets" and hub.commits[-1][1] == "dataset"
     assert set(hub.commits[-1][2]) == {f"pub/{e.path}" for e in manifest.documents} | {f"pub/{MANIFEST_NAME}"}
+
+
+def test_a_hub_bucket_needs_the_bucket_api_and_says_so(monkeypatch):
+    older = types.ModuleType("huggingface_hub")  # a release before 1.0: repository APIs, no bucket API
+    older.__version__ = "0.36.2"
+    monkeypatch.setitem(sys.modules, "huggingface_hub", older)
+    with pytest.raises(StoreError, match=r"Hub buckets need huggingface_hub>=1.0; this environment has 0.36.2"):
+        fetch(f"hub-bucket:me/bucket/pub:books/chess.yaml#{'0' * 64}")
 
 
 def test_a_hub_bucket_is_cached_by_its_manifest(tmp_path, monkeypatch):
