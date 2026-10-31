@@ -56,14 +56,14 @@ registers a parser (:func:`register_support_section`), and the section is then p
 """
 import re
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from venngram.address import FIELDS, TARGETS, terms
+from venngram.address import FIELDS, references, TARGETS, terms
 from venngram.book import AddressBook, PORTABILITY, STRUCTURE_LEVELS
 from venngram.ops import check_support, Support
 
@@ -146,13 +146,20 @@ class TuningSupport:
         out["portability"] = [p for p in PORTABILITY if p in self.portability]
         return out
 
-    def check_book(self, book: AddressBook) -> list[str]:
-        """Every way ``book`` (and each book it imports) asks for something this section does not honour."""
+    def check_book(self, book: AddressBook, *, sets: Collection[str] | None = None) -> list[str]:
+        """Every way ``book`` (and each book it imports) asks for something this section does not honour.
+
+        Args:
+            book: The book.
+            sets: Check only these sets (as :meth:`venngram.AddressBook.sets` names them, ``<namespace>.<set>`` for an
+                import's) and the sets they reference, so a book shared for several purposes is judged by the sets a
+                consumer uses. The book-level requirements are always checked. ``None`` checks every set.
+        """
         out: list[str] = []
-        self._check(book, book.source, out)
+        self._check(book, book.source, out, None if sets is None else _closure(book, sets))
         return out
 
-    def _check(self, book: AddressBook, where: str, out: list[str]) -> None:
+    def _check(self, book: AddressBook, where: str, out: list[str], sets: set[str] | None) -> None:
         scheme = book.requires.get("naming_scheme")
         if scheme is not None and self.naming_schemes is not None and scheme not in self.naming_schemes:
             out.append(f"{where}: it is written in `{scheme}` names; this consumer's views provide "
@@ -163,6 +170,8 @@ class TuningSupport:
         if book.portability not in self.portability:
             out.append(f"{where}: `{book.portability}` books are not accepted")
         for set_name, expr in book.own_sets.items():
+            if sets is not None and set_name not in sets:
+                continue
             at = f"{where}: set `{set_name}`"
             for term in terms(expr):
                 used = term.set_fields()
@@ -177,8 +186,29 @@ class TuningSupport:
                     out.append(f"{at}: it selects units, and this consumer tunes no unit sets (`units: none`)")
         for ns, imported in book.imports.items():
             imported_out: list[str] = []
-            self._check(imported, imported.source, imported_out)
+            within = None if sets is None else {s[len(ns) + 1:] for s in sets if s.startswith(f"{ns}.")}
+            self._check(imported, imported.source, imported_out, within)
             out.extend(f"import `{ns}`: {line}" for line in imported_out)
+
+
+def _closure(book: AddressBook, names: Collection[str]) -> set[str]:
+    """``names`` and every set they reference, transitively, as :meth:`venngram.AddressBook.sets` names them.
+
+    Raises:
+        ValueError: If a name is not a set of the book.
+    """
+    every = book.sets()
+    missing = sorted(set(names) - set(every))
+    if missing:
+        raise ValueError(f"{book.source}: no set is named {missing} (sets: {sorted(every)}).")
+    out: set[str] = set()
+    todo = list(names)
+    while todo:
+        name = todo.pop()
+        if name not in out:
+            out.add(name)
+            todo.extend(r for r in references(every[name]) if r in every)
+    return out
 
 
 #: The node kinds of an attribution graph this prototype names.
@@ -371,11 +401,12 @@ class SupportRecord:
         who = f"`{self.name}`" if self.name else "this consumer"
         return [f"{what}: {who} declares no `{section}` section, so it offers no {section} contract"]
 
-    def check_book(self, book: AddressBook) -> list[str]:
-        """Every way ``book`` asks for something the ``tuning`` section does not honour (all of it, without one)."""
+    def check_book(self, book: AddressBook, *, sets: Collection[str] | None = None) -> list[str]:
+        """Every way ``book`` asks for something the ``tuning`` section does not honour (all of it, without one);
+        ``sets`` limits the check to those sets and what they reference (see :meth:`TuningSupport.check_book`)."""
         if self.tuning is None:
             return self._refuse_missing("tuning", book.source)
-        return self.tuning.check_book(book)
+        return self.tuning.check_book(book, sets=sets)
 
     def check_recipe(self, recipe: Any) -> list[str]:
         """Every way ``recipe`` asks for something the ``steering`` section does not honour (see

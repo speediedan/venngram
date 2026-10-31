@@ -48,6 +48,22 @@ def test_a_tuning_section_refuses_what_its_consumer_cannot_tune():
         "b: set `neurons`: it selects units, and this consumer tunes no unit sets (`units: none`)"]
 
 
+def test_a_shared_book_is_judged_by_the_sets_a_consumer_uses(tmp_path):
+    (tmp_path / "probes.yaml").write_text(yaml.safe_dump({"schema_version": 1, "name": "probes", "sets": {
+        "probe": {"point": "resid_post"}, "top": {"role": "adapter", "layers": "-2:"}}}))
+    shared = book({"tune": "@lift - @steer", "lift": "role:adapter", "steer": {"point": "resid_post", "layers": 3},
+                   "upper": "@p.top"}, imports={"p": str(tmp_path / "probes.yaml")})
+    tuning = TuningSupport(fields=frozenset({"role", "layers", "point"}))
+    assert len(tuning.check_book(shared)) == 2  # `steer`, and the import's `probe`, select sites
+    assert tuning.check_book(shared, sets=["lift"]) == []
+    (only,) = tuning.check_book(shared, sets=["tune"])  # `tune` references `steer`
+    assert only.startswith("b: set `steer`")
+    assert tuning.check_book(shared, sets=["upper"]) == []  # the import's `top`, not its `probe`
+    assert tuning.check_book(shared, sets=["p.probe"])[0].startswith("import `p`: ")
+    with pytest.raises(ValueError, match=r"no set is named \['nope'\]"):
+        tuning.check_book(shared, sets=["nope"])
+
+
 def test_imported_books_are_checked_under_their_namespace(tmp_path):
     (tmp_path / "base.yaml").write_text(yaml.safe_dump({"schema_version": 1, "name": "base",
                                                         "sets": {"probe": {"point": "resid_post"}}}))
