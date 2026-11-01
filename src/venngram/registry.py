@@ -40,7 +40,8 @@ no stale row.
 process): the configured registries in order (:func:`registries`: ``VENNGRAM_REGISTRIES``, else
 :data:`DEFAULT_REGISTRIES`; set it empty for none). Within the first registry with a usable row, rows rank by status
 (``verified``, then ``partial``, then ``unverified``; ``failed`` and ``invalidated`` are never served) and then by the
-order of the sources the index was crawled from. ``strict`` serves only ``verified`` rows.
+order of the sources the index was crawled from. ``strict`` serves only ``verified`` rows. Role rules
+(:func:`lookup_role_rules`) are looked up the same way by their name, the subject of a ``role_rules`` row.
 
 **Offline.** Each registry's resolved revision is remembered in venngram's cache. When the store cannot be reached
 (or ``HF_HUB_OFFLINE`` is set), the last revision is served from the cache with a :class:`RegistryOfflineWarning`
@@ -87,6 +88,9 @@ STATUSES = (*SERVED, "failed", "invalidated")
 #: Document kinds whose subject is an architecture; the others with a model are subjected by model id.
 FAMILY_KINDS = ("component_map", "verification_record", "rules", "drafting_rules")
 
+#: Document kinds whose subject is their own ``name`` (a rule set describes an adapter convention, not a model).
+NAMED_KINDS = ("role_rules",)
+
 
 class RegistryError(VenngramError):
     """A registry cannot be read or built."""
@@ -127,6 +131,7 @@ _COLUMNS = ("kind", "subject", "reference", "sha256", "architecture", "model_id"
 
 _STATE: dict[str, tuple[str | None, dict[str, Any]]] = {}
 _MAPS: dict[str, Any] = {}
+_ROLE_RULES: dict[str, Any] = {}
 _override: list[str] | None = None
 
 
@@ -151,6 +156,7 @@ def clear_cache() -> None:
     """Forget resolved revisions, headers and loaded maps (the next lookup re-reads each registry)."""
     _STATE.clear()
     _MAPS.clear()
+    _ROLE_RULES.clear()
 
 
 def _split(location: str) -> tuple[str, str, str | None]:
@@ -291,6 +297,22 @@ def lookup_map(architecture: str, *, strict: bool = False) -> Any:
     return None
 
 
+def lookup_role_rules(name: str) -> Any:
+    """The best rule set called ``name`` in the configured registries, or ``None`` when none has one.
+
+    Raises:
+        RegistryError: If a registry cannot be read (and is not in the cache).
+    """
+    for location in registries():
+        candidates = rows("role_rules", name, locations=[location])
+        if candidates:
+            best = candidates[0]
+            if best.reference not in _ROLE_RULES:
+                _ROLE_RULES[best.reference] = load(best.reference)
+            return _ROLE_RULES[best.reference]
+    return None
+
+
 def mined_rules(*, locations: Sequence[str] | None = None) -> list[Any]:
     """The drafting rules each registry mined from its maps (for :mod:`venngram.maps.drafter`)."""
     from venngram.maps.drafter import load_drafting_rules
@@ -378,6 +400,8 @@ def crawl(locations: Iterable[str]) -> list[Row]:
                     doc = yaml.safe_load(fh)
             arch, model, model_rev = _subject_of(entry.kind, doc)
             subject = arch if entry.kind in FAMILY_KINDS else model
+            if entry.kind in NAMED_KINDS and isinstance(doc, Mapping):
+                subject = doc.get("name")
             status = doc.get("status") if entry.kind == "verification_record" and isinstance(doc, Mapping) else None
             here.append(Row(entry.kind, subject or "_", reference, entry.sha256, arch, model, model_rev,
                             status if status in STATUSES else "unverified", _source_of(doc), location, rank))
@@ -487,6 +511,6 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ["clear_cache", "crawl", "DEFAULT_REGISTRIES", "discover_hub", "lookup_map", "main", "mined_rules",
-           "publish_index", "RegistryError", "RegistryOfflineWarning", "registries", "Row", "rows", "set_registries",
-           "subjects", "write_index"]
+__all__ = ["clear_cache", "crawl", "DEFAULT_REGISTRIES", "discover_hub", "lookup_map", "lookup_role_rules", "main",
+           "mined_rules", "publish_index", "RegistryError", "RegistryOfflineWarning", "registries", "Row", "rows",
+           "set_registries", "subjects", "write_index"]

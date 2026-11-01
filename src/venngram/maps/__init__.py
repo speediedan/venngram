@@ -25,7 +25,9 @@ source) and registered in process, or published and indexed.
 - :mod:`~venngram.maps.rules`: what verification expects of an architecture, as layered data documents;
 - :mod:`~venngram.maps.verification`: verifying a map against an architecture without weights (partition, widths
   from the configuration, forward order), and its verification record;
-- :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over it;
+- :mod:`~venngram.maps.role_rules`: role rules, the data documents naming an adapter library's tensors and their roles,
+  found like maps and detected from a model;
+- :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the generic view over a map and role rules;
 - :mod:`~venngram.maps.transformer_lens`: one source of seed maps, deriving a map from a TransformerLens architecture
   adapter (read duck-typed: venngram does not depend on TransformerLens);
 - :mod:`~venngram.maps.drafter`: a source that needs no library, drafting a map from a model's own module tree for a
@@ -41,25 +43,37 @@ from venngram.maps.schema import (component_map_for, ComponentMap, from_document
                                   load_component_map, register, registered_architectures, unregister, VOCABULARY)
 from venngram.maps.structure import map_for, map_structure, MapStructure
 from venngram.maps.verification import VerificationReport, verify
-from venngram.maps.view import MappedView, PEFT_LORA_RULES
+from venngram.maps.role_rules import (detect_role_rules, known_role_rules, load_role_rules, register_role_rules,
+                                      registered_role_rules, role_rules_for, role_rules_from_document, RoleRules,
+                                      unregister_role_rules)
+from venngram.maps.view import MappedView, resolve_roles
 
 __all__ = [
     "check_map_against_model",
     "component_map_for",
+    "detect_role_rules",
     "ComponentMap",
     "ComponentMapModelMismatch",
     "from_document",
     "known_architectures",
+    "known_role_rules",
     "load_component_map",
+    "load_role_rules",
     "map_for",
     "map_structure",
     "MappedView",
     "MapProblem",
     "MapStructure",
-    "PEFT_LORA_RULES",
     "register",
+    "register_role_rules",
     "registered_architectures",
+    "registered_role_rules",
+    "resolve_roles",
+    "role_rules_for",
+    "role_rules_from_document",
+    "RoleRules",
     "unregister",
+    "unregister_role_rules",
     "validate_map_against_model",
     "VerificationReport",
     "verify",
