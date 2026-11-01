@@ -246,12 +246,35 @@ python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a l
 A map is all a tunable view needs, so a mapped architecture needs no view code:
 
 ```python
-from venngram.maps import from_document, MappedView, PEFT_LORA_RULES, register
+from venngram.maps import from_document, MappedView, register
 
 register(from_document(yaml.safe_load(open("hybrid.yaml"))))  # an indexed architecture needs no registration
-view = MappedView(model, role_rules=PEFT_LORA_RULES)          # the map is found from the model's class
+view = MappedView(model)  # the map is found from the model's class, the roles from the adapters it carries
 # `component:mlp.out & layers:-4:` selects the same tensors on a Llama, an OPT or a Gemma model
 ```
+
+Roles come from **role rules**, data documents about an adapter library rather than an architecture, so venngram's
+code names no adapter library. A rule set says which module patterns take which role, and when it applies:
+
+```yaml
+kind: role_rules
+schema_version: 1
+name: peft.lora
+applies_when:            # any condition holding means the rules apply
+  module_classes: [peft.tuners.lora.layer.LoraLayer]   # matched against each module's class hierarchy
+  module_names: [lora_A, lora_B, lora_embedding_A, lora_embedding_B]
+rules:                   # module pattern -> role; the first matching rule wins
+  lora_A: adapter
+  lora_B: adapter
+  lora_embedding_A: adapter
+  lora_embedding_B: adapter
+  lora_magnitude_vector: adapter
+```
+
+Rule sets are found the way maps are: registered in process (`register_role_rules`), else indexed by a registry (the
+seed registry carries `peft.lora`). `MappedView(model)` applies every rule set that applies to the model, refusing two
+that disagree on a tensor's role; `role_rules="peft.lora"` names one, and a mapping gives rules inline
+(`role_rules={}` for none). A new adapter library is a published document, not a venngram release.
 
 ## Tunable views
 

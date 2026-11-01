@@ -18,41 +18,52 @@ A tunable view for any architecture with a component map, built from data alone:
 roles from role rules. So ``component:mlp.* & layers:-4:`` means the same tensors on a Llama, a Gemma and an OPT model
 although their modules are named differently, and a mapped architecture needs no view class of its own.
 
-Role rules name an adapter library's conventions rather than an architecture's: a rule maps a module pattern (matched
-as :func:`~venngram.resolve.module_matches` does, on whole segments) to a role. :data:`PEFT_LORA_RULES` holds PEFT's
-LoRA names.
+Roles come from role rules (:mod:`venngram.maps.role_rules`), data documents naming an adapter library's conventions
+rather than an architecture's. By default the view applies every known rule set whose ``applies_when`` holds for the
+model, so ``MappedView(model)`` finds both the map (from the model's class) and the roles (from the adapter modules
+present); ``role_rules`` names a rule set, or gives one inline, instead.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
-import itertools
 from collections.abc import Mapping
 
 from torch import nn
 
+from venngram.maps.role_rules import detect_role_rules, role_rules_for, RoleRules, rule_roles
 from venngram.maps.schema import ComponentMap
 from venngram.maps.structure import map_for, MapStructure
-from venngram.resolve import leaf_matches, module_matches
+from venngram.tuning.errors import TunableViewError
 from venngram.tuning.views import CanonicalView
 
-#: PEFT's LoRA tensors (``lora_A``, ``lora_B``, the embedding variants, and DoRA's magnitude vector) as adapters.
-PEFT_LORA_RULES: Mapping[str, str] = {
-    "lora_A": "adapter", "lora_B": "adapter", "lora_embedding_A": "adapter", "lora_embedding_B": "adapter",
-    "lora_magnitude_vector": "adapter",
-}
+def resolve_roles(root: nn.Module, role_rules: str | Mapping[str, str] | RoleRules | None = None) -> dict[str, str]:
+    """The roles role rules give ``root``'s tensors.
 
+    Args:
+        root: The model.
+        role_rules: A rule set's name (looked up with :func:`~venngram.maps.role_rules.role_rules_for`), a rule set,
+            or a module pattern -> role mapping; ``None`` applies every known rule set that applies to ``root``
+            (:func:`~venngram.maps.role_rules.detect_role_rules`). An empty mapping gives no roles.
 
-def rule_roles(root: nn.Module, rules: Mapping[str, str]) -> dict[str, str]:
-    """The role of each of ``root``'s parameters and buffers that a rule matches (the first matching rule wins).
-
-    A pattern matches the tensors under a module of that name and, as a leaf, a tensor registered under that name
-    itself (DoRA's ``lora_magnitude_vector`` is a parameter, not a module, in some PEFT versions).
+    Raises:
+        KeyError: If a named rule set is not found.
+        TunableViewError: If two detected rule sets give one tensor different roles.
     """
+    if isinstance(role_rules, str):
+        return role_rules_for(role_rules).roles(root)
+    if isinstance(role_rules, RoleRules):
+        return role_rules.roles(root)
+    if role_rules is not None:
+        return rule_roles(root, role_rules)
     roles: dict[str, str] = {}
-    for name, _ in itertools.chain(root.named_parameters(), root.named_buffers()):
-        for pattern, role in rules.items():
-            if module_matches(pattern, name) or leaf_matches(pattern, name):
-                roles[name] = role
-                break
+    origin: dict[str, str] = {}
+    for rules in detect_role_rules(root):
+        for name, role in rules.roles(root).items():
+            if name in roles and roles[name] != role:
+                raise TunableViewError(f"role rules {origin[name]!r} and {rules.name!r} both apply to this model and "
+                                       f"give {name!r} different roles ({roles[name]!r}, {role!r}); name the rule set "
+                                       "to use with `role_rules=`.")
+            roles.setdefault(name, role)
+            origin.setdefault(name, rules.name)
     return roles
 
 
@@ -65,18 +76,19 @@ class MappedView(CanonicalView):
             ``None``.
         architecture: The architecture whose map to use, when the model's own class does not name it.
         roles: Explicit roles, applied over the ones ``role_rules`` give.
-        role_rules: Module pattern -> role (:data:`PEFT_LORA_RULES`, for example).
+        role_rules: A rule set's name (``"peft.lora"``), a rule set, or a module pattern -> role mapping; ``None``
+            (the default) applies every known rule set that applies to the model (:func:`resolve_roles`).
         prefix: The leading module path ``root`` lacks relative to the map; found from the blocks when ``None``.
 
     Raises:
-        KeyError: If no map is found for the model.
-        TunableViewError: If a role is invalid.
+        KeyError: If no map is found for the model, or a named rule set is not found.
+        TunableViewError: If a role is invalid, or two detected rule sets disagree on a tensor's role.
     """
 
     def __init__(self, root: nn.Module, cmap: ComponentMap | None = None, *, architecture: str | None = None,
-                 roles: Mapping[str, str] | None = None, role_rules: Mapping[str, str] | None = None,
-                 prefix: str | None = None) -> None:
-        super().__init__(root, roles={**rule_roles(root, role_rules or {}), **(roles or {})})
+                 roles: Mapping[str, str] | None = None,
+                 role_rules: str | Mapping[str, str] | RoleRules | None = None, prefix: str | None = None) -> None:
+        super().__init__(root, roles={**resolve_roles(root, role_rules), **(roles or {})})
         self.cmap = cmap if cmap is not None else map_for(root, architecture)
         self._structure = MapStructure(root, self.cmap, prefix)
 
@@ -84,4 +96,4 @@ class MappedView(CanonicalView):
         return self._structure
 
 
-__all__ = ["MappedView", "PEFT_LORA_RULES", "rule_roles"]
+__all__ = ["MappedView", "resolve_roles", "rule_roles"]

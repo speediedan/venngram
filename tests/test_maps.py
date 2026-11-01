@@ -6,7 +6,7 @@ from torch import nn
 
 from venngram import Location, ParamSpace, Refusal, select
 from venngram.maps import (check_map_against_model, component_map_for, ComponentMapModelMismatch, from_document,
-                           known_architectures, map_for, MappedView, MapStructure, PEFT_LORA_RULES, register,
+                           known_architectures, map_for, MappedView, MapStructure, register,
                            validate_map_against_model, VOCABULARY)
 from venngram.maps.schema import _REGISTRY, ComponentKey
 from venngram.maps.transformer_lens import from_transformer_lens
@@ -163,7 +163,7 @@ def space(view) -> ParamSpace:
 def test_components_mean_the_same_tensors_across_architectures():
     for architecture, mlp_out in (("LlamaForCausalLM", "mlp.down_proj"), ("OPTForCausalLM", "fc2")):
         model = lora(tiny(architecture, "cpu"))
-        view = MappedView(model, role_rules=PEFT_LORA_RULES)
+        view = MappedView(model)  # the map from the model's class, peft.lora's rules detected from its adapters
         s = space(view)
         top_q = select("role:adapter & component:attn.q & layers:-1:", s)
         assert len(top_q) == 2 and all(".2.self_attn.q_proj.lora_" in n for n in top_q)
