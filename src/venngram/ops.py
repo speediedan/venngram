@@ -26,8 +26,9 @@ Values derived from evidence pass through a **transform pipeline** from a small 
 (:data:`TRANSFORMS`); a transform a consumer computes from the model (a dose normalized by a layer statistic) is a
 ``statistic`` the consumer names and declares it supports.
 
-A consumer declares what it honours as a :class:`Support` record, in code or as a ``support_record`` document;
-:func:`check_support` lists every refusal by name before anything runs.
+A consumer declares what it honours as a :class:`Support` record, in code or as the ``steering`` section of a
+``support_record`` document (:mod:`venngram.support`); :func:`check_support` lists every refusal by name before anything
+runs.
 
 .. warning:: This is an experimental API and may change in a future release.
 """

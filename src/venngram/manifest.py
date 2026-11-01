@@ -63,7 +63,7 @@ MANIFEST_WINDOW = (1, 1)
 #: The document kinds this version knows. ``units`` is a sidecar, read through the book that names it; ``index`` is a
 #: registry index; ``format_adapter`` lists an installable format (:class:`venngram.sources.AdapterListing`) as data;
 #: ``drafting_rules`` is a rule source for drafting maps (:mod:`venngram.maps.drafter`); ``support_record`` is what a
-#: consumer honours (:class:`venngram.ops.Support`).
+#: consumer honours (:class:`venngram.support.SupportRecord`).
 KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "format_adapter",
          "drafting_rules", "support_record")
 

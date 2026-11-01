@@ -83,8 +83,8 @@ a per-unit table, or a column of recorded evidence through declared transforms).
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, and any registered); venngram
 validates and composes them and never executes one. A token scope is `all`, `last`, `prompt` (the input, before any
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
-a `Support` record, in code or published as a `support_record` document, and `check_support` names everything a recipe
-asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
+a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
+records" below), and `check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
 do not commute unless the composition gives an order. Schema 1 recipes are read through `migrate`. Applying a recipe is
 the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
 
@@ -113,8 +113,31 @@ documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
 reader meets it: every listed document is fetched at one revision and loaded by its kind, and every recipe is checked
-against each support record given. It exits non-zero when a document fails to load or a recipe asks for more than a
-given record honours, so a format adapter's CI, or a scheduled job over published examples, can run it.
+against each support record given, and every book against each record's `tuning` section. It exits non-zero when a
+document fails to load or a recipe or book asks for more than a given record honours, so a format adapter's CI, or a
+scheduled job over published examples, can run it.
+
+### Support records
+
+A consumer's **support record** (`venngram.support`) declares, section by section, each contract it offers, so a
+document asking for anything else is refused by name before anything runs, and without the consumer installed:
+
+```yaml
+schema_version: 2
+kind: support_record
+name: finetuning-scheduler
+sections:
+  tuning: {fields: [role, name, module, layers, stack, component, leaf], targets: [param], units: none,
+           naming_schemes: [physical]}
+  steering: {ops: [add, scale]}
+```
+
+The core sections are `steering` (recipes), `tuning` (address books whose sets select tensors to tune) and `circuits`
+(traced or validated circuits, attribution graphs in general; a prototype). A section a record omits is a contract its
+consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
+defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
+and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
+section.
 
 ### Sources: map sources and formats
 

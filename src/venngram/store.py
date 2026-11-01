@@ -376,6 +376,22 @@ class HubRepoStore:
         return getattr(info, "oid", None)
 
 
+def _bucket_api(ref: str) -> Any:
+    """``huggingface_hub``, when it has the bucket API (1.0 and later); venngram requires an older release, so the
+    repository stores work alongside ``transformers`` 4.x.
+
+    Raises:
+        StoreError: If the installed ``huggingface_hub`` has no bucket API, naming its version.
+    """
+    import huggingface_hub
+
+    if not hasattr(huggingface_hub, "download_bucket_files"):
+        raise StoreError(f"hub-bucket:{ref}: Hub buckets need huggingface_hub>=1.0; this environment has "
+                         f"{getattr(huggingface_hub, '__version__', 'an older release')}. The hub-model and "
+                         "hub-dataset stores work with it.")
+    return huggingface_hub
+
+
 class HubBucketStore:
     """A Hub bucket, or a directory of one: ``hub-bucket:<owner>/<bucket>[/<dir>]:<path>[#<sha256>]``. Unversioned."""
 
@@ -388,8 +404,7 @@ class HubBucketStore:
         return None
 
     def fetch(self, ref: str, paths: Sequence[str], revision: str | None, cache: Path) -> Path:
-        import huggingface_hub
-
+        huggingface_hub = _bucket_api(ref)
         bucket, prefix = _split_hub(ref, self.name)
         want = [p for p in paths if not (cache / p).is_file()]
         for p in want:
@@ -400,8 +415,7 @@ class HubBucketStore:
         return cache
 
     def push(self, ref: str, files: Mapping[str, Path], message: str, revision: str | None) -> str | None:
-        import huggingface_hub
-
+        huggingface_hub = _bucket_api(ref)
         bucket, prefix = _split_hub(ref, self.name)
         huggingface_hub.batch_bucket_files(bucket, add=[(src, _in(prefix, rel)) for rel, src in files.items()])
         return None
@@ -443,9 +457,9 @@ def _load_drafting_rules(path: Path) -> Any:
 
 
 def _load_support(path: Path) -> Any:
-    from venngram.ops import Support
+    from venngram.support import SupportRecord
 
-    return Support.from_file(path)
+    return SupportRecord.from_file(path)
 
 
 def _load_rules(path: Path) -> Any:
