@@ -33,6 +33,10 @@ component's *kind*. Block-relative rows are keyed ``blocks.{i}.<component>``; a 
 address (``component:mlp.out``) selects the same part on every architecture that has it. Use a vocabulary name when a
 component plays that part, and a name of your own otherwise.
 
+Schema 4 adds a second shape, the **overlay map** (:mod:`~venngram.maps.overlay`): what an adapter or instrument
+library adds to a module tree and the roles its tensors take. :func:`map_from_document` and :func:`load_map` read
+either shape; :func:`from_document` and :func:`load_component_map` read base maps only.
+
 Sources, in precedence order: a registration in this process (:func:`register`), then the configured registries
 (:mod:`venngram.registry`), which index published maps from any source: the seeds for common architectures (several
 cross-checked against TransformerLens's architecture adapters, which :mod:`~venngram.maps.transformer_lens` derives a
@@ -49,6 +53,7 @@ from typing import Any
 
 import yaml
 
+from venngram.maps.overlay import _OVERLAYS, overlay_from_document, OverlayMap
 from venngram.maps.rules import rules_from_document
 
 
@@ -67,7 +72,7 @@ VOCABULARY: tuple[str, ...] = (
 #: or how a row resolves, such as a per-row layer predicate or a second block stack) always does, because a reader that
 #: skipped one would resolve the wrong rows silently. 2 added ``kinds``, ``stacks`` and per-row ``layers``; 3 added
 #: per-row ``optional``.
-COMPONENT_MAP_SCHEMA_VERSION = 3
+COMPONENT_MAP_SCHEMA_VERSION = 4
 
 #: The oldest schema this code reads. Published maps outlive the code that wrote them, so the reader accepts a window.
 COMPONENT_MAP_SCHEMA_MIN_READABLE = 1
@@ -397,6 +402,9 @@ def from_document(doc: Any, source: str = "<document>") -> ComponentMap:
     """Read a parsed component map document, refusing a malformed one by name."""
     if not isinstance(doc, dict):
         raise ValueError(f"{source}: a component map document must be a mapping, got {type(doc).__name__}")
+    if "overlay" in doc:
+        raise ValueError(f"{source}: this is an overlay map ({doc['overlay']!r}); read it with `map_from_document` or "
+                         "`load_map`")
     version = _schema_version(doc, source)
     try:
         architecture, rows = doc["architecture"], doc["components"]
@@ -432,22 +440,40 @@ def from_document(doc: Any, source: str = "<document>") -> ComponentMap:
 
 
 def load_component_map(path: str | Path) -> ComponentMap:
-    """Read one YAML component map document. Loading runs no code (``yaml.safe_load``)."""
+    """Read one YAML base map document. Loading runs no code (``yaml.safe_load``)."""
     with open(path, encoding="utf-8") as fh:
         return from_document(yaml.safe_load(fh), source=str(path))
+
+
+def map_from_document(doc: Any, source: str = "<document>") -> ComponentMap | OverlayMap:
+    """Read a parsed map document of either shape: an overlay map when it names an ``overlay``, else a base map."""
+    if isinstance(doc, dict) and "overlay" in doc:
+        return overlay_from_document(doc, source)
+    return from_document(doc, source)
+
+
+def load_map(path: str | Path) -> ComponentMap | OverlayMap:
+    """Read one YAML map document of either shape. Loading runs no code (``yaml.safe_load``)."""
+    with open(path, encoding="utf-8") as fh:
+        return map_from_document(yaml.safe_load(fh), source=str(path))
 
 
 _REGISTRY: dict[str, ComponentMap] = {}
 
 
-def register(cmap: ComponentMap) -> None:
-    """Register (or replace) the map for an architecture in this process; it takes precedence over the registries."""
-    _REGISTRY[cmap.architecture] = cmap
+def register(cmap: ComponentMap | OverlayMap) -> None:
+    """Register (or replace) a map in this process: a base map under its architecture, an overlay under its name. A
+    registration takes precedence over the registries."""
+    if isinstance(cmap, OverlayMap):
+        _OVERLAYS[cmap.name] = cmap
+    else:
+        _REGISTRY[cmap.architecture] = cmap
 
 
-def unregister(architecture: str) -> None:
-    """Remove an in-process registration (for tests and replacements)."""
-    _REGISTRY.pop(architecture, None)
+def unregister(name: str) -> None:
+    """Remove an in-process registration by a base map's architecture or an overlay's name."""
+    _REGISTRY.pop(name, None)
+    _OVERLAYS.pop(name, None)
 
 
 def component_map_for(architecture: str, *, strict: bool = False) -> ComponentMap:
@@ -484,10 +510,11 @@ def registered_architectures() -> list[str]:
 
 
 def known_architectures() -> list[str]:
-    """Every architecture with a map registered in this process or indexed by a configured registry."""
+    """Every architecture with a base map registered in this process or indexed by a configured registry."""
+    from venngram.maps.overlay import OVERLAY_SUBJECT_PREFIX
     from venngram.registry import subjects
 
-    return sorted({*_REGISTRY, *subjects("component_map")})
+    return sorted({*_REGISTRY, *(s for s in subjects("component_map") if not s.startswith(OVERLAY_SUBJECT_PREFIX))})
 
 
 __all__ = [
@@ -504,6 +531,8 @@ __all__ = [
     "known_architectures",
     "KNOWN_PROPERTIES",
     "load_component_map",
+    "load_map",
+    "map_from_document",
     "PRIMARY_STACK",
     "register",
     "registered_architectures",

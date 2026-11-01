@@ -65,7 +65,7 @@ MANIFEST_WINDOW = (1, 1)
 #: ``drafting_rules`` is a rule source for drafting maps (:mod:`venngram.maps.drafter`); ``support_record`` is what a
 #: consumer honours (:class:`venngram.support.SupportRecord`).
 KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "format_adapter",
-         "drafting_rules", "support_record", "role_rules")
+         "drafting_rules", "support_record")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")

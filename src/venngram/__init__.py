@@ -33,17 +33,33 @@ specification of the neural traces it targets.
 - :mod:`venngram.conformance`: a published directory of documents checked from the outside (loads, support records);
 - :mod:`venngram.resolve`: resolution over a model's tensors, and the provider interfaces;
 - :mod:`venngram.physical`: the structure provider every PyTorch model gets;
-- :mod:`venngram.maps`: per-architecture component maps, the structure provider and the generic view built from them;
+- :mod:`venngram.maps`: base maps (architectures) and overlay maps (what adapter and instrument libraries add), the
+  structure provider, and the view composed from them (:func:`view`);
 - :mod:`venngram.roles`: the role vocabulary (what a tensor *is*, where an address says *which*);
 - :mod:`venngram.tuning`: the tunable view protocol, through which a fine-tuning consumer sees a model.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
+from typing import Any
+
 from venngram.__about__ import __version__
 from venngram.address import is_address, LayerSet, parse, to_mapping, to_string, UnitSet
 from venngram.book import AddressBook, diff_lock, make_lock, register_uri_resolver
 from venngram.errors import AddressError, AddressUnresolvable, Refusal, RoleError, VenngramError
 from venngram.resolve import Location, ParamSpace, select, StructureProvider
+
+
+def view(model: Any, maps: Any = None, *, roles: dict[str, str] | None = None) -> Any:
+    """The tunable view of ``model``: its base map's structure and the roles of every overlay map that applies to it.
+
+    ``view(model)`` finds the base map from the model's class and the overlays (PEFT's LoRA, a spliced SAE, a steering
+    module) from the modules it carries, among the maps registered in this process and those the configured
+    registries index. ``maps`` names the maps to use instead, and ``roles`` sets individual tensors' roles over the
+    overlays'. Returns a :class:`venngram.maps.MappedView`.
+    """
+    from venngram.maps.view import MappedView
+
+    return MappedView(model, maps, roles=roles)
 
 __all__ = [
     "__version__",
@@ -66,4 +82,5 @@ __all__ = [
     "to_string",
     "UnitSet",
     "VenngramError",
+    "view",
 ]

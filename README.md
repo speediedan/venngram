@@ -11,6 +11,21 @@ specification of the neural traces it targets.
 > **Status: experimental (0.x).** The API and the document schema may change. Design discussion:
 > [finetuning-scheduler#153](https://github.com/speediedan/finetuning-scheduler/issues/153).
 
+## A model's view in one call
+
+```python
+from venngram import view
+
+v = view(model)   # a Qwen3, Llama, OPT, Gemma ... model, with or without PEFT LoRA adapters
+# every tensor now has a role (base, adapter, ...), a layer and an architecture-neutral component, so
+# "role:adapter & component:mlp.* & layers:-4:" means the same tensors on every mapped architecture
+```
+
+`view(model)` composes the model's view from published data: the **base map** of its architecture (found from the
+model's class) and the **overlay map** of each library whose modules it carries (PEFT's LoRA layers, a spliced SAE or
+transcoder, a steering module). Neither the architecture nor the library needs code. [Maps](#maps-base-and-overlay)
+describes both shapes and how they are found.
+
 ## Addresses
 
 An address is a record whose fields intersect:
@@ -167,10 +182,12 @@ architecture or a backend enters only through providers:
 
 [interpretune](https://github.com/speediedan/interpretune) supplies both of the last two.
 
-## Component maps
+## Maps: base and overlay
 
-`venngram.maps` reads component maps: one YAML document per architecture naming where each of its components lives in
-its module tree. A map can describe any PyTorch model, not only the architectures some library already adapts:
+`venngram.maps` reads maps, in two shapes. A **base map** (a component map) is one YAML document per architecture
+naming where each of its components lives in its module tree; an **overlay map** describes what a library adds to a
+tree and the role each of its tensors takes (below). A base map can describe any PyTorch model, not only the
+architectures some library already adapts:
 
 - rows name whatever components the model has (`mixer.conv`, `moe.router`, `projector`);
 - a component whose behaviour the bundled kinds do not describe gets a kind declared in the document (`kinds:`);
@@ -204,7 +221,10 @@ derived from TransformerLens or another package) is indexed and found like the s
 architecture: lookup serves the best verified one, and `venngram.registry.rows` lists every candidate. The index is a
 parquet dataset partitioned by kind and subject (architecture, or model id for checkpoint documents), so a lookup reads
 one small file however large the registry grows; the last revision read is served from the cache, with a warning, when
-the store is unreachable.
+the store is unreachable (or `HF_HUB_OFFLINE` is set), and a registry never read before fails by name. A location may
+pin a revision (`hub-dataset:<owner>/<repo>/index@<commit>`), so an example rendered against it cannot be moved by a
+later registry generation. `venngram.maps.known_architectures()` and `known_overlays()` list what the process and the
+registries know.
 
 ```bash
 python -m venngram.registry build --source hub-dataset:<owner>/<repo>/maps --discover-hub --out ./index
@@ -243,27 +263,16 @@ python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or 
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a later run must observe the same order
 ```
 
-A map is all a tunable view needs, so a mapped architecture needs no view code:
-
-```python
-from venngram.maps import from_document, MappedView, register
-
-register(from_document(yaml.safe_load(open("hybrid.yaml"))))  # an indexed architecture needs no registration
-view = MappedView(model)  # the map is found from the model's class, the roles from the adapters it carries
-# `component:mlp.out & layers:-4:` selects the same tensors on a Llama, an OPT or a Gemma model
-```
-
-Roles come from **role rules**, data documents about an adapter library rather than an architecture, so venngram's
-code names no adapter library. A rule set says which module patterns take which role, and when it applies:
+**Overlay maps.** What a library adds to a model's module tree is data too, so venngram's code names no adapter
+library. An overlay says which module patterns take which role, and when it applies:
 
 ```yaml
-kind: role_rules
-schema_version: 1
-name: peft.lora
-applies_when:            # any condition holding means the rules apply
+schema_version: 4
+overlay: peft.lora
+applies_when:            # any condition holding means the overlay applies
   module_classes: [peft.tuners.lora.layer.LoraLayer]   # matched against each module's class hierarchy
-  module_names: [lora_A, lora_B, lora_embedding_A, lora_embedding_B]
-rules:                   # module pattern -> role; the first matching rule wins
+  module_names: [lora_A, lora_B, lora_embedding_A, lora_embedding_B, lora_magnitude_vector]
+roles:                   # module pattern -> role; the first matching pattern wins
   lora_A: adapter
   lora_B: adapter
   lora_embedding_A: adapter
@@ -271,10 +280,25 @@ rules:                   # module pattern -> role; the first matching rule wins
   lora_magnitude_vector: adapter
 ```
 
-Rule sets are found the way maps are: registered in process (`register_role_rules`), else indexed by a registry (the
-seed registry carries `peft.lora`). `MappedView(model)` applies every rule set that applies to the model, refusing two
-that disagree on a tensor's role; `role_rules="peft.lora"` names one, and a mapping gives rules inline
-(`role_rules={}` for none). A new adapter library is a published document, not a venngram release.
+A tensor under an overlay's module keeps the layer and component of the module it is attached to, so one overlay serves
+every architecture. Overlays are documents of the same kind as base maps, found the same way (registered in process,
+then the registries, as subject `overlay:<name>`); the seed registry carries `peft.lora`. A spliced SAE or transcoder
+(`latent:<name>`, or `instrument` when frozen), a block-sparse featurizer or a steering module (`intervention:<kind>`)
+is an overlay in the same way: a new library is a published document, not a venngram release.
+
+**The view.** `view(model)` (a `venngram.maps.MappedView`) applies **every map that applies**: the model's base map and
+every known overlay whose `applies_when` holds, refusing two overlays that give one tensor different roles. To choose
+instead, name the maps: `view(model, [base_map, overlay])`, or `view(model, overlay)` to keep the looked-up base map with
+exactly that overlay. `roles=` sets individual tensors' roles over the overlays'.
+
+```python
+from venngram import view
+from venngram.maps import load_map, register
+
+register(load_map("hybrid.yaml"))    # only for an architecture no registry indexes
+register(load_map("my_adapter.yaml"))  # only for a library no registry indexes
+v = view(model)
+```
 
 ## Tunable views
 
