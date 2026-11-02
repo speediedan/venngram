@@ -166,8 +166,9 @@ section of a `kind: rules` document). What no rule names becomes a `draft.*` row
 another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
 entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
 provenance. A format's translation is written to a directory (`venngram.sources.write_translation`) and published like
-any other documents. A manifest can list an installable format as data (`kind: format_adapter`), so a reader can say how
-to read a foreign document without running anything.
+any other documents. A manifest can list an installable format as data (a support record's `formats` section, naming
+the formats a package reads and where to install it from), so a reader can say how to read a foreign document without
+running anything.
 
 ## What resolves where
 
