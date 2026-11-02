@@ -83,7 +83,7 @@ book = AddressBook.from_file("qwen3.yaml")
 select("@rest", space, book.sets())
 ```
 
-### Large unit sets and recipes
+### Large unit sets and treatments
 
 A `units` value may name a sidecar instead of listing indices:
 `units: {file: units.safetensors, key: L15, sha256: ...}`, flat or per layer. A sidecar is a safetensors file holding a
@@ -91,7 +91,9 @@ sorted index array or a packed bitmask per set, read with the standard library (
 or a set written for another axis width, is refused. `venngram.units.units_value` keeps small sets inline and writes
 large ones to a sidecar.
 
-A **recipe** is a treatment over a book's sets: ordered **stages**, each applying ordered **ops** at one site under one
+A book may carry **treatments**: what is done to its sets for one model, by name, under its `treatments` section, so a
+selection and what is done to it travel together in one document. A treatment (a **recipe**, `venngram.recipe.Recipe`)
+is ordered **stages**, each applying ordered **ops** at one site under one
 token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
 a per-unit table, or a column of recorded evidence through declared transforms). Ops are declared specs
@@ -100,8 +102,10 @@ validates and composes them and never executes one. A token scope is `all`, `las
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
 a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
 records" below), and `check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
-do not commute unless the composition gives an order. Schema 1 recipes are read through `migrate`. Applying a recipe is
-the consumer's; recipes written in another tool's format are read by an adapter outside venngram's core.
+do not commute unless the composition gives an order. A `kind: recipe` document naming its book (the form written
+before books and recipes merged) is still read, and `Recipe.as_book` turns it into its book with one treatment; schema 1
+recipes are read through `migrate`. Applying a treatment is the consumer's; treatments written in another tool's format
+are read by an adapter outside venngram's core.
 
 ### Sharing documents: manifests and stores
 
@@ -127,8 +131,9 @@ by reference. The Hub stores use `huggingface_hub`; a new place to keep
 documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
-reader meets it: every listed document is fetched at one revision and loaded by its kind, and every recipe is checked
-against each support record given, and every book against each record's `tuning` section. It exits non-zero when a
+reader meets it: every listed document is fetched at one revision and loaded by its kind, every book's sets are
+checked against each support record's `tuning` section, and its treatments (and any recipe) against its `steering`
+section. It exits non-zero when a
 document fails to load or a recipe or book asks for more than a given record honours, so a format adapter's CI, or a
 scheduled job over published examples, can run it.
 
@@ -147,8 +152,9 @@ sections:
   steering: {ops: [add, scale]}
 ```
 
-The core sections are `steering` (recipes), `tuning` (address books whose sets select tensors to tune) and `circuits`
-(traced or validated circuits, attribution graphs in general; a prototype). A section a record omits is a contract its
+The core sections are `steering` (a book's treatments), `tuning` (address books whose sets select tensors to tune),
+`circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
+a package reads, with where to install it from). A section a record omits is a contract its
 consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
 defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
 and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
@@ -160,14 +166,15 @@ A **map source** derives a component map from something that knows an architectu
 `venngram.maps.drafter.ModuleTreeSource`; TransformerLens's adapters through
 `venngram.maps.transformer_lens.TransformerLensSource`; or any package's own). The module-tree drafter names modules by
 **drafting rules** that are data, from any number of sources: rules mined from the registry's own maps (so they grow
-with it), bundled rule documents for transformer and state-space blocks, or any a family publishes
-(`kind: drafting_rules`). What no rule names becomes a `draft.*` row for a person or an agent to confirm, and
+with it), bundled rule documents for transformer and state-space blocks, or any a family publishes (the `draft`
+section of a `kind: rules` document). What no rule names becomes a `draft.*` row for a person or an agent to confirm, and
 `draft_with_model` asks a model the caller chooses to complete the draft, then checks it against the model; a **format** translates documents
 another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
 entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
 provenance. A format's translation is written to a directory (`venngram.sources.write_translation`) and published like
-any other documents. A manifest can list an installable format as data (`kind: format_adapter`), so a reader can say how
-to read a foreign document without running anything.
+any other documents. A manifest can list an installable format as data (a support record's `formats` section, naming
+the formats a package reads and where to install it from), so a reader can say how to read a foreign document without
+running anything.
 
 ## What resolves where
 
@@ -241,7 +248,8 @@ A map is verified against an architecture without downloading weights: on a meta
 configuration, every row's module exists, every parameter is claimed by exactly one component, and the widths the
 configuration implies hold (`attn.q` and `attn.k` differ under grouped-query attention, so a swap fails); a forward on
 a small random-init model confirms the order within a block, which catches swapped labels that widths cannot. What the
-width and order checks expect is data, not code: rule sets layered from a bundled `core` set (the conventional decoder
+width and order checks expect is data, not code: rule sets (the `verify` section of a `kind: rules` document, which
+holds a family's drafting rules too, in its `draft` section) layered from a bundled `core` set (the conventional decoder
 parts), the map's own `verification:` section, and any the caller passes, where a later layer replaces an entry by key
 and `null` removes one. A map for an architecture nobody anticipated states its own widths and orders, and a
 parallel-residual one drops the core chain that does not hold for it:

@@ -10,26 +10,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 r"""
-Verification Rules
+Architecture Rules
 ^^^^^^^^^^^^^^^^^^
 
-What the verifier (:mod:`~venngram.maps.verification`) expects of an architecture, as data rather than code, so a map
-for an architecture nobody anticipated can say what holds for it. A rule set is a document with three sections:
+What tools expect of an architecture family, as data rather than code, so a map for an architecture nobody anticipated
+can say what holds for it. A ``rules`` document has two optional sections: ``verify``, what the verifier
+(:mod:`~venngram.maps.verification`) checks, and ``draft``, how the drafter (:mod:`~venngram.maps.drafter`) names a
+module tree's parts. The ``verify`` section has four parts:
 
 .. code-block:: yaml
 
-    schema_version: 1
+    schema_version: 2
+    kind: rules
     name: my-rules
-    config:            # a meaning -> where a configuration states it, first that resolves wins
-      hidden: [hidden_size, n_embd]
-      head_dim: [head_dim, "hidden // heads"]
-    widths:            # a component pattern -> the widths its module must have (expressions over the meanings)
-      attn.q: {out: "heads * head_dim"}
-      "mixer.*": {in: hidden}
-    kinds:             # a component kind -> the same, for every row of that kind
-      norm: {ndim: 1}
-    order:             # a named chain: within one block, every component of a group starts before any of the next
-      attention: [ln1, [attn.q, attn.k, attn.v], attn.o]
+    verify:
+      config:            # a meaning -> where a configuration states it, first that resolves wins
+        hidden: [hidden_size, n_embd]
+        head_dim: [head_dim, "hidden // heads"]
+      widths:            # a component pattern -> the widths its module must have (expressions over the meanings)
+        attn.q: {out: "heads * head_dim"}
+        "mixer.*": {in: hidden}
+      kinds:             # a component kind -> the same, for every row of that kind
+        norm: {ndim: 1}
+      order:             # a named chain: within one block, every component of a group starts before any of the next
+        attention: [ln1, [attn.q, attn.k, attn.v], attn.o]
+    draft:               # see venngram.maps.drafter
+      containers: [{match: "self_attn|attn", component: attn, kind: attn}]
+
+Schema 1 (a verification rule set with these parts at the top level, no ``kind``) and ``kind: drafting_rules``
+(schema 1, the ``draft`` section's parts at the top level) are still read, so documents published before the two
+kinds merged keep working.
 
 A name in a ``config`` source is a configuration field if the configuration has it (as an integer), else another
 meaning; so ``kv_heads: [num_key_value_heads, heads]`` falls back to the head count. Patterns are globs over component
@@ -37,10 +47,10 @@ names (``*`` one segment, ``**`` several), as an address's ``component`` field
 takes. An expression uses integers, meanings, ``+ - * // /`` (``/`` must divide exactly) and parentheses; a rule
 whose expression names a meaning the configuration does not state is skipped, not failed.
 
-Rule sets layer: the bundled ``core`` set (:func:`core_rules`, the conventional decoder parts), then a map's own
-``verification:`` section, then any the caller passes. A later layer replaces an entry by its key, and a ``null`` value
-removes one, so a parallel-residual architecture drops the ``attn_then_mlp`` chain and GPT-2 says its intermediate
-size defaults to ``4 * hidden``.
+Verification rule sets layer: the bundled ``core`` set (:func:`core_rules`, the conventional decoder parts), then a
+map's own ``verification:`` section, then any the caller passes. A later layer replaces an entry by its key, and a
+``null`` value removes one, so a parallel-residual architecture drops the ``attn_then_mlp`` chain and GPT-2 says its
+intermediate size defaults to ``4 * hidden``.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -55,8 +65,9 @@ import yaml
 
 from venngram.resolve import component_matches
 
-#: The schema of a rule set document.
-RULES_SCHEMA_VERSION = 1
+#: The schema of a ``rules`` document (``verify`` and ``draft`` sections); schema 1 is still read.
+RULES_SCHEMA_VERSION = 2
+_VERIFY = {"config", "widths", "kinds", "order"}
 
 _DATA = Path(__file__).parent / "data" / "rules"
 _WIDTHS = ("in", "out", "rows", "numel", "ndim")
@@ -185,17 +196,40 @@ def _group(entry: Any, where: str) -> tuple[str, ...]:
 
 
 def rules_from_document(doc: Any, source: str = "<rules>", *, section: bool = False) -> RuleSet:
-    """Read a rule set document (or, with ``section``, a map's ``verification:`` section, which has no header),
-    refusing a malformed one by name. Entries are validated here; ``null`` entries are kept for layering."""
+    """The verification rules of a ``rules`` document (its ``verify`` section; with ``section``, a map's
+    ``verification:`` section, which has no header), refusing a malformed document by name. A ``draft`` section is
+    validated too. Entries are validated here; ``null`` entries are kept for layering."""
     if not isinstance(doc, dict):
         raise ValueError(f"{source}: a rule set must be a mapping, got {type(doc).__name__}")
     if not section:
         version = doc.get("schema_version")
-        if version != RULES_SCHEMA_VERSION:
-            raise ValueError(f"{source}: rule set `schema_version` must be {RULES_SCHEMA_VERSION}, got {version!r}")
-    unknown = set(doc) - {"schema_version", "name", "config", "widths", "kinds", "order"}
+        if version == RULES_SCHEMA_VERSION:
+            return _rules_document(doc, source)
+        if version != 1:
+            raise ValueError(f"{source}: rules `schema_version` must be {RULES_SCHEMA_VERSION} (or 1), got {version!r}")
+    unknown = set(doc) - {"schema_version", "name"} - _VERIFY
     if unknown:
         raise ValueError(f"{source}: unknown rule set keys {sorted(unknown)}")
+    return _verify_section(doc, source, doc.get("name") or source)
+
+
+def _rules_document(doc: dict, source: str) -> RuleSet:
+    if doc.get("kind") != "rules":
+        raise ValueError(f"{source}: a schema {RULES_SCHEMA_VERSION} rules document is `kind: rules`")
+    unknown = set(doc) - {"schema_version", "kind", "name", "description", "verify", "draft"}
+    if unknown:
+        raise ValueError(f"{source}: unknown rules document keys {sorted(unknown)}")
+    if doc.get("draft") is not None:
+        from venngram.maps.drafter import DraftingRules
+
+        DraftingRules.from_mapping(doc, source=source)
+    verify = doc.get("verify") or {}
+    if not isinstance(verify, dict) or set(verify) - _VERIFY:
+        raise ValueError(f"{source}: `verify` maps some of {sorted(_VERIFY)} to their entries")
+    return _verify_section(verify, source, doc.get("name") or source)
+
+
+def _verify_section(doc: dict, source: str, label: str) -> RuleSet:
     config: dict[str, Any] = {}
     for meaning, sources in (doc.get("config") or {}).items():
         if sources is None:
@@ -217,7 +251,7 @@ def rules_from_document(doc: Any, source: str = "<rules>", *, section: bool = Fa
         if not isinstance(chain, list) or len(chain) < 2:
             raise ValueError(f"{source}: order chain {name!r} must list at least two groups")
         order[name] = tuple(_group(g, f"{source}: order chain {name!r}") for g in chain)
-    return RuleSet(config, widths, kinds, order, (doc.get("name") or source,))  # type: ignore[arg-type]
+    return RuleSet(config, widths, kinds, order, (label,))  # type: ignore[arg-type]
 
 
 def _widths(raw: Any, source: str, key: str) -> dict[str, Any]:
@@ -234,8 +268,37 @@ def _widths(raw: Any, source: str, key: str) -> dict[str, Any]:
     return out
 
 
+@dataclass(frozen=True)
+class Rules:
+    """A ``rules`` document: its verification rules (``verify``, empty when it has none) and its drafting rules
+    (``draft``, a :class:`~venngram.maps.drafter.DraftingRules`, or ``None`` when it has no ``draft`` section)."""
+
+    name: str
+    verify: RuleSet
+    draft: Any = None
+
+
+def rules_document(doc: Any, source: str = "<rules>") -> Rules:
+    """Read a ``rules`` document (or one published before the kinds merged: a schema 1 verification rule set, or a
+    ``kind: drafting_rules`` document), refusing a malformed one by name."""
+    from venngram.maps.drafter import DraftingRules
+
+    if isinstance(doc, dict) and doc.get("kind") == "drafting_rules":
+        draft = DraftingRules.from_mapping(doc, source=source)
+        return Rules(draft.name, RuleSet(sources=(draft.name,)), draft)
+    verify = rules_from_document(doc, source)
+    draft = DraftingRules.from_mapping(doc, source=source) if doc.get("draft") is not None else None
+    return Rules(str(doc.get("name") or source), verify, draft)
+
+
+def load_rules_document(path: str | Path) -> Rules:
+    """Read one YAML ``rules`` document, both sections. Loading runs no code."""
+    with open(path, encoding="utf-8") as fh:
+        return rules_document(yaml.safe_load(fh), source=str(path))
+
+
 def load_rules(path: str | Path) -> RuleSet:
-    """Read one YAML rule set document. Loading runs no code."""
+    """The verification rules of one YAML ``rules`` document. Loading runs no code."""
     with open(path, encoding="utf-8") as fh:
         return rules_from_document(yaml.safe_load(fh), source=str(path))
 
@@ -250,8 +313,9 @@ def core_rules() -> RuleSet:
     return _CORE[0]
 
 
-def layered(*sets: RuleSet | Mapping[str, Any] | str | Path | None) -> RuleSet:
-    """Rule sets layered in order; each is a :class:`RuleSet`, a document, or a path to one (``None`` is skipped)."""
+def layered(*sets: RuleSet | Rules | Mapping[str, Any] | str | Path | None) -> RuleSet:
+    """Verification rule sets layered in order; each is a :class:`RuleSet`, a :class:`Rules` document (its
+    ``verify`` section), a document, or a path to one (``None`` is skipped)."""
     merged = RuleSet()
     for s in _as_sets(sets):
         merged = merged.then(s)
@@ -264,6 +328,8 @@ def _as_sets(sets: Iterable[Any]) -> Iterable[RuleSet]:
             continue
         if isinstance(s, RuleSet):
             yield s
+        elif isinstance(s, Rules):
+            yield s.verify
         elif isinstance(s, Mapping):
             yield rules_from_document(dict(s))
         else:
@@ -276,6 +342,9 @@ __all__ = [
     "evaluate",
     "layered",
     "load_rules",
+    "load_rules_document",
+    "Rules",
+    "rules_document",
     "RuleSet",
     "rules_from_document",
     "RULES_SCHEMA_VERSION",

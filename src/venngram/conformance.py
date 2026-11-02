@@ -16,8 +16,8 @@ Document Conformance
 Checks a published directory of venngram documents from the outside, the way a reader meets it: fetch its manifest by
 reference at one revision, load every document through its kind's loader (which validates it against the core schema
 and checks every file it needs by sha256), and check each recipe and address book against consumers' support records
-(:class:`venngram.support.SupportRecord`: recipes against a record's ``steering`` section, books against its ``tuning``
-section), so a refusal surfaces before any consumer runs the document.
+(:class:`venngram.support.SupportRecord`: a book's sets against a record's ``tuning`` section, its treatments and any
+recipe against its ``steering`` section), so a refusal surfaces before any consumer runs the document.
 
 .. code-block:: bash
 
@@ -132,9 +132,13 @@ def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) ->
         if entry.kind == "recipe":
             refusals = {(s.name or f"support {i}"): tuple(s.check_recipe(doc)) for i, s in enumerate(records)}
         elif entry.kind == "address_book":
-            # a steering-only consumer offers no tuning contract, so it does not judge books
-            refusals = {(s.name or f"support {i}"): tuple(s.check_book(doc)) for i, s in enumerate(records)
-                        if s.tuning is not None}
+            # a consumer judges what it offers a contract for: a tuning consumer the sets, a steering consumer the
+            # book's treatments; one that offers neither does not judge the book
+            for i, s in enumerate(records):
+                found = [*(s.check_book(doc) if s.tuning is not None else ()),
+                         *(s.check_treatments(doc) if s.steering is not None and doc.treatments else ())]
+                if s.tuning is not None or (s.steering is not None and doc.treatments):
+                    refusals[s.name or f"support {i}"] = tuple(found)
         results.append(DocumentResult(entry.path, entry.kind, refusals=refusals))
     unloaded += [(e.kind, e.path) for e in manifest.skipped]
     return ConformanceReport(location, resolved, tuple(results), tuple(unloaded))

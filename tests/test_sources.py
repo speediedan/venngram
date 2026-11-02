@@ -9,7 +9,7 @@ from venngram.manifest import build_manifest
 from venngram.maps.schema import ComponentMap
 from venngram.maps.transformer_lens import TransformerLensSource
 from venngram.recipe import Recipe
-from venngram.sources import (AdapterListing, derive_map, format_for, formats, map_sources, Provenance, ReadContext,
+from venngram.sources import (derive_map, format_for, formats, map_sources, Provenance, ReadContext,
                               register_format, register_map_source, SourceError, SourceLoadWarning, Translation,
                               unregister, write_translation)
 from venngram.store import load, publish
@@ -170,13 +170,19 @@ def test_the_transformer_lens_source_reads_an_adapter_duck_typed():
         TransformerLensSource(lambda arch, config: (_ for _ in ()).throw(KeyError(arch))).derive("Missing")
 
 
-def test_an_adapter_listing_is_data(tmp_path):
-    doc = {"schema_version": 1, "kind": "format_adapter", "name": "toy", "version": "0.1", "formats": ["toy"],
-           "install": {"git": "https://github.com/someone/venngram-toy", "commit": "f" * 40}}
+def test_a_format_adapter_is_described_by_a_support_record_section(tmp_path):
+    from venngram.support import FormatSupport, SupportRecord
+
+    section = {"reads": ["toy"], "version": "0.1",
+               "install": {"git": "https://github.com/someone/venngram-toy", "commit": "f" * 40}}
+    doc = {"schema_version": 2, "kind": "support_record", "name": "venngram-toy", "sections": {"formats": section}}
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "toy_adapter.yaml").write_text(yaml.safe_dump(doc))
-    publish("local", str(tmp_path / "pub"), tmp_path / "src", documents=[("format_adapter", "toy_adapter.yaml")])
-    listing = load(f"local:{tmp_path / 'pub'}:toy_adapter.yaml")
-    assert listing == AdapterListing("toy", "0.1", ("toy",), doc["install"])
-    with pytest.raises(SourceError, match="pins a `commit`"):
-        AdapterListing.from_mapping({**doc, "install": {"git": "https://example.com/x"}})
+    (tmp_path / "src" / "toy_support.yaml").write_text(yaml.safe_dump(doc))
+    publish("local", str(tmp_path / "pub"), tmp_path / "src", documents=[("support_record", "toy_support.yaml")])
+    record = load(f"local:{tmp_path / 'pub'}:toy_support.yaml")
+    assert record.formats == FormatSupport(("toy",), section["install"], "0.1")
+    assert SupportRecord.from_mapping(record.to_mapping()).formats == record.formats
+    with pytest.raises(ValueError, match="pins a `commit`"):
+        FormatSupport.from_mapping({**section, "install": {"git": "https://example.com/x"}})
+    with pytest.raises(ValueError, match="`reads` lists"):
+        FormatSupport.from_mapping({**section, "reads": []})

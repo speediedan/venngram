@@ -232,3 +232,44 @@ def test_a_recipe_selection_lands_on_the_qwen35_mlp_out_it_names():
         (weight,) = select(f"component:mlp.out & layers:{layer}", space)
         width = dict(model.named_parameters())[weight].shape[1]  # down_proj's input axis is the units' axis
         assert chess.units.for_layer(layer, width) == {1: (31,), 2: (5,)}[layer]
+
+
+def test_a_book_carries_its_treatments_by_name():
+    from venngram.book import AddressBook
+    from venngram.support import SupportRecord
+
+    body = {"model": {**MODEL, "revision_source": "pinned"}, "stages": [add("chess", {"dose": 0.5})]}
+    book = AddressBook.from_mapping({**book_doc({"chess": {13: [7956], 14: [8949]}}),
+                                     "treatments": {"steer": body}})
+    steer = book.treatments["steer"]
+    assert isinstance(steer, Recipe) and steer.name == "steer" and steer.book is book
+    assert steer.stages[0].ops[0].unit_doses(book) == {(13, 7956): 0.5, (14, 8949): 0.5}
+    again = Recipe.treatment(steer.to_treatment(), book, name="steer")
+    assert again.to_treatment() == steer.to_treatment() and again.stages == steer.stages
+    assert "treatments" not in book.extra and "book" not in steer.to_treatment()
+    adds = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "name": "adds",
+                                       "sections": {"steering": {"ops": ["add"]}}})
+    scales = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "name": "scales",
+                                         "sections": {"steering": {"ops": ["scale"]}}})
+    assert adds.check_treatments(book) == []
+    assert scales.check_treatments(book) and scales.check_treatments(book)[0].startswith("treatment `steer`: ")
+
+
+def test_a_treatment_is_refused_by_name_when_it_carries_a_header_or_names_no_set():
+    from venngram.book import AddressBook
+
+    base = book_doc({"chess": {13: [7956]}})
+    body = {"model": MODEL, "stages": [add("chess", {"dose": 0.5})]}
+    with pytest.raises(AddressError, match="treatment `t`: a treatment is written in the book it treats"):
+        AddressBook.from_mapping({**base, "treatments": {"t": {**body, "book": "./other.yaml"}}})
+    with pytest.raises(AddressError, match="names a set of the book"):
+        AddressBook.from_mapping({**base, "treatments": {"t": {**body, "stages": [add("nope", {"dose": 1.0})]}}})
+    with pytest.raises(AddressError, match="`treatments` maps a treatment name"):
+        AddressBook.from_mapping({**base, "treatments": []})
+
+
+def test_a_recipe_document_reads_as_its_book_with_one_treatment():
+    recipe = Recipe.from_mapping(recipe_doc([add("chess", {"dose": 0.5})], name="legacy"))
+    book = recipe.as_book()
+    assert set(book.treatments) == {"legacy"} and book.treatments["legacy"] is recipe
+    assert set(book.sets()) == {"chess"} and recipe.book.treatments == {}

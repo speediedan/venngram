@@ -28,9 +28,10 @@ express (``unexpressed``, data, so a comparison between sources counts what each
 registered in process (:func:`register_map_source`, :func:`register_format`). Entry points are read on first use; one
 that fails to load is skipped with a warning, so a broken package narrows what is available rather than breaking it.
 
-A format not installed is still discoverable: a manifest may list a ``format_adapter`` document
-(:class:`AdapterListing`) naming the formats it reads, its version and where to install it from, so a reader can say how
-to read a foreign document without executing anything. Installing stays an explicit act.
+A format not installed is still discoverable: a manifest may list the adapter package's ``support_record``, whose
+``formats`` section (:class:`venngram.support.FormatSupport`) names the formats it reads, its version and where to
+install it from, so a reader can say how to read a foreign document without executing anything. Installing stays an
+explicit act.
 
 A format's :meth:`~Format.read` returns a :class:`Translation`: documents, not objects, so :func:`write_translation`
 puts it in a directory and :func:`venngram.manifest.build_manifest` and :func:`venngram.store.publish` take it from
@@ -153,47 +154,6 @@ class Format(Protocol):
             SourceError: If ``doc`` holds something venngram cannot carry and ``ctx.lenient`` is not set.
         """
         ...
-
-
-@dataclass(frozen=True)
-class AdapterListing:
-    """A ``format_adapter`` document: an installable format, described as data.
-
-    .. code-block:: yaml
-
-        schema_version: 1
-        kind: format_adapter
-        name: neuronary
-        version: 0.1.0
-        formats: [neuronary]
-        install: {pip: venngram-neuronary}        # or {git: https://github.com/<owner>/<repo>, commit: <sha>}
-    """
-
-    name: str
-    version: str
-    formats: tuple[str, ...]
-    install: Mapping[str, str]
-
-    @classmethod
-    def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "AdapterListing":
-        """Read a listing, refusing a malformed one by name."""
-        if not isinstance(doc, Mapping) or doc.get("kind") != "format_adapter" or doc.get("schema_version") != 1:
-            raise SourceError(f"{source}: a format adapter listing is `kind: format_adapter`, `schema_version: 1`.")
-        install = doc.get("install")
-        if not isinstance(install, Mapping) or not ({"pip", "git"} & set(install)):
-            raise SourceError(f"{source}: `install` names a `pip` requirement or a `git` URL (with a `commit`).")
-        if "git" in install and not install.get("commit"):
-            raise SourceError(f"{source}: a `git` install pins a `commit`, so the listing cites one adapter.")
-        formats = doc.get("formats")
-        if not isinstance(formats, list) or not formats or not all(isinstance(f, str) for f in formats):
-            raise SourceError(f"{source}: `formats` lists the format names the adapter reads.")
-        return cls(str(doc.get("name")), str(doc.get("version")), tuple(formats),
-                   {str(k): str(v) for k, v in install.items()})
-
-    @classmethod
-    def from_file(cls, path: str | Path) -> "AdapterListing":
-        with open(path, encoding="utf-8") as fh:
-            return cls.from_mapping(yaml.safe_load(fh), source=str(path))
 
 
 class _Registry:
@@ -331,7 +291,6 @@ def _fill_sha(value: Any, digests: Mapping[str, str], doc_dir: Path, root: Path)
 
 
 __all__ = [
-    "AdapterListing",
     "derive_map",
     "Format",
     "format_for",

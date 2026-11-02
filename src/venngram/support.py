@@ -38,7 +38,9 @@ document of **sections**, one per contract the consumer offers, and it opts in t
   sites, bases);
 - ``tuning``: address books whose sets select tensors to tune (:class:`TuningSupport`);
 - ``circuits``: traced or validated circuits, attribution graphs in general (:class:`CircuitSupport`). This section is
-  a prototype: its vocabulary is expected to change as circuit documents are defined.
+  a prototype: its vocabulary is expected to change as circuit documents are defined;
+- ``formats``: the foreign formats a package translates into venngram documents, and where to install it from
+  (:class:`FormatSupport`), so a reader can say how to read a foreign document without running anything.
 
 **Opt-in.** A section a record omits is a contract its consumer does not offer: :meth:`SupportRecord.check_book` and
 :meth:`SupportRecord.check_recipe` refuse every document that needs it, naming the section.
@@ -69,7 +71,7 @@ from venngram.ops import check_support, Support
 
 SCHEMA_VERSION = 2
 SCHEMA_WINDOW = (1, 2)
-CORE_SECTIONS = ("steering", "tuning", "circuits")
+CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
 _TOP_KEYS = ("schema_version", "kind", "name", "description", "sections", "extensions")
@@ -253,6 +255,58 @@ class CircuitSupport:
                                           ("evidence", self.evidence)) if v is not None}
 
 
+@dataclass(frozen=True)
+class FormatSupport:
+    """The foreign formats a package reads (each a :class:`venngram.sources.Format` it registers), its version, and
+    where to install it from. A record with only this section describes a format adapter as data, so a manifest can
+    list one a reader has not installed; installing stays an explicit act.
+
+    .. code-block:: yaml
+
+        formats:
+          reads: [neuronary]
+          version: 0.1.0
+          install: {pip: venngram-neuronary}        # or {git: https://github.com/<owner>/<repo>, commit: <sha>}
+    """
+
+    reads: tuple[str, ...]
+    install: Mapping[str, str]
+    version: str | None = None
+
+    @classmethod
+    def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "FormatSupport":
+        """Read a ``formats`` section.
+
+        Raises:
+            ValueError: If the section has unknown keys, lists no format, or its ``install`` names neither a ``pip``
+                requirement nor a ``git`` URL pinned to a ``commit``.
+        """
+        if not isinstance(doc, Mapping):
+            raise ValueError(f"{source}: a section is a mapping, got {type(doc).__name__}.")
+        unknown = sorted(set(doc) - {"reads", "install", "version"})
+        if unknown:
+            raise ValueError(f"{source}: unknown keys {unknown}; a `formats` section has `reads`, `install` and "
+                             "`version`.")
+        reads = doc.get("reads")
+        if not isinstance(reads, list) or not reads or not all(isinstance(f, str) for f in reads):
+            raise ValueError(f"{source}: `reads` lists the format names the package reads.")
+        install = doc.get("install")
+        if not isinstance(install, Mapping) or not ({"pip", "git"} & set(install)):
+            raise ValueError(f"{source}: `install` names a `pip` requirement or a `git` URL (with a `commit`).")
+        if "git" in install and not install.get("commit"):
+            raise ValueError(f"{source}: a `git` install pins a `commit`, so the record cites one package.")
+        version = doc.get("version")
+        return cls(tuple(reads), {str(k): str(v) for k, v in install.items()},
+                   str(version) if version is not None else None)
+
+    def to_mapping(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"reads": list(self.reads)}
+        if self.version is not None:
+            out["version"] = self.version
+        out["install"] = dict(self.install)
+        return out
+
+
 def _steering(doc: Any, *, source: str) -> Support:
     if not isinstance(doc, Mapping):
         raise ValueError(f"{source}: a section is a mapping, got {type(doc).__name__}.")
@@ -261,7 +315,8 @@ def _steering(doc: Any, *, source: str) -> Support:
 
 #: Parsers by section type: the section's mapping -> its parsed contract.
 _SECTIONS: dict[str, Callable[..., Any]] = {"steering": _steering, "tuning": TuningSupport.from_mapping,
-                                            "circuits": CircuitSupport.from_mapping}
+                                            "circuits": CircuitSupport.from_mapping,
+                                            "formats": FormatSupport.from_mapping}
 
 
 def register_support_section(name: str, parser: Callable[..., Any], *, replace: bool = False) -> None:
@@ -311,6 +366,10 @@ class SupportRecord:
     @property
     def circuits(self) -> CircuitSupport | None:
         return self.sections.get("circuits")
+
+    @property
+    def formats(self) -> FormatSupport | None:
+        return self.sections.get("formats")
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "SupportRecord":
@@ -408,6 +467,12 @@ class SupportRecord:
             return self._refuse_missing("tuning", book.source)
         return self.tuning.check_book(book, sets=sets)
 
+    def check_treatments(self, book: AddressBook, *, names: Collection[str] | None = None) -> list[str]:
+        """Every way the book's treatments (those in ``names``, else all) ask for something the ``steering`` section
+        does not honour, each refusal prefixed with its treatment's name."""
+        chosen = [n for n in book.treatments if names is None or n in names]
+        return [f"treatment `{n}`: {r}" for n in chosen for r in self.check_recipe(book.treatments[n])]
+
     def check_recipe(self, recipe: Any) -> list[str]:
         """Every way ``recipe`` asks for something the ``steering`` section does not honour (see
         :func:`venngram.ops.check_support`)."""
@@ -442,6 +507,7 @@ __all__ = [
     "CIRCUIT_NODES",
     "CircuitSupport",
     "CORE_SECTIONS",
+    "FormatSupport",
     "register_support_section",
     "SCHEMA_VERSION",
     "SCHEMA_WINDOW",
