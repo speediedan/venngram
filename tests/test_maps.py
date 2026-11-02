@@ -163,7 +163,7 @@ def space(view) -> ParamSpace:
 def test_components_mean_the_same_tensors_across_architectures():
     for architecture, mlp_out in (("LlamaForCausalLM", "mlp.down_proj"), ("OPTForCausalLM", "fc2")):
         model = lora(tiny(architecture, "cpu"))
-        view = MappedView(model)  # the map from the model's class, peft.lora's rules detected from its adapters
+        view = MappedView(model)  # the base map from the model's class, the peft.lora overlay from its adapters
         s = space(view)
         top_q = select("role:adapter & component:attn.q & layers:-1:", s)
         assert len(top_q) == 2 and all(".2.self_attn.q_proj.lora_" in n for n in top_q)

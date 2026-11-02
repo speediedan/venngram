@@ -16,12 +16,12 @@ import torch
 from torch import nn
 
 FIXTURE_MAPS = Path(__file__).parent / "fixtures" / "maps"
-FIXTURE_ROLE_RULES = Path(__file__).parent / "fixtures" / "role_rules"
+FIXTURE_OVERLAYS = Path(__file__).parent / "fixtures" / "overlays"
 
 
 @pytest.fixture(scope="session")
 def seed_registry(tmp_path_factory) -> str:
-    """The seed maps (``fixtures/maps``) and role rules (``fixtures/role_rules``) published to a local store and
+    """The seed base maps (``fixtures/maps``) and overlay maps (``fixtures/overlays``) published to a local store and
     indexed: what the Hub registry serves."""
     import os
 
@@ -34,11 +34,11 @@ def seed_registry(tmp_path_factory) -> str:
     maps.mkdir()
     for path in sorted(FIXTURE_MAPS.glob("*.yaml")):
         (maps / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    (maps / "role_rules").mkdir()
-    for path in sorted(FIXTURE_ROLE_RULES.glob("*.yaml")):
-        (maps / "role_rules" / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    (maps / "overlays").mkdir()
+    for path in sorted(FIXTURE_OVERLAYS.glob("*.yaml")):
+        (maps / "overlays" / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     publish("local", str(maps), maps, documents=[("component_map", p.name) for p in sorted(maps.glob("*.yaml"))]
-            + [("role_rules", f"role_rules/{p.name}") for p in sorted((maps / "role_rules").glob("*.yaml"))])
+            + [("component_map", f"overlays/{p.name}") for p in sorted((maps / "overlays").glob("*.yaml"))])
     registry.write_index(registry.crawl([f"local:{maps}"]), root / "index", name="test-seeds")
     return f"local:{root / 'index'}"
 
