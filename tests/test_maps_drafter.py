@@ -79,8 +79,8 @@ def test_rule_documents_are_refused_by_name_when_malformed():
     with pytest.raises(SourceError, match="drafts only through a `draft` section"):
         DraftingRules.from_mapping({"kind": "rules", "schema_version": 2, "name": "verify-only"})
     with pytest.raises(SourceError, match="malformed drafting rule"):
-        DraftingRules.from_mapping({"kind": "drafting_rules", "schema_version": 1,
-                                    "leaves": {"block": [{"match": "(", "component": "x"}]}})
+        DraftingRules.from_mapping({"kind": "rules", "schema_version": 2,
+                                    "draft": {"leaves": {"block": [{"match": "(", "component": "x"}]}}})
 
 
 def test_model_assisted_drafting_is_checked_deterministically():

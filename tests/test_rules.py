@@ -112,8 +112,8 @@ def test_gpt2s_own_section_makes_its_mlp_widths_checkable():
 
 
 def test_layers_replace_by_key_and_null_removes():
-    base = rules_from_document({"schema_version": 1, "name": "a", "widths": {"x": {"out": 1}, "y": {"out": 2}},
-                                "order": {"c": ["x", "y"]}})
+    base = rules_from_document({"schema_version": 2, "kind": "rules", "name": "a", "verify": {
+        "widths": {"x": {"out": 1}, "y": {"out": 2}}, "order": {"c": ["x", "y"]}}})
     top = rules_from_document({"name": "b", "widths": {"x": {"out": 3}, "y": None}, "order": {"c": None}},
                               section=True)
     merged = layered(base, top)
@@ -122,8 +122,8 @@ def test_layers_replace_by_key_and_null_removes():
 
 
 def test_meanings_resolve_through_fields_then_other_meanings():
-    rules = rules_from_document({"schema_version": 1, "config": {
-        "heads": ["n_head"], "kv": ["n_kv", "heads"], "loop": ["loop + 1"]}})
+    rules = rules_from_document({"schema_version": 2, "kind": "rules", "verify": {"config": {
+        "heads": ["n_head"], "kv": ["n_kv", "heads"], "loop": ["loop + 1"]}}})
     value = rules.resolver({"n_head": 6})
     assert value("kv") == 6
     with pytest.raises(Unstated):
@@ -148,10 +148,10 @@ def test_exact_division_is_checked():
     ({"schema_version": 2, "kind": "rules", "extra": {}}, "unknown rules document keys"),
     ({"schema_version": 2, "kind": "rules", "verify": {"orders": {}}}, "`verify` maps some of"),
     ({"schema_version": 2, "kind": "rules", "verify": {"order": {"c": ["x"]}}}, "at least two groups"),
-    ({"schema_version": 1, "orders": {}}, "unknown rule set keys"),
-    ({"schema_version": 1, "order": {"c": ["x"]}}, "at least two groups"),
-    ({"schema_version": 1, "widths": {"x": {"wide": 1}}}, "must map some of"),
-    ({"schema_version": 1, "widths": {"x": {"out": "a +"}}}, "malformed expression"),
+    ({"schema_version": 1, "widths": {}}, "`schema_version` must be 2"),
+    ({"schema_version": 2, "kind": "drafting_rules"}, "is `kind: rules`"),
+    ({"schema_version": 2, "kind": "rules", "verify": {"widths": {"x": {"wide": 1}}}}, "must map some of"),
+    ({"schema_version": 2, "kind": "rules", "verify": {"widths": {"x": {"out": "a +"}}}}, "malformed expression"),
 ])
 def test_malformed_rule_documents_are_refused(doc, match):
     with pytest.raises(ValueError, match=match):
@@ -180,14 +180,16 @@ def test_one_rules_document_carries_verify_and_draft_sections():
     assert rules_document({"schema_version": 2, "kind": "rules", "name": "v", "verify": {}}).draft is None
 
 
-def test_documents_published_before_the_kinds_merged_are_still_read():
+def test_documents_in_the_shapes_before_the_kinds_merged_are_refused():
+    from venngram.maps.drafter import DraftingRules
     from venngram.maps.rules import rules_document
+    from venngram.sources import SourceError
 
-    legacy_verify = rules_document({"schema_version": 1, "name": "old", "kinds": {"norm": {"ndim": 1}}})
-    assert legacy_verify.verify.kinds == {"norm": {"ndim": 1}} and legacy_verify.draft is None
-    legacy_draft = rules_document({"schema_version": 1, "kind": "drafting_rules", "name": "old-draft",
-                                   "containers": [{"match": "mlp", "component": "mlp", "kind": "mlp"}]})
-    assert legacy_draft.draft.containers[0].component == "mlp" and legacy_draft.verify.widths == {}
+    with pytest.raises(ValueError, match="`schema_version` must be 2"):
+        rules_document({"schema_version": 1, "name": "old", "kinds": {"norm": {"ndim": 1}}})
+    with pytest.raises(SourceError, match="`draft` section of a `kind: rules`"):
+        DraftingRules.from_mapping({"schema_version": 1, "kind": "drafting_rules", "name": "old-draft",
+                                    "containers": [{"match": "mlp", "component": "mlp", "kind": "mlp"}]})
 
 
 def test_the_store_reads_a_rules_document_with_both_sections(tmp_path):

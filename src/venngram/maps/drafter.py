@@ -98,17 +98,15 @@ class DraftingRules:
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "DraftingRules":
-        """Read the ``draft`` section of a ``rules`` document (or a schema 1 ``drafting_rules`` document), refusing a
-        malformed one by name."""
+        """Read the ``draft`` section of a ``rules`` document, refusing a malformed one by name."""
         name = doc.get("name") if isinstance(doc, Mapping) else None
         header = (doc.get("kind"), doc.get("schema_version")) if isinstance(doc, Mapping) else None
-        if header == ("rules", RULES_SCHEMA_VERSION):
-            doc = doc.get("draft")
-            if not isinstance(doc, Mapping):
-                raise SourceError(f"{source}: a rules document drafts only through a `draft` section.")
-        elif header != ("drafting_rules", 1):
+        if header != ("rules", RULES_SCHEMA_VERSION):
             raise SourceError(f"{source}: drafting rules are the `draft` section of a `kind: rules`, "
                               f"`schema_version: {RULES_SCHEMA_VERSION}` document.")
+        doc = doc.get("draft")
+        if not isinstance(doc, Mapping):
+            raise SourceError(f"{source}: a rules document drafts only through a `draft` section.")
         try:
             containers = tuple(ContainerRule(str(c["match"]), str(c["component"]), str(c["kind"]))
                                for c in doc.get("containers") or ())

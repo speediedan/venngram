@@ -86,7 +86,7 @@ SERVED = ("verified", "partial", "unverified")
 STATUSES = (*SERVED, "failed", "invalidated")
 
 #: Document kinds whose subject is an architecture; the others with a model are subjected by model id.
-FAMILY_KINDS = ("component_map", "verification_record", "rules", "drafting_rules")
+FAMILY_KINDS = ("component_map", "verification_record", "rules")
 
 
 class RegistryError(VenngramError):
