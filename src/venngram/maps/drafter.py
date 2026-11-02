@@ -18,11 +18,12 @@ tree, by **drafting rules** that are data, from as many sources as are given:
 
 - **rules mined from the registry** (:func:`mine_rules`): every registered map already says which module names became
   which components, so the maps teach the rules, and the rules grow as the registry does;
-- **rule documents** (``kind: drafting_rules``): the bundled ``transformer`` and ``ssm`` sets, or any a family's
-  maintainers publish (:func:`load_drafting_rules`, or through :mod:`venngram.store`).
+- **rule documents**: the ``draft`` section of a ``kind: rules`` document (:mod:`venngram.maps.rules`), such as the
+  bundled ``transformer`` and ``ssm`` sets, or any a family's maintainers publish (:func:`load_drafting_rules`, or
+  through :mod:`venngram.store`).
 
 None is privileged: :func:`draft_map` tries the sources in the order given (by default, mined rules first, then the
-bundled documents) and the first rule that matches names a module. A rule document declares **containers** (a module
+bundled documents) and the first rule that matches names a module. A ``draft`` section declares **containers** (a module
 whose children are named under a component, such as ``self_attn`` -> ``attn`` or ``mixer`` -> ``mixer``), **leaves**
 per scope (a container's component, ``block`` for modules directly in a block, ``outer`` for modules outside the block
 stack), conditional rules (``when_sibling``: sandwich norms rename the post-attention norm), and any **kinds** it
@@ -56,12 +57,11 @@ import yaml
 from torch import nn
 
 from venngram.maps.check import check_map_against_model, MapProblem
+from venngram.maps.rules import Rules, RULES_SCHEMA_VERSION
 from venngram.maps.schema import (BUNDLED_KINDS, component_map_for, ComponentEntry, ComponentKey, ComponentMap,
                                   from_document, KindSpec, registered_architectures, VOCABULARY)
 from venngram.sources import SourceError
 
-#: The drafting-rules document schema this code reads.
-DRAFTING_RULES_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -98,10 +98,16 @@ class DraftingRules:
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "DraftingRules":
-        """Read a ``drafting_rules`` document, refusing a malformed one by name."""
-        if not isinstance(doc, Mapping) or doc.get("kind") != "drafting_rules" \
-                or doc.get("schema_version") != DRAFTING_RULES_SCHEMA_VERSION:
-            raise SourceError(f"{source}: a drafting rules document is `kind: drafting_rules`, `schema_version: 1`.")
+        """Read the ``draft`` section of a ``rules`` document (or a schema 1 ``drafting_rules`` document), refusing a
+        malformed one by name."""
+        name = doc.get("name") if isinstance(doc, Mapping) else None
+        if isinstance(doc, Mapping) and doc.get("kind") == "rules" and doc.get("schema_version") == RULES_SCHEMA_VERSION:
+            doc = doc.get("draft")
+            if not isinstance(doc, Mapping):
+                raise SourceError(f"{source}: a rules document drafts only through a `draft` section.")
+        elif not (isinstance(doc, Mapping) and doc.get("kind") == "drafting_rules" and doc.get("schema_version") == 1):
+            raise SourceError(f"{source}: drafting rules are the `draft` section of a `kind: rules`, "
+                              f"`schema_version: {RULES_SCHEMA_VERSION}` document.")
         try:
             containers = tuple(ContainerRule(str(c["match"]), str(c["component"]), str(c["kind"]))
                                for c in doc.get("containers") or ())
@@ -115,10 +121,10 @@ class DraftingRules:
                 re.compile(pattern)
         except (KeyError, TypeError, re.error) as e:
             raise SourceError(f"{source}: malformed drafting rule: {e}") from e
-        return cls(str(doc.get("name") or source), containers, leaves, kinds)
+        return cls(str(name or source), containers, leaves, kinds)
 
     def to_mapping(self) -> dict[str, Any]:
-        """The ``drafting_rules`` document (a mined rule keeps its share and alternatives)."""
+        """The ``rules`` document with this ``draft`` section (a mined rule keeps its share and alternatives)."""
         def leaf(r: Rule) -> dict[str, Any]:
             out: dict[str, Any] = {"match": r.match, "component": r.component}
             if r.when_sibling is not None:
@@ -129,28 +135,28 @@ class DraftingRules:
                 out["alternatives"] = list(r.alternatives)
             return out
 
-        doc: dict[str, Any] = {"schema_version": DRAFTING_RULES_SCHEMA_VERSION, "kind": "drafting_rules",
-                               "name": self.name}
+        draft: dict[str, Any] = {}
         if self.containers:
-            doc["containers"] = [{"match": c.match, "component": c.component, "kind": c.kind} for c in self.containers]
+            draft["containers"] = [{"match": c.match, "component": c.component, "kind": c.kind} for c in self.containers]
         if self.leaves:
-            doc["leaves"] = {scope: [leaf(r) for r in rules] for scope, rules in self.leaves.items()}
+            draft["leaves"] = {scope: [leaf(r) for r in rules] for scope, rules in self.leaves.items()}
         if self.kinds:
-            doc["kinds"] = {k: {"output": v.output, "sublayer": v.sublayer} for k, v in self.kinds.items()}
-        return doc
+            draft["kinds"] = {k: {"output": v.output, "sublayer": v.sublayer} for k, v in self.kinds.items()}
+        return {"schema_version": RULES_SCHEMA_VERSION, "kind": "rules", "name": self.name, "draft": draft}
 
 
 def load_drafting_rules(path: str | Path) -> DraftingRules:
-    """Read a ``drafting_rules`` document from YAML (loading runs no code)."""
+    """Read the ``draft`` section of a ``rules`` document from YAML (loading runs no code)."""
     with open(path, encoding="utf-8") as fh:
         return DraftingRules.from_mapping(yaml.safe_load(fh), source=str(path))
 
 
 def bundled_drafting_rules() -> list[DraftingRules]:
-    """The bundled rule documents (``transformer``, ``ssm``)."""
-    root = resources.files("venngram.maps") / "data" / "drafting"
-    return [DraftingRules.from_mapping(yaml.safe_load(p.read_text(encoding="utf-8")), source=p.name)
+    """The bundled rule documents with a ``draft`` section (``transformer``, ``ssm``)."""
+    root = resources.files("venngram.maps") / "data" / "rules"
+    docs = [(p.name, yaml.safe_load(p.read_text(encoding="utf-8")))
             for p in sorted(root.iterdir(), key=lambda p: p.name) if p.name.endswith(".yaml")]
+    return [DraftingRules.from_mapping(doc, source=name) for name, doc in docs if doc.get("draft") is not None]
 
 
 def mine_rules(maps: Iterable[ComponentMap] | None = None) -> DraftingRules:
@@ -248,11 +254,19 @@ def _has_params(module: nn.Module) -> bool:
     return any(True for _ in module.parameters(recurse=False))
 
 
+def _drafting(rules: Sequence["DraftingRules | Rules"] | None) -> list[DraftingRules]:
+    """The drafting rules of each source given (a :class:`~venngram.maps.rules.Rules` document gives its ``draft``
+    section, or nothing), by default :func:`default_rules`."""
+    if rules is None:
+        return default_rules()
+    return [r.draft if isinstance(r, Rules) else r for r in rules if not (isinstance(r, Rules) and r.draft is None)]
+
+
 def draft_map(model: nn.Module, architecture: str | None = None,
-              rules: Sequence[DraftingRules] | None = None) -> ComponentMap:
+              rules: Sequence[DraftingRules | Rules] | None = None) -> ComponentMap:
     """A draft component map from ``model``'s module tree, named by ``rules`` (default :func:`default_rules`)."""
     architecture = architecture or type(model).__name__
-    rules = list(rules) if rules is not None else default_rules()
+    rules = _drafting(rules)
     blocks_path, blocks = _block_stack(model)
     rows: dict[str, ComponentEntry] = {"blocks.{i}": ComponentEntry(f"{blocks_path}.{{i}}", "block")}
     kinds = dict(BUNDLED_KINDS)
@@ -351,10 +365,10 @@ def map_document(cmap: ComponentMap) -> dict[str, Any]:
     return doc
 
 
-def registry_digest(rules: Sequence[DraftingRules] | None = None) -> dict[str, Any]:
+def registry_digest(rules: Sequence[DraftingRules | Rules] | None = None) -> dict[str, Any]:
     """A compact view of what the registry knows, for a model drafting a map: the vocabulary, and per component the
     module names maps have used for it."""
-    rules = list(rules) if rules is not None else default_rules()
+    rules = _drafting(rules)
     names: dict[str, set[str]] = defaultdict(set)
     for rs in rules:
         for rule in [r for scoped in rs.leaves.values() for r in scoped]:
@@ -386,7 +400,7 @@ def draft_prompt(model: nn.Module, draft: ComponentMap, digest: Mapping[str, Any
 
 
 def draft_with_model(model: nn.Module, complete: Callable[[str], str], *, architecture: str | None = None,
-                     rules: Sequence[DraftingRules] | None = None) -> tuple[ComponentMap, list[MapProblem]]:
+                     rules: Sequence[DraftingRules | Rules] | None = None) -> tuple[ComponentMap, list[MapProblem]]:
     """Draft a map with a model's help, then check it deterministically.
 
     ``complete`` sends a prompt to whatever model or service the caller uses and returns its text; venngram builds the
@@ -400,7 +414,7 @@ def draft_with_model(model: nn.Module, complete: Callable[[str], str], *, archit
     Raises:
         SourceError: If the reply is not a readable map document.
     """
-    rules = list(rules) if rules is not None else default_rules()
+    rules = _drafting(rules)
     draft = draft_map(model, architecture, rules)
     reply = complete(draft_prompt(model, draft, registry_digest(rules)))
     text = re.sub(r"^```(?:yaml)?\s*|\s*```\s*$", "", reply.strip())
@@ -420,7 +434,7 @@ class ModuleTreeSource:
     version = "2"
     unexpressed = ("named stacks other than the block stack",)
 
-    def __init__(self, rules: Sequence[DraftingRules] | None = None) -> None:
+    def __init__(self, rules: Sequence[DraftingRules | Rules] | None = None) -> None:
         self._rules = list(rules) if rules is not None else None
 
     def architectures(self) -> tuple[str, ...]:

@@ -160,8 +160,8 @@ A **map source** derives a component map from something that knows an architectu
 `venngram.maps.drafter.ModuleTreeSource`; TransformerLens's adapters through
 `venngram.maps.transformer_lens.TransformerLensSource`; or any package's own). The module-tree drafter names modules by
 **drafting rules** that are data, from any number of sources: rules mined from the registry's own maps (so they grow
-with it), bundled rule documents for transformer and state-space blocks, or any a family publishes
-(`kind: drafting_rules`). What no rule names becomes a `draft.*` row for a person or an agent to confirm, and
+with it), bundled rule documents for transformer and state-space blocks, or any a family publishes (the `draft`
+section of a `kind: rules` document). What no rule names becomes a `draft.*` row for a person or an agent to confirm, and
 `draft_with_model` asks a model the caller chooses to complete the draft, then checks it against the model; a **format** translates documents
 another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
 entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
@@ -241,7 +241,8 @@ A map is verified against an architecture without downloading weights: on a meta
 configuration, every row's module exists, every parameter is claimed by exactly one component, and the widths the
 configuration implies hold (`attn.q` and `attn.k` differ under grouped-query attention, so a swap fails); a forward on
 a small random-init model confirms the order within a block, which catches swapped labels that widths cannot. What the
-width and order checks expect is data, not code: rule sets layered from a bundled `core` set (the conventional decoder
+width and order checks expect is data, not code: rule sets (the `verify` section of a `kind: rules` document, which
+holds a family's drafting rules too, in its `draft` section) layered from a bundled `core` set (the conventional decoder
 parts), the map's own `verification:` section, and any the caller passes, where a later layer replaces an entry by key
 and `null` removes one. A map for an architecture nobody anticipated states its own widths and orders, and a
 parallel-residual one drops the core chain that does not hold for it:

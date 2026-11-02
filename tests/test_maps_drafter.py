@@ -74,8 +74,10 @@ def test_unnamed_modules_have_no_confidence():
 
 
 def test_rule_documents_are_refused_by_name_when_malformed():
-    with pytest.raises(SourceError, match="kind: drafting_rules"):
+    with pytest.raises(SourceError, match="`draft` section of a `kind: rules`"):
         DraftingRules.from_mapping({"kind": "rules", "schema_version": 1})
+    with pytest.raises(SourceError, match="drafts only through a `draft` section"):
+        DraftingRules.from_mapping({"kind": "rules", "schema_version": 2, "name": "verify-only"})
     with pytest.raises(SourceError, match="malformed drafting rule"):
         DraftingRules.from_mapping({"kind": "drafting_rules", "schema_version": 1,
                                     "leaves": {"block": [{"match": "(", "component": "x"}]}})

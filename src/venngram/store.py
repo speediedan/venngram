@@ -450,12 +450,6 @@ def _load_adapter_listing(path: Path) -> Any:
     return AdapterListing.from_file(path)
 
 
-def _load_drafting_rules(path: Path) -> Any:
-    from venngram.maps.drafter import load_drafting_rules
-
-    return load_drafting_rules(path)
-
-
 def _load_support(path: Path) -> Any:
     from venngram.support import SupportRecord
 
@@ -463,9 +457,9 @@ def _load_support(path: Path) -> Any:
 
 
 def _load_rules(path: Path) -> Any:
-    from venngram.maps.rules import load_rules
+    from venngram.maps.rules import load_rules_document
 
-    return load_rules(path)
+    return load_rules_document(path)
 
 
 register_store("local", LocalStore(), versioned=False)
@@ -474,7 +468,7 @@ register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
-                       ("format_adapter", _load_adapter_listing), ("drafting_rules", _load_drafting_rules),
+                       ("format_adapter", _load_adapter_listing), ("drafting_rules", _load_rules),
                        ("support_record", _load_support)):
     register_loader(_kind, _loader)
 

@@ -143,7 +143,11 @@ def test_exact_division_is_checked():
 
 
 @pytest.mark.parametrize("doc, match", [
-    ({"schema_version": 2}, "`schema_version` must be 1"),
+    ({"schema_version": 3}, "`schema_version` must be 2"),
+    ({"schema_version": 2}, "is `kind: rules`"),
+    ({"schema_version": 2, "kind": "rules", "extra": {}}, "unknown rules document keys"),
+    ({"schema_version": 2, "kind": "rules", "verify": {"orders": {}}}, "`verify` maps some of"),
+    ({"schema_version": 2, "kind": "rules", "verify": {"order": {"c": ["x"]}}}, "at least two groups"),
     ({"schema_version": 1, "orders": {}}, "unknown rule set keys"),
     ({"schema_version": 1, "order": {"c": ["x"]}}, "at least two groups"),
     ({"schema_version": 1, "widths": {"x": {"wide": 1}}}, "must map some of"),
@@ -157,3 +161,44 @@ def test_malformed_rule_documents_are_refused(doc, match):
 def test_a_malformed_map_section_is_refused_at_load():
     with pytest.raises(ValueError, match="verification"):
         hybrid_map({"order": {"c": "ln1"}})
+
+
+def test_one_rules_document_carries_verify_and_draft_sections():
+    from venngram.maps.drafter import DraftingRules
+    from venngram.maps.rules import Rules, rules_document
+
+    doc = {"schema_version": 2, "kind": "rules", "name": "fam",
+           "verify": {"widths": {"attn.q": {"out": "heads * head_dim"}}},
+           "draft": {"containers": [{"match": "attn", "component": "attn", "kind": "attn"}],
+                     "leaves": {"attn": [{"match": "q", "component": "attn.q"}]}}}
+    rules = rules_document(doc)
+    assert isinstance(rules, Rules) and rules.name == "fam"
+    assert rules.verify.widths == {"attn.q": {"out": "heads * head_dim"}}
+    assert isinstance(rules.draft, DraftingRules) and rules.draft.containers[0].component == "attn"
+    assert layered(rules).widths == rules.verify.widths
+    assert rules.draft.to_mapping() == {"schema_version": 2, "kind": "rules", "name": "fam", "draft": doc["draft"]}
+    assert rules_document({"schema_version": 2, "kind": "rules", "name": "v", "verify": {}}).draft is None
+
+
+def test_documents_published_before_the_kinds_merged_are_still_read():
+    from venngram.maps.rules import rules_document
+
+    legacy_verify = rules_document({"schema_version": 1, "name": "old", "kinds": {"norm": {"ndim": 1}}})
+    assert legacy_verify.verify.kinds == {"norm": {"ndim": 1}} and legacy_verify.draft is None
+    legacy_draft = rules_document({"schema_version": 1, "kind": "drafting_rules", "name": "old-draft",
+                                   "containers": [{"match": "mlp", "component": "mlp", "kind": "mlp"}]})
+    assert legacy_draft.draft.containers[0].component == "mlp" and legacy_draft.verify.widths == {}
+
+
+def test_the_store_reads_a_rules_document_with_both_sections(tmp_path):
+    import yaml
+
+    from venngram import store
+    from venngram.maps.rules import Rules
+
+    (tmp_path / "fam.yaml").write_text(yaml.safe_dump(
+        {"schema_version": 2, "kind": "rules", "name": "fam", "verify": {"kinds": {"norm": {"ndim": 1}}},
+         "draft": {"containers": [{"match": "attn", "component": "attn", "kind": "attn"}]}}), encoding="utf-8")
+    store.publish("local", str(tmp_path / "pub"), tmp_path, documents=[("rules", "fam.yaml")])
+    loaded = store.load(f"local:{tmp_path / 'pub'}:fam.yaml")
+    assert isinstance(loaded, Rules) and loaded.verify.kinds and loaded.draft.containers
