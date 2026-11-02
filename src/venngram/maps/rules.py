@@ -47,10 +47,10 @@ names (``*`` one segment, ``**`` several), as an address's ``component`` field
 takes. An expression uses integers, meanings, ``+ - * // /`` (``/`` must divide exactly) and parentheses; a rule
 whose expression names a meaning the configuration does not state is skipped, not failed.
 
-Verification rule sets layer: the bundled ``core`` set (:func:`core_rules`, the conventional decoder parts), then a map's own
-``verification:`` section, then any the caller passes. A later layer replaces an entry by its key, and a ``null`` value
-removes one, so a parallel-residual architecture drops the ``attn_then_mlp`` chain and GPT-2 says its intermediate
-size defaults to ``4 * hidden``.
+Verification rule sets layer: the bundled ``core`` set (:func:`core_rules`, the conventional decoder parts), then a
+map's own ``verification:`` section, then any the caller passes. A later layer replaces an entry by its key, and a
+``null`` value removes one, so a parallel-residual architecture drops the ``attn_then_mlp`` chain and GPT-2 says its
+intermediate size defaults to ``4 * hidden``.
 
 .. warning:: This is an experimental API and may change in a future release.
 """

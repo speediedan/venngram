@@ -101,11 +101,12 @@ class DraftingRules:
         """Read the ``draft`` section of a ``rules`` document (or a schema 1 ``drafting_rules`` document), refusing a
         malformed one by name."""
         name = doc.get("name") if isinstance(doc, Mapping) else None
-        if isinstance(doc, Mapping) and doc.get("kind") == "rules" and doc.get("schema_version") == RULES_SCHEMA_VERSION:
+        header = (doc.get("kind"), doc.get("schema_version")) if isinstance(doc, Mapping) else None
+        if header == ("rules", RULES_SCHEMA_VERSION):
             doc = doc.get("draft")
             if not isinstance(doc, Mapping):
                 raise SourceError(f"{source}: a rules document drafts only through a `draft` section.")
-        elif not (isinstance(doc, Mapping) and doc.get("kind") == "drafting_rules" and doc.get("schema_version") == 1):
+        elif header != ("drafting_rules", 1):
             raise SourceError(f"{source}: drafting rules are the `draft` section of a `kind: rules`, "
                               f"`schema_version: {RULES_SCHEMA_VERSION}` document.")
         try:
@@ -137,7 +138,8 @@ class DraftingRules:
 
         draft: dict[str, Any] = {}
         if self.containers:
-            draft["containers"] = [{"match": c.match, "component": c.component, "kind": c.kind} for c in self.containers]
+            draft["containers"] = [{"match": c.match, "component": c.component, "kind": c.kind}
+                                   for c in self.containers]
         if self.leaves:
             draft["leaves"] = {scope: [leaf(r) for r in rules] for scope, rules in self.leaves.items()}
         if self.kinds:

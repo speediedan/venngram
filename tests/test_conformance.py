@@ -88,3 +88,25 @@ def test_locations_and_support_records_are_refused_by_name():
                        ({**STEERER, "tokens": ["first"]}, "does not define"), ({**STEERER, "ops": "add"}, "list of")]:
         with pytest.raises(ValueError, match=match):
             Support.from_mapping(doc)
+
+
+def test_a_books_treatments_are_checked_against_steering_and_its_sets_against_tuning(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "steer.yaml").write_text(yaml.safe_dump({
+        "schema_version": 1, "name": "steer", "portability": "checkpoint", "applies_to": {"models": [MODEL]},
+        "sets": {"chess": {"point": "mlp.out.hook_in", "layers": [15], "units": {15: [3, 6]}}},
+        "treatments": {"prompt-only": {"model": MODEL, "stages": [{
+            "site": "mlp.out.hook_in", "tokens": "prompt",
+            "ops": [{"op": "add", "target": {"set": "chess"}, "value": {"dose": 0.8}}]}]}}}))
+    publish("local", str(tmp_path / "pub"), src, documents=[("address_book", "steer.yaml")])
+    tuner = {"schema_version": 2, "kind": "support_record", "name": "tuner",
+             "sections": {"tuning": {"fields": ["role", "layers"], "targets": ["param"]}}}
+    from venngram.support import SupportRecord
+
+    report = check(f"local:{tmp_path / 'pub'}",
+                   supports=[SupportRecord.from_mapping(STEERER), SupportRecord.from_mapping(tuner)])
+    (book,) = report.documents
+    assert book.refusals["steerer"] == ("treatment `prompt-only`: stage 0 (mlp.out.hook_in) op 0 (`add`): token scope "
+                                        "`prompt` is not supported",)
+    assert book.refusals["tuner"] and not report.ok

@@ -467,6 +467,12 @@ class SupportRecord:
             return self._refuse_missing("tuning", book.source)
         return self.tuning.check_book(book, sets=sets)
 
+    def check_treatments(self, book: AddressBook, *, names: Collection[str] | None = None) -> list[str]:
+        """Every way the book's treatments (those in ``names``, else all) ask for something the ``steering`` section
+        does not honour, each refusal prefixed with its treatment's name."""
+        chosen = [n for n in book.treatments if names is None or n in names]
+        return [f"treatment `{n}`: {r}" for n in chosen for r in self.check_recipe(book.treatments[n])]
+
     def check_recipe(self, recipe: Any) -> list[str]:
         """Every way ``recipe`` asks for something the ``steering`` section does not honour (see
         :func:`venngram.ops.check_support`)."""

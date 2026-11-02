@@ -14,8 +14,13 @@ Recipes
 ^^^^^^^
 
 A recipe is a *treatment* over an address book's sets: what is done at which sites, to which units or features, in
-which order. It is kept apart from the selection (the book) and from the evidence (generations, graphs, scores, which it
-names), so one selection can carry several treatments and a treatment can be re-run against a revised selection.
+which order. It is kept apart from the evidence (generations, graphs, scores, which it names). Treatments are written in
+the book they treat, by name, under its ``treatments`` section (:mod:`venngram.book`), so one selection carries several
+treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` reads one, and
+:meth:`Recipe.to_treatment` writes one.
+
+A ``kind: recipe`` document naming its book (a path, or the book inline), the form written before books and recipes
+merged, is still read, and :meth:`Recipe.as_book` turns it into its book with one treatment:
 
 .. code-block:: yaml
 
@@ -60,7 +65,7 @@ with a deprecation warning.
 """
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -270,7 +275,9 @@ class Recipe:
             raise AddressError(f"{source}: `model` is {{id, revision}}: a recipe's units mean something in one "
                                "revision only.")
         raw_book = doc.get("book")
-        if isinstance(raw_book, str):
+        if isinstance(raw_book, AddressBook):  # a treatment written in the book it treats
+            book, raw_book = raw_book, None
+        elif isinstance(raw_book, str):
             book = AddressBook.from_file(Path(base_dir or ".") / raw_book)
         elif isinstance(raw_book, Mapping):
             book = AddressBook.from_mapping(raw_book, source=f"{source}: book", base_dir=base_dir, inline=True)
@@ -290,6 +297,34 @@ class Recipe:
                    revision_source=model.get("revision_source", "pinned"), sampling=dict(doc.get("sampling") or {}),
                    evidence=dict(doc.get("evidence") or {}), metadata=dict(doc.get("metadata") or {}), source=source,
                    base_dir=str(base_dir) if base_dir is not None else None)
+
+    @classmethod
+    def treatment(cls, body: Any, book: AddressBook, *, name: str, source: str = "<inline>",
+                  base_dir: str | Path | None = None) -> "Recipe":
+        """Read one entry of a book's ``treatments`` section: a recipe's body (``model``, ``operands``, ``stages``,
+        ``sampling``, ``evidence``, ``metadata``) over ``book``'s sets.
+
+        Raises:
+            AddressError: As :meth:`from_mapping`, or if the body carries a recipe header or its own ``book``.
+        """
+        if not isinstance(body, Mapping):
+            raise AddressError(f"{source}: a treatment is a mapping (model, stages, ...), got {type(body).__name__}.")
+        header = sorted({"schema_version", "kind", "name", "book"} & set(body))
+        if header:
+            raise AddressError(f"{source}: a treatment is written in the book it treats, so it has no {header}.")
+        return cls.from_mapping({"schema_version": RECIPE_SCHEMA_VERSION, "kind": "recipe", "name": name, **body,
+                                 "book": book}, source=source, base_dir=base_dir)
+
+    def to_treatment(self) -> dict[str, Any]:
+        """This recipe as an entry of its book's ``treatments`` section."""
+        doc = self.to_mapping()
+        for key in ("schema_version", "kind", "name", "book"):
+            doc.pop(key)
+        return doc
+
+    def as_book(self) -> AddressBook:
+        """The book this recipe treats, carrying it as a treatment (named by the recipe) beside any it had."""
+        return replace(self.book, treatments={**self.book.treatments, self.name: self})
 
     @classmethod
     def from_file(cls, path: str | Path) -> "Recipe":

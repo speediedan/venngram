@@ -28,6 +28,20 @@ composable (books import books, by namespace) and versioned.
       top:  {role: adapter, layers: "-4:"}
       rest: {role: adapter, exclude: "@top"}
 
+**Treatments** are optional: what is done to the book's sets for one model, by name, each the body of a recipe
+(:mod:`venngram.recipe`: ``model``, ``operands``, ``stages``, ``sampling``, ``evidence``) whose targets name this book's
+sets, so a selection and what is done to it travel together and a consumer reads one kind of document:
+
+.. code-block:: yaml
+
+    treatments:
+      steer-top:
+        model: {id: Qwen/Qwen3-0.6B, revision: c1899de}
+        stages: [{site: mlp.out.hook_in, ops: [{op: add, target: {set: top}, value: {dose: 0.8}}]}]
+
+A consumer that only selects (a tuning schedule) ignores them. A ``kind: recipe`` document, written before the two
+kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it into its book with one treatment).
+
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
 version; a key that changes what a set selects does.
@@ -137,6 +151,8 @@ class AddressBook:
     source: str = "<inline>"
     description: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    treatments: Mapping[str, Any] = field(default_factory=dict)
+    """Treatments by name (each a :class:`venngram.recipe.Recipe` over this book), from the ``treatments`` section."""
 
     @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>", base_dir: str | Path | None = None,
@@ -196,6 +212,8 @@ class AddressBook:
                 raise AddressError(f"{source}: set `{set_name}` references {named}, which "
                                    f"no set or import defines (known: {', '.join(sorted('@' + k for k in known))}).")
         book._check_cycles()
+        if doc.get("treatments") is not None:
+            object.__setattr__(book, "treatments", _treatments(doc["treatments"], book, source, base_dir))
         return book
 
     @classmethod
@@ -307,7 +325,21 @@ class AddressBook:
         raise AddressError(f"{self.source}: a checkpoint book applies only to {pins}, not {model_id}@{revision}.")
 
 
-_KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets")
+_KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets",
+               "treatments")
+
+
+def _treatments(raw: Any, book: AddressBook, source: str, base_dir: str | Path | None) -> dict[str, Any]:
+    from venngram.recipe import Recipe
+
+    if not isinstance(raw, Mapping) or not raw:
+        raise AddressError(f"{source}: `treatments` maps a treatment name to its recipe body (model, stages, ...).")
+    out = {}
+    for name, body in raw.items():
+        if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
+            raise AddressError(f"{source}: {name!r} is not a valid treatment name (letters, digits, `_` and `-`).")
+        out[name] = Recipe.treatment(body, book, name=name, source=f"{source}: treatment `{name}`", base_dir=base_dir)
+    return out
 
 
 def make_lock(selections: Mapping[str, Mapping[str, tuple[int, ...]]], *, model_id: str,
