@@ -1,0 +1,10 @@
+# PEFT's BOFT butterfly factors and scales as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.boft
+applies_when:
+  module_classes: [peft.tuners.boft.layer.BOFTLayer]
+  module_names: [boft_R, boft_s]
+roles:
+  boft_R: adapter:{key}
+  boft_s: adapter:{key}

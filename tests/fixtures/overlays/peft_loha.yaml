@@ -1,0 +1,14 @@
+# PEFT's LoHa factors as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.loha
+applies_when:
+  module_classes: [peft.tuners.loha.layer.LoHaLayer]
+  module_names: [hada_w1_a, hada_w1_b, hada_w2_a, hada_w2_b, hada_t1, hada_t2]
+roles:
+  hada_w1_a: adapter:{key}
+  hada_w1_b: adapter:{key}
+  hada_w2_a: adapter:{key}
+  hada_w2_b: adapter:{key}
+  hada_t1: adapter:{key}
+  hada_t2: adapter:{key}

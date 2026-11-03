@@ -1,0 +1,9 @@
+# PEFT's IA3 scaling vectors as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.ia3
+applies_when:
+  module_classes: [peft.tuners.ia3.layer.IA3Layer]
+  module_names: [ia3_l]
+roles:
+  ia3_l: adapter:{key}

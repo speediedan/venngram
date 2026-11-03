@@ -1,0 +1,10 @@
+# PEFT's VeRA scaling vectors (the shared random projections are not adapter tensors) as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.vera
+applies_when:
+  module_classes: [peft.tuners.vera.layer.VeraLayer]
+  module_names: [vera_lambda_b, vera_lambda_d]
+roles:
+  vera_lambda_b: adapter:{key}
+  vera_lambda_d: adapter:{key}

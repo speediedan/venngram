@@ -21,14 +21,20 @@ so one overlay serves every architecture, and venngram's code names no adapter l
 
 .. code-block:: yaml
 
-    schema_version: 4
+    schema_version: 5
     overlay: peft.lora
     applies_when:            # any listed condition holding means the overlay applies
       module_classes: [peft.tuners.lora.layer.LoraLayer]   # matched against each module's class hierarchy
       module_names: [lora_A, lora_B]                       # matched against the segments of tensor names
     roles:                   # module pattern -> role; the first matching pattern wins
-      lora_A: adapter
-      lora_B: adapter
+      lora_A: adapter:{key}
+      lora_B: adapter:{key}
+
+A role may contain ``{key}``: where the matched module is a keyed container (``nn.ModuleDict`` or
+``nn.ParameterDict``), the entry the tensor sits in. A library that keys what it adds by name (PEFT keys each adapter
+container by adapter name) then gives each entry a role of its own: ``...q_proj.lora_A.default.weight`` takes
+``adapter:default``. Where the matched module is not a keyed container, a trailing ``:{key}`` is dropped
+(``adapter``). Templates need ``schema_version: 5``; schema 4 documents read as before.
 
 Overlays are documents of the ``component_map`` kind, found the way base maps are: registered in this process
 (:func:`~venngram.maps.schema.register`), else the best one the configured registries index (as subject
@@ -46,17 +52,58 @@ from typing import Any
 
 from torch import nn
 
-from venngram.resolve import leaf_matches, module_matches
+from venngram.resolve import leaf_matches, module_matches, segment_after
 from venngram.roles import parse_role
 
-OVERLAY_SCHEMA_VERSION = 4
+OVERLAY_SCHEMA_VERSION = 5
+"""The overlay schema this venngram writes; it reads every version from :data:`OVERLAY_MIN_SCHEMA_VERSION`."""
+OVERLAY_MIN_SCHEMA_VERSION = 4
+TEMPLATE_SCHEMA_VERSION = 5
+"""The first overlay schema whose roles may carry ``{key}``."""
+KEY_FIELD = "{key}"
 APPLIES_WHEN_KEYS = ("module_classes", "module_names")
 #: The registry subject of an overlay is its name under this prefix, so architecture lookups never see overlays.
 OVERLAY_SUBJECT_PREFIX = "overlay:"
 
 
+def _container_key(root: nn.Module, pattern: str, name: str) -> str | None:
+    """The entry of the keyed container (``nn.ModuleDict``, ``nn.ParameterDict``) ``pattern`` matches in ``name``."""
+    found = segment_after(pattern, name)
+    if found is None:
+        return None
+    try:
+        container = root.get_submodule(found[0])
+    except AttributeError:
+        return None
+    return found[1] if isinstance(container, (nn.ModuleDict, nn.ParameterDict)) else None
+
+
+def fill_role(role: str, key: str | None, name: str = "", pattern: str = "") -> str:
+    """``role`` with its trailing ``:{key}`` qualifier filled with ``key``, or dropped when there is none (the matched
+    module is not a keyed container): ``adapter:{key}`` becomes ``adapter:default``, or ``adapter``.
+
+    Raises:
+        ValueError: If ``role`` uses ``{key}`` other than as its trailing qualifier and there is no ``key``, or the
+            filled role is not a role.
+    """
+    if KEY_FIELD not in role:
+        return role
+    if key is None:
+        if not role.endswith(f":{KEY_FIELD}") or role.count(KEY_FIELD) > 1:
+            raise ValueError(f"{name!r} matches the overlay pattern {pattern!r}, whose role {role!r} needs the entry "
+                             "of a keyed container, and the matched module is not one.")
+        return role[:-len(f":{KEY_FIELD}")]
+    filled = role.replace(KEY_FIELD, key)
+    try:
+        parse_role(filled)
+    except ValueError as err:
+        raise ValueError(f"{name!r}: pattern {pattern!r} gives {filled!r}, which is not a role: {err}") from None
+    return filled
+
+
 def rule_roles(root: nn.Module, rules: Mapping[str, str]) -> dict[str, str]:
-    """The role of each of ``root``'s parameters and buffers that a pattern matches (the first matching one wins).
+    """The role of each of ``root``'s parameters and buffers that a pattern matches (the first matching one wins),
+    with ``{key}`` filled (:func:`fill_role`).
 
     A pattern matches the tensors under a module of that name and, as a leaf, a tensor registered under that name
     itself (DoRA's ``lora_magnitude_vector`` is a parameter, not a module, in some PEFT versions).
@@ -65,7 +112,8 @@ def rule_roles(root: nn.Module, rules: Mapping[str, str]) -> dict[str, str]:
     for name, _ in itertools.chain(root.named_parameters(), root.named_buffers()):
         for pattern, role in rules.items():
             if module_matches(pattern, name) or leaf_matches(pattern, name):
-                roles[name] = role
+                key = _container_key(root, pattern, name) if KEY_FIELD in role else None
+                roles[name] = fill_role(role, key, name, pattern)
                 break
     return roles
 
@@ -128,8 +176,8 @@ def overlay_from_document(doc: Any, source: str = "<document>") -> OverlayMap:
     if not isinstance(doc, Mapping):
         raise ValueError(f"{source}: an overlay map document must be a mapping, got {type(doc).__name__}.")
     version = doc.get("schema_version")
-    if not isinstance(version, int) or isinstance(version, bool) or version < OVERLAY_SCHEMA_VERSION:
-        raise ValueError(f"{source}: an overlay map needs schema_version {OVERLAY_SCHEMA_VERSION} or later, got "
+    if not isinstance(version, int) or isinstance(version, bool) or version < OVERLAY_MIN_SCHEMA_VERSION:
+        raise ValueError(f"{source}: an overlay map needs schema_version {OVERLAY_MIN_SCHEMA_VERSION} or later, got "
                          f"{version!r}.")
     name = doc.get("overlay")
     if not isinstance(name, str) or not name:
@@ -144,8 +192,17 @@ def overlay_from_document(doc: Any, source: str = "<document>") -> OverlayMap:
     for pattern, role in roles.items():
         if not isinstance(pattern, str) or not pattern:
             raise ValueError(f"{source}: a role pattern must be a non-empty string, got {pattern!r}.")
+        if not isinstance(role, str):
+            raise ValueError(f"{source}: role pattern {pattern!r}: a role is a string, got {role!r}.")
+        if KEY_FIELD in role and version < TEMPLATE_SCHEMA_VERSION:
+            raise ValueError(f"{source}: role pattern {pattern!r}: `{KEY_FIELD}` needs schema_version "
+                             f"{TEMPLATE_SCHEMA_VERSION}, got {version}.")
+        concrete = role[:-len(f":{KEY_FIELD}")] if role.endswith(f":{KEY_FIELD}") else role
+        if "{" in concrete or "}" in concrete:
+            raise ValueError(f"{source}: role pattern {pattern!r}: {role!r} may use `{KEY_FIELD}` only as its last "
+                             "qualifier (`adapter:{key}`), and no other field.")
         try:
-            parse_role(role)
+            parse_role(concrete)
         except ValueError as err:
             raise ValueError(f"{source}: role pattern {pattern!r}: {err}") from None
     applies = doc.get("applies_when") or {}
@@ -203,7 +260,10 @@ def overlays_for(root: nn.Module) -> list[OverlayMap]:
 
 __all__ = [
     "APPLIES_WHEN_KEYS",
+    "fill_role",
+    "KEY_FIELD",
     "known_overlays",
+    "OVERLAY_MIN_SCHEMA_VERSION",
     "OVERLAY_SCHEMA_VERSION",
     "OVERLAY_SUBJECT_PREFIX",
     "overlay_for",
@@ -211,4 +271,5 @@ __all__ = [
     "OverlayMap",
     "overlays_for",
     "rule_roles",
+    "TEMPLATE_SCHEMA_VERSION",
 ]

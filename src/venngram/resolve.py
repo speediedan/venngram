@@ -116,6 +116,19 @@ def leaf_matches(pattern: str, name: str) -> bool:
     return re.search(rf"(?:^|\.){_glob(pattern)}$", strip_wrappers(name)) is not None
 
 
+def segment_after(pattern: str, name: str) -> tuple[str, str] | None:
+    """Where ``pattern`` matches the tensor ``name`` on whole segments: the path of the matched module and the segment
+    that follows it, or ``None``.
+
+    >>> segment_after("lora_A", "model.layers.3.self_attn.q_proj.lora_A.default.weight")
+    ('model.layers.3.self_attn.q_proj.lora_A', 'default')
+    >>> segment_after("lora_A", "lora_A") is None
+    True
+    """
+    found = re.search(rf"(?:^|\.)({_glob(pattern)})\.([^.]+)", name)
+    return (name[:found.end(1)], found.group(2)) if found else None
+
+
 def component_matches(pattern: str, component: str | None) -> bool:
     """Whether a vocabulary ``component`` matches ``pattern`` (globbed per segment, matched in full)."""
     return component is not None and re.fullmatch(_glob(pattern), component) is not None
@@ -286,6 +299,7 @@ __all__ = [
     "Location",
     "module_matches",
     "ParamSpace",
+    "segment_after",
     "select",
     "strip_wrappers",
     "StructureProvider",

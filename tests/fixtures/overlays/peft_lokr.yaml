@@ -1,0 +1,15 @@
+# PEFT's LoKr factors as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.lokr
+applies_when:
+  module_classes: [peft.tuners.lokr.layer.LoKrLayer]
+  module_names: [lokr_w1, lokr_w1_a, lokr_w1_b, lokr_w2, lokr_w2_a, lokr_w2_b, lokr_t2]
+roles:
+  lokr_w1: adapter:{key}
+  lokr_w1_a: adapter:{key}
+  lokr_w1_b: adapter:{key}
+  lokr_w2: adapter:{key}
+  lokr_w2_a: adapter:{key}
+  lokr_w2_b: adapter:{key}
+  lokr_t2: adapter:{key}

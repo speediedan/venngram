@@ -1,0 +1,10 @@
+# PEFT's OFT rotations as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.oft
+applies_when:
+  module_classes: [peft.tuners.oft.layer.OFTLayer]
+  module_names: [oft_R, oft_embedding_R]
+roles:
+  oft_R: adapter:{key}
+  oft_embedding_R: adapter:{key}
