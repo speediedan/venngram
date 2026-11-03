@@ -67,6 +67,7 @@ import yaml
 
 from venngram.address import FIELDS, references, TARGETS, terms
 from venngram.book import AddressBook, PORTABILITY, STRUCTURE_LEVELS
+from venngram.errors import NewerSchemaError
 from venngram.ops import check_support, Support
 
 SCHEMA_VERSION = 2
@@ -382,6 +383,10 @@ class SupportRecord:
         if not isinstance(doc, Mapping) or doc.get("kind") != "support_record":
             raise ValueError(f"{source}: a support record is `kind: support_record`.")
         version = doc.get("schema_version")
+        if isinstance(version, int) and not isinstance(version, bool) and version > SCHEMA_WINDOW[1]:
+            raise NewerSchemaError(f"{source}: support record schema {version} is newer than this venngram reads "
+                                   f"({SCHEMA_WINDOW[0]} to {SCHEMA_WINDOW[1]}); upgrade venngram.",
+                                   kind="support_record", version=version, newest=SCHEMA_WINDOW[1])
         if not isinstance(version, int) or not SCHEMA_WINDOW[0] <= version <= SCHEMA_WINDOW[1]:
             raise ValueError(f"{source}: this venngram reads support record schemas {SCHEMA_WINDOW[0]} to "
                              f"{SCHEMA_WINDOW[1]}, got {version!r}.")

@@ -52,11 +52,13 @@ from typing import Any
 
 from torch import nn
 
+from venngram.errors import NewerSchemaError
 from venngram.resolve import leaf_matches, module_matches, segment_after
 from venngram.roles import parse_role
 
 OVERLAY_SCHEMA_VERSION = 5
-"""The overlay schema this venngram writes; it reads every version from :data:`OVERLAY_MIN_SCHEMA_VERSION`."""
+"""The overlay schema this venngram writes, and the newest it reads; it reads every version from
+:data:`OVERLAY_MIN_SCHEMA_VERSION`."""
 OVERLAY_MIN_SCHEMA_VERSION = 4
 TEMPLATE_SCHEMA_VERSION = 5
 """The first overlay schema whose roles may carry ``{key}``."""
@@ -176,6 +178,10 @@ def overlay_from_document(doc: Any, source: str = "<document>") -> OverlayMap:
     if not isinstance(doc, Mapping):
         raise ValueError(f"{source}: an overlay map document must be a mapping, got {type(doc).__name__}.")
     version = doc.get("schema_version")
+    if isinstance(version, int) and not isinstance(version, bool) and version > OVERLAY_SCHEMA_VERSION:
+        raise NewerSchemaError(f"{source}: overlay map schema {version} is newer than this venngram reads "
+                               f"({OVERLAY_MIN_SCHEMA_VERSION}-{OVERLAY_SCHEMA_VERSION}); upgrade venngram.",
+                               kind="component_map", version=version, newest=OVERLAY_SCHEMA_VERSION)
     if not isinstance(version, int) or isinstance(version, bool) or version < OVERLAY_MIN_SCHEMA_VERSION:
         raise ValueError(f"{source}: an overlay map needs schema_version {OVERLAY_MIN_SCHEMA_VERSION} or later, got "
                          f"{version!r}.")

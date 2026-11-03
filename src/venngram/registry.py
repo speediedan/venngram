@@ -43,6 +43,13 @@ process): the configured registries in order (:func:`registries`: ``VENNGRAM_REG
 order of the sources the index was crawled from. ``strict`` serves only ``verified`` rows. An overlay map
 (:func:`lookup_overlay`) is a ``component_map`` row whose subject is ``overlay:<name>``, looked up the same way.
 
+**Newer documents.** A registry is read by every venngram that points at it, so it may hold documents written for a
+newer venngram than the one reading. A lookup passes over a row whose document's schema is newer than this venngram
+reads (:func:`newest_readable`), with one :class:`NewerSchemaWarning` per document, and serves the best row it can
+read; a document of a schema it reads that is malformed still fails by name. Each row records its document's
+``schema_version``, so a newer document is passed over without being fetched (rows of an index built before the
+column existed are checked when loaded instead).
+
 **Offline.** Each registry's resolved revision is remembered in venngram's cache. When the store cannot be reached
 (or ``HF_HUB_OFFLINE`` is set), the last revision is served from the cache with a :class:`RegistryOfflineWarning`
 naming it; a registry never fetched before fails by name.
@@ -72,7 +79,7 @@ from typing import Any
 
 import yaml
 
-from venngram.errors import VenngramError
+from venngram.errors import NewerSchemaError, VenngramError
 from venngram.store import _safe, cache_dir, fetch_manifest, get_store, load, Reference
 
 INDEX_SCHEMA_VERSION = 1
@@ -97,6 +104,10 @@ class RegistryOfflineWarning(UserWarning):
     """A registry was served from the cache because its store could not be reached."""
 
 
+class NewerSchemaWarning(UserWarning):
+    """A registry row was passed over because its document's schema is newer than this venngram reads."""
+
+
 @dataclass(frozen=True)
 class Row:
     """One indexed document."""
@@ -117,10 +128,14 @@ class Row:
     rank: int = 0
     """The crawl order of its location (lower is preferred)."""
     tags: tuple[str, ...] = ()
+    schema_version: int | None = None
+    """The document's schema, from its manifest entry or the document itself; ``None`` when neither states it, or in
+    an index built before the column existed."""
 
 
 _COLUMNS = ("kind", "subject", "reference", "sha256", "architecture", "model_id", "revision", "status", "source",
-            "location", "rank", "tags")
+            "location", "rank", "tags", "schema_version")
+_INT_COLUMNS = ("rank", "schema_version")
 
 
 # ----- reading -----------------------------------------------------------------------------------------------------
@@ -128,6 +143,7 @@ _COLUMNS = ("kind", "subject", "reference", "sha256", "architecture", "model_id"
 
 _STATE: dict[str, tuple[str | None, dict[str, Any]]] = {}
 _MAPS: dict[str, Any] = {}
+_PASSED_OVER: set[str] = set()
 _override: list[str] | None = None
 
 
@@ -152,6 +168,7 @@ def clear_cache() -> None:
     """Forget resolved revisions, headers and loaded maps (the next lookup re-reads each registry)."""
     _STATE.clear()
     _MAPS.clear()
+    _PASSED_OVER.clear()
 
 
 def _split(location: str) -> tuple[str, str, str | None]:
@@ -274,8 +291,44 @@ def _order(row: Row) -> tuple[int, int]:
     return (SERVED.index(row.status) if row.status in SERVED else len(SERVED), row.rank)
 
 
+def newest_readable(kind: str, subject: str = "") -> int | None:
+    """The newest schema of ``kind`` this venngram reads, or ``None`` for a kind it has no versioned reader for. A
+    ``component_map`` row whose ``subject`` is ``overlay:<name>`` is an overlay map, versioned on its own."""
+    from venngram.book import SCHEMA_WINDOW as BOOK_WINDOW
+    from venngram.maps.overlay import OVERLAY_SCHEMA_VERSION, OVERLAY_SUBJECT_PREFIX
+    from venngram.maps.rules import RULES_SCHEMA_VERSION
+    from venngram.maps.schema import COMPONENT_MAP_SCHEMA_VERSION
+    from venngram.recipe import RECIPE_WINDOW
+    from venngram.support import SCHEMA_WINDOW as SUPPORT_WINDOW
+
+    if kind == "component_map":
+        return OVERLAY_SCHEMA_VERSION if subject.startswith(OVERLAY_SUBJECT_PREFIX) else COMPONENT_MAP_SCHEMA_VERSION
+    return {"rules": RULES_SCHEMA_VERSION, "address_book": BOOK_WINDOW[1], "recipe": RECIPE_WINDOW[1],
+            "support_record": SUPPORT_WINDOW[1]}.get(kind)
+
+
+def _pass_over(reference: str, detail: str) -> None:
+    if reference not in _PASSED_OVER:
+        _PASSED_OVER.add(reference)
+        warnings.warn(f"{reference}: passed over, {detail}; a newer venngram reads it. Serving the best row this "
+                      "venngram reads instead.", NewerSchemaWarning, stacklevel=3)
+
+
+def readable(row: Row) -> bool:
+    """Whether this venngram reads ``row``'s schema, as far as the row says (a row without ``schema_version`` is
+    checked when its document is loaded). A row it cannot read warns once, naming the document."""
+    newest = newest_readable(row.kind, row.subject)
+    if row.schema_version is None or newest is None or row.schema_version <= newest:
+        return True
+    _pass_over(row.reference, f"its {row.kind} schema {row.schema_version} is newer than this venngram reads "
+                              f"({newest})")
+    return False
+
+
 def lookup_map(architecture: str, *, strict: bool = False) -> Any:
     """The best component map for ``architecture`` in the configured registries, or ``None`` when none has one.
+
+    Rows whose schema is newer than this venngram reads are passed over with a :class:`NewerSchemaWarning`.
 
     Raises:
         RegistryError: If a registry cannot be read (and is not in the cache).
@@ -284,11 +337,17 @@ def lookup_map(architecture: str, *, strict: bool = False) -> Any:
         candidates = [r for r in rows("component_map", architecture, locations=[location]) if r.status in SERVED]
         if strict:
             candidates = [r for r in candidates if r.status == "verified"]
-        if candidates:
-            best = candidates[0]
-            if best.reference not in _MAPS:
-                _MAPS[best.reference] = load(best.reference)
-            return _MAPS[best.reference]
+        for row in candidates:
+            if not readable(row):
+                continue
+            if row.reference not in _MAPS:
+                try:
+                    _MAPS[row.reference] = load(row.reference)
+                except NewerSchemaError as err:
+                    _pass_over(row.reference, f"its {err.kind} schema {err.version} is newer than this venngram "
+                                              f"reads ({err.newest})")
+                    continue
+            return _MAPS[row.reference]
     return None
 
 
@@ -304,7 +363,8 @@ def lookup_overlay(name: str) -> Any:
 
 
 def mined_rules(*, locations: Sequence[str] | None = None) -> list[Any]:
-    """The drafting rules each registry mined from its maps (for :mod:`venngram.maps.drafter`)."""
+    """The drafting rules each registry mined from its maps (for :mod:`venngram.maps.drafter`). A registry whose mined
+    rules are of a newer schema than this venngram reads is passed over with a :class:`NewerSchemaWarning`."""
     from venngram.maps.drafter import load_drafting_rules
 
     out = []
@@ -312,7 +372,11 @@ def mined_rules(*, locations: Sequence[str] | None = None) -> list[Any]:
         revision, header = _state(location)
         path = _fetch(location, revision, f"{header['current']}/mined_rules.yaml")
         if path is not None:
-            out.append(load_drafting_rules(path))
+            try:
+                out.append(load_drafting_rules(path))
+            except NewerSchemaError as err:
+                _pass_over(f"{location}: {header['current']}/mined_rules.yaml", f"its rules schema {err.version} is "
+                           f"newer than this venngram reads ({err.newest})")
     return out
 
 
@@ -359,6 +423,14 @@ def _subject_of(kind: str, doc: Any) -> tuple[str | None, str | None, str | None
     return None, None, None
 
 
+def _schema_of(entry: Any, doc: Any) -> int | None:
+    """A document's ``schema_version``: its manifest entry's, else the document's own, else ``None``."""
+    version = entry.schema_version
+    if version is None and isinstance(doc, Mapping):
+        version = doc.get("schema_version")
+    return version if isinstance(version, int) and not isinstance(version, bool) else None
+
+
 def _source_of(doc: Any) -> str | None:
     prov = doc.get("provenance") if isinstance(doc, Mapping) else None
     if isinstance(prov, Mapping) and prov.get("source"):
@@ -396,7 +468,8 @@ def crawl(locations: Iterable[str]) -> list[Row]:
             subject = arch if entry.kind in FAMILY_KINDS else model
             status = doc.get("status") if entry.kind == "verification_record" and isinstance(doc, Mapping) else None
             here.append(Row(entry.kind, subject or "_", reference, entry.sha256, arch, model, model_rev,
-                            status if status in STATUSES else "unverified", _source_of(doc), location, rank))
+                            status if status in STATUSES else "unverified", _source_of(doc), location, rank,
+                            schema_version=_schema_of(entry, doc)))
         best: dict[str, str] = {}
         for r in here:
             if r.kind == "verification_record" and r.architecture:
@@ -420,7 +493,7 @@ def write_index(index_rows: Sequence[Row], out: str | Path, *, name: str, source
     by_kind: dict[str, dict[str, list[Row]]] = {}
     for r in index_rows:
         by_kind.setdefault(r.kind, {}).setdefault(r.subject, []).append(r)
-    schema = pa.schema([(c, pa.list_(pa.string()) if c == "tags" else pa.int32() if c == "rank" else pa.string())
+    schema = pa.schema([(c, pa.list_(pa.string()) if c == "tags" else pa.int32() if c in _INT_COLUMNS else pa.string())
                         for c in _COLUMNS])
     counts = {}
     for kind, groups in sorted(by_kind.items()):
@@ -504,5 +577,5 @@ if __name__ == "__main__":
 
 
 __all__ = ["clear_cache", "crawl", "DEFAULT_REGISTRIES", "discover_hub", "lookup_map", "lookup_overlay", "main",
-           "mined_rules", "publish_index", "RegistryError", "RegistryOfflineWarning", "registries", "Row", "rows",
-           "set_registries", "subjects", "write_index"]
+           "mined_rules", "newest_readable", "NewerSchemaWarning", "publish_index", "readable", "RegistryError",
+           "RegistryOfflineWarning", "registries", "Row", "rows", "set_registries", "subjects", "write_index"]

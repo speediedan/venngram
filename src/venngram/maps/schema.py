@@ -53,6 +53,7 @@ from typing import Any
 
 import yaml
 
+from venngram.errors import NewerSchemaError
 from venngram.maps.overlay import _OVERLAYS, overlay_from_document, OverlayMap
 from venngram.maps.rules import rules_from_document
 
@@ -305,9 +306,11 @@ def _schema_version(doc: dict[str, Any], source: str) -> int:
         raise ValueError(f"{source}: component map document lacks an integer `schema_version` (current: "
                          f"{COMPONENT_MAP_SCHEMA_VERSION}); a map must say which schema it was written against.")
     if version > COMPONENT_MAP_SCHEMA_VERSION:
-        raise ValueError(f"{source}: component map schema {version} is newer than this venngram reads "
-                         f"({COMPONENT_MAP_SCHEMA_MIN_READABLE}-{COMPONENT_MAP_SCHEMA_VERSION}); upgrade venngram. A "
-                         "newer schema may carry keys that change which rows apply, so it is not guessed at.")
+        raise NewerSchemaError(f"{source}: component map schema {version} is newer than this venngram reads "
+                               f"({COMPONENT_MAP_SCHEMA_MIN_READABLE}-{COMPONENT_MAP_SCHEMA_VERSION}); upgrade "
+                               "venngram. A newer schema may carry keys that change which rows apply, so it is not "
+                               "guessed at.",
+                               kind="component_map", version=version, newest=COMPONENT_MAP_SCHEMA_VERSION)
     if version < COMPONENT_MAP_SCHEMA_MIN_READABLE:
         raise ValueError(f"{source}: component map schema {version} is older than the oldest readable one "
                          f"({COMPONENT_MAP_SCHEMA_MIN_READABLE}); re-publish the map against a current schema.")

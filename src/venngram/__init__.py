@@ -45,7 +45,7 @@ from typing import Any
 from venngram.__about__ import __version__
 from venngram.address import is_address, LayerSet, parse, to_mapping, to_string, UnitSet
 from venngram.book import AddressBook, diff_lock, make_lock, register_uri_resolver
-from venngram.errors import AddressError, AddressUnresolvable, Refusal, RoleError, VenngramError
+from venngram.errors import AddressError, AddressUnresolvable, NewerSchemaError, Refusal, RoleError, VenngramError
 from venngram.resolve import Location, ParamSpace, select, StructureProvider
 
 
@@ -73,6 +73,7 @@ __all__ = [
     "LayerSet",
     "Location",
     "make_lock",
+    "NewerSchemaError",
     "ParamSpace",
     "parse",
     "Refusal",

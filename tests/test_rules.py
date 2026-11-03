@@ -143,7 +143,7 @@ def test_exact_division_is_checked():
 
 
 @pytest.mark.parametrize("doc, match", [
-    ({"schema_version": 3}, "`schema_version` must be 2"),
+    ({"schema_version": 3}, "rules schema 3 is newer than this venngram reads"),
     ({"schema_version": 2}, "is `kind: rules`"),
     ({"schema_version": 2, "kind": "rules", "extra": {}}, "unknown rules document keys"),
     ({"schema_version": 2, "kind": "rules", "verify": {"orders": {}}}, "`verify` maps some of"),

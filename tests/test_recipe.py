@@ -100,7 +100,7 @@ def test_misused_ops_are_refused_by_name(op, match):
 @pytest.mark.parametrize("change, match", [
     (lambda r: r["model"].pop("revision"), "one revision only"),
     (lambda r: r["model"].update(revision="other"), "the book pins"),
-    (lambda r: r.update(schema_version=3), "must be in 1..2"),
+    (lambda r: r.update(schema_version=3), "recipe schema 3 is newer than this venngram reads"),
     (lambda r: r.update(stages=[]), "at least one"),
     (lambda r: r["stages"][0].update(tokens="first"), "`tokens` is all, last"),
     (lambda r: r.update(operands={"x": {"values": [1.0], "shape": [2]}}), "1 values for shape"),

@@ -57,7 +57,7 @@ import yaml
 from torch import nn
 
 from venngram.maps.check import check_map_against_model, MapProblem
-from venngram.maps.rules import Rules, RULES_SCHEMA_VERSION
+from venngram.maps.rules import refuse_newer_rules, Rules, RULES_SCHEMA_VERSION
 from venngram.maps.schema import (BUNDLED_KINDS, component_map_for, ComponentEntry, ComponentKey, ComponentMap,
                                   from_document, KindSpec, registered_architectures, VOCABULARY)
 from venngram.sources import SourceError
@@ -101,6 +101,8 @@ class DraftingRules:
         """Read the ``draft`` section of a ``rules`` document, refusing a malformed one by name."""
         name = doc.get("name") if isinstance(doc, Mapping) else None
         header = (doc.get("kind"), doc.get("schema_version")) if isinstance(doc, Mapping) else None
+        if header is not None and header[0] == "rules":
+            refuse_newer_rules(header[1], source)
         if header != ("rules", RULES_SCHEMA_VERSION):
             raise SourceError(f"{source}: drafting rules are the `draft` section of a `kind: rules`, "
                               f"`schema_version: {RULES_SCHEMA_VERSION}` document.")
