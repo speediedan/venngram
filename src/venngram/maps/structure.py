@@ -22,8 +22,14 @@ The map's module paths are written from the architecture class (``LlamaForCausal
 it (the ``LlamaModel`` inside) drops the leading segments that root does not have, found from where the blocks are;
 rows outside that root (``lm_head``) then locate nothing.
 
+A root may also *add* leading path: a wrapper module carrying the mapped model as a submodule (a framework's module
+holding a Hugging Face model under ``model.``, with steering vectors or spliced dictionaries registered beside it). The
+map is then **mounted** at that submodule, named with ``mount`` or found as the one outermost descendant the map
+describes (:func:`find_mounts`). The wrapper's own tensors stay outside every structure field.
+
 .. warning:: This is an experimental API and may change in a future release.
 """
+from collections.abc import Collection
 from typing import Any
 
 from torch import nn
@@ -102,28 +108,90 @@ def detect_prefix(root: nn.Module, cmap: ComponentMap) -> str | None:
     return None
 
 
+def find_mounts(root: nn.Module, architectures: Collection[str]) -> list[str]:
+    """The paths of ``root``'s outermost descendants mapped under one of ``architectures`` (by
+    :func:`architecture_of`), shallowest first; a mapped module inside another is not listed.
+
+    >>> wrapper = nn.Module()
+    >>> wrapper.add_module("model", nn.Sequential(nn.Linear(2, 2)))
+    >>> find_mounts(wrapper, {"Sequential"})
+    ['model']
+    """
+    wanted, found = set(architectures), []
+    for path, module in root.named_modules():
+        if not path or any(path.startswith(f"{m}.") for m in found):
+            continue
+        if wanted.intersection(architecture_of(module)):
+            found.append(path)
+    return sorted(found, key=lambda p: (p.count("."), p))
+
+
+def _mount_of(root: nn.Module, cmap: ComponentMap) -> tuple[str | None, Refusal | None]:
+    """The one outermost descendant ``cmap`` describes (by structure, as :func:`detect_prefix` reads it, so a bare
+    ``LlamaModel`` under a wrapper is found as well as a ``LlamaForCausalLM``), or why there is none to mount it at."""
+    mounts: list[str] = []
+    for path, module in root.named_modules():
+        if path and not any(path.startswith(f"{m}.") for m in mounts) and detect_prefix(module, cmap) is not None:
+            mounts.append(path)
+    if len(mounts) == 1:
+        return mounts[0], None
+    if mounts:
+        return None, Refusal(f"{type(root).__name__} carries {len(mounts)} modules the {cmap.architecture} component "
+                             f"map describes ({', '.join(map(repr, mounts))}); name the one meant with `mount=`")
+    return None, None
+
+
 class MapStructure:
     """Places ``root``'s tensors from ``cmap``.
 
     Args:
         root: The module whose tensor names are located.
         cmap: Its component map.
-        prefix: The leading module path ``root`` lacks relative to the map; found from the blocks when ``None``.
+        prefix: The leading module path the mapped model lacks relative to the map; found from the blocks when
+            ``None``.
+        mount: The path of the submodule of ``root`` the map describes, for a root that wraps the mapped model
+            (``"model"``). ``None`` places the map at ``root`` when it describes ``root``, and otherwise at the one
+            outermost descendant it describes (:func:`find_mounts`); ``""`` places it at ``root`` only. Names stay
+            relative to ``root``, and ``root``'s tensors outside the mount are located nowhere.
     """
 
     vocabulary = True
 
-    def __init__(self, root: nn.Module, cmap: ComponentMap, prefix: str | None = None) -> None:
+    def __init__(self, root: nn.Module, cmap: ComponentMap, prefix: str | None = None,
+                 mount: str | None = None) -> None:
         self.cmap = cmap
-        self.prefix = detect_prefix(root, cmap) if prefix is None else prefix
         self.refusal: Refusal | None = None
         self._depths: dict[str, int] = {}
         self._table: dict[str, Location] = {}
+        self.mount = mount
+        target = root if not mount else submodule(root, mount)
+        if target is None:
+            self.prefix = None
+            self.refusal = Refusal(f"{type(root).__name__} has no module {mount!r} to mount the {cmap.architecture} "
+                                   "component map at")
+            return
+        self.prefix = detect_prefix(target, cmap) if prefix is None else prefix
+        if self.prefix is None and mount is None:
+            found, ambiguous = _mount_of(root, cmap)
+            if ambiguous is not None:
+                self.refusal = ambiguous
+                return
+            if found is not None:
+                self.mount, target = found, root.get_submodule(found)
+                self.prefix = detect_prefix(target, cmap)
         if self.prefix is None:
             names = [t for t in map(cmap.block_template, cmap.stack_names()) if t] or list(cmap.components)
             self.refusal = Refusal(f"{type(root).__name__} has none of the modules the {cmap.architecture} component "
                                    f"map places from ({', '.join(map(repr, names))}), so the map does not describe it")
             return
+        self._build(target, cmap)
+        if self.mount:
+            # Located names are matched after wrapper segments are stripped, so the mount path is stripped too.
+            lead = strip_wrappers(f"{self.mount}.")
+            if lead:
+                self._table = {f"{lead}{path}" if path else lead[:-1]: loc for path, loc in self._table.items()}
+
+    def _build(self, root: nn.Module, cmap: ComponentMap) -> None:
         for stack in cmap.stack_names():
             template = self._relative(cmap.block_template(stack))
             if template is not None:
@@ -183,4 +251,4 @@ def map_structure(model: nn.Module, architecture: str | None = None, **kwargs: A
     return MapStructure(model, map_for(model, architecture), **kwargs)
 
 
-__all__ = ["architecture_of", "detect_prefix", "map_for", "map_structure", "MapStructure"]
+__all__ = ["architecture_of", "detect_prefix", "find_mounts", "map_for", "map_structure", "MapStructure"]

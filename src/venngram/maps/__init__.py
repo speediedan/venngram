@@ -43,7 +43,7 @@ from venngram.maps.check import (check_map_against_model, ComponentMapModelMisma
 from venngram.maps.schema import (component_map_for, ComponentMap, from_document, known_architectures,
                                   load_component_map, load_map, map_from_document, register, registered_architectures,
                                   unregister, VOCABULARY)
-from venngram.maps.structure import map_for, map_structure, MapStructure
+from venngram.maps.structure import find_mounts, map_for, map_structure, MapStructure
 from venngram.maps.overlay import known_overlays, overlay_for, overlay_from_document, OverlayMap, overlays_for
 from venngram.maps.verification import VerificationReport, verify
 from venngram.maps.view import MappedView, overlay_roles
@@ -53,6 +53,7 @@ __all__ = [
     "component_map_for",
     "ComponentMap",
     "ComponentMapModelMismatch",
+    "find_mounts",
     "from_document",
     "known_architectures",
     "known_overlays",
