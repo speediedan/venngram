@@ -462,7 +462,6 @@ register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
-                       ("drafting_rules", _load_rules),
                        ("support_record", _load_support)):
     register_loader(_kind, _loader)
 

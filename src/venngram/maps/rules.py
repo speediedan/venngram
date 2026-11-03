@@ -37,10 +37,6 @@ module tree's parts. The ``verify`` section has four parts:
     draft:               # see venngram.maps.drafter
       containers: [{match: "self_attn|attn", component: attn, kind: attn}]
 
-Schema 1 (a verification rule set with these parts at the top level, no ``kind``) and ``kind: drafting_rules``
-(schema 1, the ``draft`` section's parts at the top level) are still read, so documents published before the two
-kinds merged keep working.
-
 A name in a ``config`` source is a configuration field if the configuration has it (as an integer), else another
 meaning; so ``kv_heads: [num_key_value_heads, heads]`` falls back to the head count. Patterns are globs over component
 names (``*`` one segment, ``**`` several), as an address's ``component`` field
@@ -65,7 +61,7 @@ import yaml
 
 from venngram.resolve import component_matches
 
-#: The schema of a ``rules`` document (``verify`` and ``draft`` sections); schema 1 is still read.
+#: The schema of a ``rules`` document (``verify`` and ``draft`` sections).
 RULES_SCHEMA_VERSION = 2
 _VERIFY = {"config", "widths", "kinds", "order"}
 
@@ -203,10 +199,9 @@ def rules_from_document(doc: Any, source: str = "<rules>", *, section: bool = Fa
         raise ValueError(f"{source}: a rule set must be a mapping, got {type(doc).__name__}")
     if not section:
         version = doc.get("schema_version")
-        if version == RULES_SCHEMA_VERSION:
-            return _rules_document(doc, source)
-        if version != 1:
-            raise ValueError(f"{source}: rules `schema_version` must be {RULES_SCHEMA_VERSION} (or 1), got {version!r}")
+        if version != RULES_SCHEMA_VERSION:
+            raise ValueError(f"{source}: rules `schema_version` must be {RULES_SCHEMA_VERSION}, got {version!r}")
+        return _rules_document(doc, source)
     unknown = set(doc) - {"schema_version", "name"} - _VERIFY
     if unknown:
         raise ValueError(f"{source}: unknown rule set keys {sorted(unknown)}")
@@ -279,13 +274,9 @@ class Rules:
 
 
 def rules_document(doc: Any, source: str = "<rules>") -> Rules:
-    """Read a ``rules`` document (or one published before the kinds merged: a schema 1 verification rule set, or a
-    ``kind: drafting_rules`` document), refusing a malformed one by name."""
+    """Read a ``rules`` document, refusing a malformed one by name."""
     from venngram.maps.drafter import DraftingRules
 
-    if isinstance(doc, dict) and doc.get("kind") == "drafting_rules":
-        draft = DraftingRules.from_mapping(doc, source=source)
-        return Rules(draft.name, RuleSet(sources=(draft.name,)), draft)
     verify = rules_from_document(doc, source)
     draft = DraftingRules.from_mapping(doc, source=source) if doc.get("draft") is not None else None
     return Rules(str(doc.get("name") or source), verify, draft)

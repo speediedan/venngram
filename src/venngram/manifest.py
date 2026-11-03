@@ -62,10 +62,9 @@ MANIFEST_WINDOW = (1, 1)
 
 #: The document kinds this version knows. ``units`` is a sidecar, read through the book that names it; ``index`` is a
 #: registry index; ``rules`` holds an architecture family's verification and drafting rules
-#: (:mod:`venngram.maps.rules`), and ``drafting_rules`` is still read as one (its kind before the two merged);
-#: ``support_record`` is what a consumer honours, or a format adapter offers (:class:`venngram.support.SupportRecord`).
-KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "drafting_rules",
-         "support_record")
+#: (:mod:`venngram.maps.rules`); ``support_record`` is what a consumer honours, or a format adapter offers
+#: (:class:`venngram.support.SupportRecord`).
+KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "support_record")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
