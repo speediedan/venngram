@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import Any
 
 from venngram.address import Expr, parse, references, rename_refs
-from venngram.errors import AddressError, VenngramError
+from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
@@ -113,8 +113,9 @@ def _version(doc: Mapping[str, Any], source: str) -> int:
         raise AddressError(f"{source}: `schema_version` is required and is an integer (currently {SCHEMA_VERSION}).")
     lo, hi = SCHEMA_WINDOW
     if version > hi:
-        raise AddressError(f"{source}: schema_version {version} was written by a newer venngram (this one reads "
-                           f"{lo} to {hi}); upgrade venngram.")
+        raise NewerAddressSchemaError(f"{source}: schema_version {version} was written by a newer venngram (this one "
+                                      f"reads {lo} to {hi}); upgrade venngram.", kind="address_book", version=version,
+                                      newest=hi)
     if version < lo:
         raise AddressError(f"{source}: schema_version {version} is older than this venngram reads ({lo} to {hi}); "
                            "re-publish the book against a current schema.")

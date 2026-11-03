@@ -42,6 +42,30 @@ class StoreError(VenngramError):
     hash that does not match, or a store that cannot provide what a reference names."""
 
 
+class NewerSchemaError(VenngramError):
+    """Raised when a document's schema is newer than this venngram reads.
+
+    It is distinct from a malformed document so that a reader serving documents from a shared registry can pass over
+    one written for a newer venngram (with a warning) rather than fail; a malformed document of a schema it reads still
+    fails by name.
+
+    Attributes:
+        kind: The document kind (``component_map``, ``rules``, ...).
+        version: The document's ``schema_version``.
+        newest: The newest schema of that kind this venngram reads.
+    """
+
+    def __init__(self, message: str, *, kind: str, version: int, newest: int) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.version = version
+        self.newest = newest
+
+
+class NewerAddressSchemaError(NewerSchemaError, AddressError):
+    """A :class:`NewerSchemaError` for an address book or a recipe, whose other refusals are :class:`AddressError`."""
+
+
 @dataclass(frozen=True)
 class Refusal:
     """Why an address (or one of its fields) did not resolve, as a value.
@@ -75,4 +99,5 @@ class AddressUnresolvable(VenngramError):
         super().__init__(f"The address `{address}` does not resolve: {detail}")
 
 
-__all__ = ["AddressError", "AddressUnresolvable", "Refusal", "RoleError", "StoreError", "VenngramError"]
+__all__ = ["AddressError", "AddressUnresolvable", "NewerAddressSchemaError", "NewerSchemaError", "Refusal", "RoleError",
+           "StoreError", "VenngramError"]

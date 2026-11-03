@@ -73,7 +73,7 @@ import yaml
 
 from venngram.address import Term
 from venngram.book import AddressBook
-from venngram.errors import AddressError
+from venngram.errors import AddressError, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, OPS, OpSpec, TRANSFORMS
 
@@ -353,6 +353,9 @@ def _check_header(doc: Any, source: str) -> int:
         raise AddressError(f"{source}: a recipe is a mapping, got {type(doc).__name__}.")
     version = doc.get("schema_version")
     lo, hi = RECIPE_WINDOW
+    if isinstance(version, int) and not isinstance(version, bool) and version > hi:
+        raise NewerAddressSchemaError(f"{source}: recipe schema {version} is newer than this venngram reads "
+                                      f"({lo}..{hi}); upgrade venngram.", kind="recipe", version=version, newest=hi)
     if not isinstance(version, int) or not lo <= version <= hi:
         raise AddressError(f"{source}: recipe `schema_version` must be in {lo}..{hi} for this venngram, got "
                            f"{version!r}.")

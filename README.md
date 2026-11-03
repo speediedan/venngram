@@ -323,6 +323,41 @@ and a model's physical parameters, with a role for each tensor.
 [Fine-Tuning Scheduler](https://github.com/speediedan/finetuning-scheduler) consumes it, and its schedules accept
 addresses.
 
+## Versions and evolution
+
+Published documents outlive the venngram that wrote them, so every document kind carries one integer
+`schema_version`, and each reader accepts a window of them:
+
+| Kind | Reads | Writes | Keys it does not know |
+| --- | --- | --- | --- |
+| component map | 1 to 4 | 4 | ignored when descriptive |
+| overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
+| rules | 2 | 2 | refused |
+| address book | 1 | 1 | ignored at the top level |
+| recipe | 1 to 2 | 2 | refused in `method` and in an op's parameters |
+| support record | 1 to 2 | 2 | refused; an unknown *section* is skipped with a warning |
+| manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
+| registry index header | 1 | 1 | |
+
+**What bumps a version.** A key a reader may ignore without misreading the document (a description, an annotation)
+never does, where the kind ignores unknown keys. A key that changes what a document selects or how a row resolves
+always does, since a reader that skipped it would resolve the wrong thing silently. Where a kind refuses unknown keys,
+any new key bumps it.
+
+**Too new, too old, malformed.** Each is refused by name, with its own message. A document newer than the reader is a
+`venngram.NewerSchemaError` (a `ValueError`; for books and recipes also an `AddressError`), so code that serves
+documents from shared places can tell it apart from a broken one. Registry lookups do exactly that: a registry may hold
+documents written for a newer venngram, and a lookup passes over them with a warning and serves the best one it reads,
+while a malformed document of a schema it reads still fails. Each index row records its document's schema, so a newer
+one is passed over without being fetched.
+
+**Settled before 0.1, and not yet.** The windows above, the newer-schema refusal and the registry rule are what 0.1
+commits to. Still open (speediedan/venngram#18): a `venngram migrate` that rewrites an old-schema document to the
+current one, golden fixtures of every published schema, a deprecation cycle (warn, then refuse, with a strict mode) for
+document kinds, API names and vocabulary names (maps already carry `deprecated_since` and `replacement`), a version
+check when reading verification records, an audit of the places a new architecture or tool still needs a venngram
+change, and a stated compatibility surface for each consumer.
+
 ## Agent skill
 
 `.agents/skills/venngram-addressing/` (mirrored in `.claude/skills/`) is an agent skill, in the open skill format,

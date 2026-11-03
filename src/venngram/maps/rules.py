@@ -59,6 +59,7 @@ from typing import Any
 
 import yaml
 
+from venngram.errors import NewerSchemaError
 from venngram.resolve import component_matches
 
 #: The schema of a ``rules`` document (``verify`` and ``draft`` sections).
@@ -191,6 +192,15 @@ def _group(entry: Any, where: str) -> tuple[str, ...]:
     return group
 
 
+def refuse_newer_rules(version: Any, source: str) -> None:
+    """Raise :class:`~venngram.errors.NewerSchemaError` when a ``rules`` document's ``schema_version`` is newer than
+    :data:`RULES_SCHEMA_VERSION`; any other mismatch is the caller's to refuse as malformed."""
+    if isinstance(version, int) and not isinstance(version, bool) and version > RULES_SCHEMA_VERSION:
+        raise NewerSchemaError(f"{source}: rules schema {version} is newer than this venngram reads "
+                               f"({RULES_SCHEMA_VERSION}); upgrade venngram.", kind="rules", version=version,
+                               newest=RULES_SCHEMA_VERSION)
+
+
 def rules_from_document(doc: Any, source: str = "<rules>", *, section: bool = False) -> RuleSet:
     """The verification rules of a ``rules`` document (its ``verify`` section; with ``section``, a map's
     ``verification:`` section, which has no header), refusing a malformed document by name. A ``draft`` section is
@@ -199,6 +209,7 @@ def rules_from_document(doc: Any, source: str = "<rules>", *, section: bool = Fa
         raise ValueError(f"{source}: a rule set must be a mapping, got {type(doc).__name__}")
     if not section:
         version = doc.get("schema_version")
+        refuse_newer_rules(version, source)
         if version != RULES_SCHEMA_VERSION:
             raise ValueError(f"{source}: rules `schema_version` must be {RULES_SCHEMA_VERSION}, got {version!r}")
         return _rules_document(doc, source)
@@ -334,6 +345,7 @@ __all__ = [
     "layered",
     "load_rules",
     "load_rules_document",
+    "refuse_newer_rules",
     "Rules",
     "rules_document",
     "RuleSet",
