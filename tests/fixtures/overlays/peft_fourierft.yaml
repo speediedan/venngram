@@ -1,0 +1,9 @@
+# PEFT's FourierFT spectral coefficients as adapters, one role per adapter name: PEFT keys each container by adapter name, which
+# `{key}` takes. The seed registry publishes this overlay map; a test registry indexes this copy.
+schema_version: 5
+overlay: peft.fourierft
+applies_when:
+  module_classes: [peft.tuners.fourierft.layer.FourierFTLayer]
+  module_names: [fourierft_spectrum]
+roles:
+  fourierft_spectrum: adapter:{key}

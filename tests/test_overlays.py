@@ -16,10 +16,11 @@ from torch import nn
 from venngram import view
 from venngram.maps import (component_map_for, known_architectures, known_overlays, map_from_document, overlay_for,
                            overlay_from_document, overlay_roles, OverlayMap, overlays_for, register, unregister)
+from venngram.maps.overlay import rule_roles
 from venngram.tuning import TunableViewError
 
-PEFT_LORA = {"lora_A": "adapter", "lora_B": "adapter", "lora_embedding_A": "adapter", "lora_embedding_B": "adapter",
-             "lora_magnitude_vector": "adapter"}
+PEFT_LORA = {name: "adapter:{key}" for name in ("lora_A", "lora_B", "lora_E", "lora_embedding_A", "lora_embedding_B",
+                                                "lora_magnitude_vector")}
 
 
 class Scaler(nn.Module):
@@ -114,8 +115,62 @@ def test_an_overlay_document_round_trips_and_reads_as_a_map():
     assert map_from_document(overlay.to_mapping()) == overlay
 
 
+class Keyed(nn.Module):
+    """A library's layer keeping what it adds in containers keyed by name, as PEFT keys adapters by adapter name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.base = nn.Linear(4, 4)
+        self.lora_A = nn.ModuleDict({"a": nn.Linear(4, 2, bias=False), "b": nn.Linear(4, 2, bias=False)})
+        self.ia3_l = nn.ParameterDict({"a": nn.Parameter(torch.ones(4))})
+
+
+def test_a_templated_role_takes_the_keyed_containers_entry():
+    rules = {"lora_A": "adapter:{key}", "ia3_l": "adapter:{key}"}
+    roles = rule_roles(nn.ModuleDict({"q": Keyed()}), rules)
+    assert roles == {"q.lora_A.a.weight": "adapter:a", "q.lora_A.b.weight": "adapter:b", "q.ia3_l.a": "adapter:a"}
+    plain = nn.Module()
+    plain.lora_A = nn.Linear(4, 2)  # not a keyed container: no entry to take, so the qualifier is dropped
+    assert rule_roles(plain, rules) == {"lora_A.weight": "adapter", "lora_A.bias": "adapter"}
+
+
+def test_every_peft_tuner_family_takes_its_adapter_names():
+    """The sanity check behind the seed overlays: against PEFT's own account of its adapter tensors (each tuner
+    layer's ``adapter_layer_names``), the overlays give the same tensors, each named by its adapter."""
+    peft = pytest.importorskip("peft")
+    transformers = pytest.importorskip("transformers")
+    llama = transformers.LlamaConfig(vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)
+    targets = ["q_proj", "v_proj"]
+    configs = [
+        peft.LoraConfig(r=2, target_modules=targets),
+        peft.LoraConfig(r=2, target_modules=targets, use_dora=True),
+        peft.AdaLoraConfig(r=2, target_modules=targets, total_step=10),
+        peft.IA3Config(target_modules=targets, feedforward_modules=[]),
+        peft.LoHaConfig(r=2, target_modules=targets),
+        peft.LoKrConfig(r=2, target_modules=targets),
+        peft.OFTConfig(r=2, oft_block_size=0, target_modules=targets),
+    ]
+    for config in configs:
+        model = peft.get_peft_model(transformers.LlamaForCausalLM(llama), config, adapter_name="first")
+        names = {id(p): n for n, p in model.named_parameters()}
+        expected = {}
+        for module in model.modules():
+            for layer_name in getattr(module, "adapter_layer_names", ()):
+                for adapter, entry in getattr(module, layer_name).items():
+                    for p in (entry.parameters() if isinstance(entry, nn.Module) else (entry,)):
+                        expected[names[id(p)]] = f"adapter:{adapter}"
+        # Parameters only: PEFT's account names parameters, and an overlay also gives roles to the buffers in an
+        # adapter's entry (OFT keeps index buffers there).
+        params = set(names.values())
+        roles = {n: r for n, r in overlay_roles(model, overlays_for(model)).items() if n in params}
+        assert roles == expected, type(config).__name__
+
+
 @pytest.mark.parametrize("change, match", [
     ({"schema_version": 3}, "needs schema_version 4"),
+    ({"schema_version": 4}, "`{key}` needs schema_version 5"),
+    ({"roles": {"lora_A": "{key}:adapter"}}, "only as its last qualifier"),
     ({"overlay": ""}, "non-empty `overlay`"),
     ({"architecture": "X"}, "`architecture` belongs to a base map"),
     ({"roles": {}}, "must not be empty"),

@@ -29,7 +29,7 @@ Issues = "https://github.com/speediedan/venngram/issues"
 
 [project.optional-dependencies]
 hf = ["transformers>=4.57"]
-test = ["pytest>=8", "transformers>=4.57"]
+test = ["pytest>=8", "transformers>=4.57", "peft>=0.17"]
 
 [tool.setuptools.dynamic]
 version = { attr = "venngram.__about__.__version__" }

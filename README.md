@@ -275,22 +275,27 @@ python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a l
 library. An overlay says which module patterns take which role, and when it applies:
 
 ```yaml
-schema_version: 4
+schema_version: 5
 overlay: peft.lora
 applies_when:            # any condition holding means the overlay applies
   module_classes: [peft.tuners.lora.layer.LoraLayer]   # matched against each module's class hierarchy
-  module_names: [lora_A, lora_B, lora_embedding_A, lora_embedding_B, lora_magnitude_vector]
+  module_names: [lora_A, lora_B, lora_E, lora_embedding_A, lora_embedding_B, lora_magnitude_vector]
 roles:                   # module pattern -> role; the first matching pattern wins
-  lora_A: adapter
-  lora_B: adapter
-  lora_embedding_A: adapter
-  lora_embedding_B: adapter
-  lora_magnitude_vector: adapter
+  lora_A: adapter:{key}   # the entry of the keyed container matched: here, the adapter name
+  lora_B: adapter:{key}
+  lora_E: adapter:{key}
+  lora_embedding_A: adapter:{key}
+  lora_embedding_B: adapter:{key}
+  lora_magnitude_vector: adapter:{key}
 ```
 
 A tensor under an overlay's module keeps the layer and component of the module it is attached to, so one overlay serves
-every architecture. Overlays are documents of the same kind as base maps, found the same way (registered in process,
-then the registries, as subject `overlay:<name>`); the seed registry carries `peft.lora`. A spliced SAE or transcoder
+every architecture. A role ending in `:{key}` takes the entry of the keyed container (`nn.ModuleDict`,
+`nn.ParameterDict`) the pattern matches, so each named adapter has a role of its own (`adapter:default`); where the
+matched module is not a keyed container, the qualifier is dropped (`adapter`). Overlays are documents of the same kind
+as base maps, found the same way (registered in process, then the registries, as subject `overlay:<name>`); the seed
+overlays cover each PEFT tuner family (`peft.lora`, `peft.ia3`, `peft.loha`, `peft.lokr`, `peft.oft`,
+`peft.boft`, `peft.vera`, `peft.fourierft`). A spliced SAE or transcoder
 (`latent:<name>`, or `instrument` when frozen), a block-sparse featurizer or a steering module (`intervention:<kind>`)
 is an overlay in the same way: a new library is a published document, not a venngram release.
 
