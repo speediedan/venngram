@@ -8,9 +8,11 @@ from venngram import Location, ParamSpace, Refusal, select
 from venngram.maps import (check_map_against_model, component_map_for, ComponentMapModelMismatch, from_document,
                            known_architectures, map_for, MappedView, MapStructure, register,
                            validate_map_against_model, VOCABULARY)
+from venngram.maps.overlay import overlays_for
 from venngram.maps.schema import _REGISTRY, ComponentKey
 from venngram.maps.transformer_lens import from_transformer_lens
 from venngram.tuning import BoundView
+from venngram.tuning.errors import TunableViewError
 
 transformers = pytest.importorskip("transformers")
 
@@ -136,6 +138,73 @@ def test_a_base_model_inside_a_task_head_is_located_without_its_prefix():
     assert structure.locate("norm.weight") == Location(component="ln_final")
     with pytest.raises(KeyError, match="Pass `architecture`"):
         map_for(nn.Linear(2, 2))
+
+
+class _Wrapper(nn.Module):
+    """A framework module carrying the mapped model under `model.`, with a steering vector of its own beside it."""
+
+    def __init__(self, model: nn.Module, **others: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+        for name, module in others.items():
+            self.add_module(name, module)
+        self.steer = nn.Parameter(torch.zeros(16))
+
+
+def test_a_map_is_mounted_under_a_wrapper_root():
+    wrapper = _Wrapper(tiny("GPT2LMHeadModel", "cpu"))
+    s = space(MappedView(wrapper, roles={"steer": "intervention:steer"}))  # the mount is found: the one mapped child
+    assert MappedView(wrapper).structure().mount == "model"
+    assert sorted(select("layers:-1: & component:attn.*", s)) == sorted(
+        n for n, _ in wrapper.named_parameters() if n.startswith("model.transformer.h.2.attn."))
+    assert select("role:intervention", s) == ["steer"]
+    assert MappedView(wrapper).structure().locate("steer") == Location()  # outside every structure field
+    explicit = MappedView(wrapper, mount="model").structure()
+    assert explicit.placed() == MappedView(wrapper).structure().placed()
+    assert all(path.startswith("model.") for path in explicit.placed())
+    # The shape of the issue: an explicit base map for the wrapped model, with the wrapper's overlays and roles.
+    named = MappedView(wrapper, maps=[map_for(wrapper.model), *overlays_for(wrapper)],
+                       roles={"steer": "intervention:steer"})
+    assert named.structure().mount == "model"
+    assert select("layers:-1: & component:attn.*", space(named)) == select("layers:-1: & component:attn.*", s)
+
+
+def test_a_bare_base_model_under_a_wrapper_is_mounted_from_its_structure():
+    cmap = component_map_for("LlamaForCausalLM")
+    wrapper = _Wrapper(nn.Identity(), backbone=tiny("LlamaForCausalLM").model)  # a LlamaModel: no map for its class
+    structure = MapStructure(wrapper, cmap)
+    assert (structure.mount, structure.prefix) == ("backbone", "model")
+    assert structure.locate("backbone.layers.2.self_attn.q_proj.weight") == Location(layer=2, component="attn.q")
+    assert structure.depth() == 3
+    # Held under `model.`, the same LlamaModel has the paths the map is written for, so it is placed at the root.
+    same_paths = MapStructure(_Wrapper(tiny("LlamaForCausalLM").model), cmap)
+    assert (same_paths.mount, same_paths.prefix) == (None, "")
+    assert same_paths.locate("model.layers.2.self_attn.q_proj.weight") == Location(layer=2, component="attn.q")
+
+
+def test_two_mapped_models_under_one_root_are_refused_by_name():
+    wrapper = _Wrapper(tiny("GPT2LMHeadModel"), teacher=tiny("GPT2LMHeadModel"))
+    structure = MapStructure(wrapper, component_map_for("GPT2LMHeadModel"))
+    assert isinstance(structure.depth(), Refusal) and "`mount=`" in structure.depth().reason
+    with pytest.raises(TunableViewError, match="name the one this view describes with `mount=`"):
+        MappedView(wrapper)
+    assert MappedView(wrapper, mount="teacher").structure().depth() == 3
+    assert MapStructure(wrapper, component_map_for("GPT2LMHeadModel"), mount="absent").refusal is not None
+
+
+def test_an_empty_mount_keeps_the_map_at_the_root():
+    wrapper = _Wrapper(tiny("GPT2LMHeadModel"))
+    assert isinstance(MapStructure(wrapper, component_map_for("GPT2LMHeadModel"), mount="").depth(), Refusal)
+    with pytest.raises(KeyError, match="no component map"):
+        MappedView(wrapper, mount="")
+
+
+def test_a_compiled_model_is_mounted_through_its_wrapper_segment():
+    model = tiny("GPT2LMHeadModel", "cpu")
+    compiled = torch.compile(model)  # an OptimizedModule holding the model as `_orig_mod`, stripped from names
+    structure = MappedView(compiled).structure()
+    assert structure.mount == "_orig_mod"
+    assert structure.locate("_orig_mod.transformer.h.1.attn.c_attn.weight").layer == 1
 
 
 def test_a_model_without_the_maps_blocks_is_refused_at_depth():

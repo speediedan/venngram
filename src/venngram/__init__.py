@@ -49,17 +49,19 @@ from venngram.errors import AddressError, AddressUnresolvable, Refusal, RoleErro
 from venngram.resolve import Location, ParamSpace, select, StructureProvider
 
 
-def view(model: Any, maps: Any = None, *, roles: dict[str, str] | None = None) -> Any:
+def view(model: Any, maps: Any = None, *, roles: dict[str, str] | None = None, mount: str | None = None) -> Any:
     """The tunable view of ``model``: its base map's structure and the roles of every overlay map that applies to it.
 
     ``view(model)`` finds the base map from the model's class and the overlays (PEFT's LoRA, a spliced SAE, a steering
     module) from the modules it carries, among the maps registered in this process and those the configured
     registries index. ``maps`` names the maps to use instead, and ``roles`` sets individual tensors' roles over the
-    overlays'. Returns a :class:`venngram.maps.MappedView`.
+    overlays'. A ``model`` that wraps the mapped model (a framework module carrying it under ``model.``) is described
+    at that submodule, named by ``mount`` or found as the one outermost mapped descendant. Returns a
+    :class:`venngram.maps.MappedView`.
     """
     from venngram.maps.view import MappedView
 
-    return MappedView(model, maps, roles=roles)
+    return MappedView(model, maps, roles=roles, mount=mount)
 
 __all__ = [
     "__version__",

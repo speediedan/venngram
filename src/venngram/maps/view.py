@@ -28,9 +28,10 @@ from collections.abc import Sequence
 
 from torch import nn
 
+from venngram.maps.check import submodule
 from venngram.maps.overlay import OverlayMap, overlays_for
-from venngram.maps.schema import ComponentMap
-from venngram.maps.structure import map_for, MapStructure
+from venngram.maps.schema import ComponentMap, known_architectures
+from venngram.maps.structure import find_mounts, map_for, MapStructure
 from venngram.tuning.errors import TunableViewError
 from venngram.tuning.views import CanonicalView
 
@@ -54,16 +55,43 @@ def overlay_roles(root: nn.Module, overlays: Sequence[OverlayMap]) -> dict[str, 
     return roles
 
 
+def _base_map(root: nn.Module, mount: str | None) -> tuple[ComponentMap, str | None]:
+    """The base map for ``root``, or for the submodule it is mounted at: named by ``mount``, else ``root`` itself, else
+    the one outermost descendant some known map is written for."""
+    if mount:
+        target = submodule(root, mount)
+        if target is None:
+            raise TunableViewError(f"{type(root).__name__} has no module {mount!r} to mount a base map at.")
+        return map_for(target), mount
+    try:
+        return map_for(root), mount
+    except KeyError:
+        if mount == "":
+            raise
+        mounts = find_mounts(root, known_architectures())
+        if len(mounts) > 1:
+            raise TunableViewError(f"{type(root).__name__} carries {len(mounts)} mapped models ({mounts}); name the "
+                                   "one this view describes with `mount=`.") from None
+        if not mounts:
+            raise
+        return map_for(root.get_submodule(mounts[0])), mounts[0]
+
+
 def _split(root: nn.Module, maps: ComponentMap | OverlayMap | Sequence[ComponentMap | OverlayMap] | None,
-           ) -> tuple[ComponentMap, list[OverlayMap]]:
+           mount: str | None = None) -> tuple[ComponentMap, list[OverlayMap], str | None]:
     if maps is None:
-        return map_for(root), overlays_for(root)
+        cmap, mount = _base_map(root, mount)
+        return cmap, overlays_for(root), mount
     listed = [maps] if isinstance(maps, (ComponentMap, OverlayMap)) else list(maps)
     bases = [m for m in listed if isinstance(m, ComponentMap)]
     if len(bases) > 1:
         raise TunableViewError(f"`maps` names {len(bases)} base maps ({[b.architecture for b in bases]}); a view has "
                                "one base map and any number of overlays.")
-    return (bases[0] if bases else map_for(root)), [m for m in listed if isinstance(m, OverlayMap)]
+    overlays = [m for m in listed if isinstance(m, OverlayMap)]
+    if bases:
+        return bases[0], overlays, mount
+    cmap, mount = _base_map(root, mount)
+    return cmap, overlays, mount
 
 
 class MappedView(CanonicalView):
@@ -76,21 +104,28 @@ class MappedView(CanonicalView):
             applies to it (:func:`~venngram.maps.overlay.overlays_for`). When only overlays are given, the base map
             is still looked up, and exactly those overlays apply.
         roles: Explicit roles, applied over the ones the overlays give.
-        prefix: The leading module path ``root`` lacks relative to the base map; found from the blocks when ``None``.
+        prefix: The leading module path the mapped model lacks relative to the base map; found from the blocks when
+            ``None``.
+        mount: The path of the submodule of ``root`` holding the mapped model, for a root that wraps it (a framework
+            module carrying a Hugging Face model under ``model.``, with its own modules beside it). ``None`` (the
+            default) uses ``root`` when a map describes it, and otherwise the one outermost descendant one does; ``""``
+            uses ``root`` only. The view's names stay ``root``'s, overlays and ``roles`` apply across all of ``root``,
+            and tensors outside the mount have no layer or component.
 
     Raises:
-        KeyError: If no base map is found for the model.
+        KeyError: If no base map is found for the model or a descendant of it.
         TunableViewError: If a role is invalid, two overlays disagree on a tensor's role, or ``maps`` names two base
-            maps.
+            maps, or ``root`` carries several mapped models and ``mount`` names none.
     """
 
     def __init__(self, root: nn.Module, maps: ComponentMap | OverlayMap | Sequence[ComponentMap | OverlayMap] |
-                 None = None, *, roles: dict[str, str] | None = None, prefix: str | None = None) -> None:
-        cmap, overlays = _split(root, maps)
+                 None = None, *, roles: dict[str, str] | None = None, prefix: str | None = None,
+                 mount: str | None = None) -> None:
+        cmap, overlays, mount = _split(root, maps, mount)
         super().__init__(root, roles={**overlay_roles(root, overlays), **(roles or {})})
         self.cmap = cmap
         self.overlays = tuple(overlays)
-        self._structure = MapStructure(root, cmap, prefix)
+        self._structure = MapStructure(root, cmap, prefix, mount)
 
     def structure(self) -> MapStructure:
         return self._structure
