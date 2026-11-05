@@ -7,8 +7,9 @@ one, and a model with no block list at all.
 import pytest
 import yaml
 from torch import nn
+from map_contracts import base_map_contract
 
-from venngram import ParamSpace, select
+from venngram import Location, ParamSpace, select
 from venngram.errors import AddressUnresolvable
 from venngram.maps import check_map_against_model, from_document, map_for, MappedView, register
 from venngram.maps.schema import _REGISTRY
@@ -82,6 +83,8 @@ def space(view) -> ParamSpace:
 def test_a_hybrid_stack_with_a_declared_kind_and_its_own_names():
     model, cmap = Hybrid(), from_document(yaml.safe_load(HYBRID), source="hybrid")
     assert check_map_against_model(cmap, model) == []
+    base_map_contract(cmap, model, expected={"trunk.1.attention.wq.weight": Location(layer=1, component="attn.q"),
+                                             "trunk.0.mixer.conv.weight": Location(layer=0, component="mixer.conv")})
     s = space(MappedView(model, cmap))
     assert {n.split(".")[1] for n in select("component:attn.q", s)} == {"1", "3"}  # attention lives on odd layers
     assert {n.split(".")[1] for n in select("component:mixer.*", s)} == {"0", "2"}
@@ -124,6 +127,9 @@ SEQ2SEQ = {
 def test_named_stacks_without_a_primary_one():
     model, cmap = Seq2Seq(), from_document(SEQ2SEQ)
     assert check_map_against_model(cmap, model) == []
+    base_map_contract(cmap, model, expected={"enc.1.ff.weight": Location(stack="encoder", layer=1, component="mlp"),
+                                             "dec.0.cross.weight": Location(stack="decoder", layer=0,
+                                                                           component="cross_attn")})
     s = space(MappedView(model, cmap))
     assert select("stack:encoder & layers:-1: & component:mlp", s) == ["enc.2.ff.weight", "enc.2.ff.bias"]
     assert select("stack:decoder & component:cross_attn", s) == [f"dec.{i}.cross.{p}" for i in range(2)

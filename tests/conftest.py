@@ -9,36 +9,41 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import hashlib
+import os
 from pathlib import Path
 
 import pytest
 import torch
+import yaml
 from torch import nn
 
-FIXTURE_MAPS = Path(__file__).parent / "fixtures" / "maps"
-FIXTURE_OVERLAYS = Path(__file__).parent / "fixtures" / "overlays"
+SEED_SNAPSHOT = Path(os.environ.get("VENNGRAM_TEST_SNAPSHOT", Path(__file__).parents[1] / "registry" / "snapshot"))
+SEED_MAPS = SEED_SNAPSHOT / "maps"
 
 
 @pytest.fixture(scope="session")
 def seed_registry(tmp_path_factory) -> str:
-    """The seed base maps (``fixtures/maps``) and overlay maps (``fixtures/overlays``) published to a local store and
-    indexed: what the Hub registry serves."""
-    import os
-
+    """Reindex the digest-checked export of a pinned Hub generation locally; never contact the Hub in tests."""
     from venngram import registry
     from venngram.store import publish
 
     root = tmp_path_factory.mktemp("registry")
     os.environ.setdefault("VENNGRAM_CACHE", str(root / "cache"))
-    maps = root / "maps"
+    lock = yaml.safe_load((SEED_SNAPSHOT / "snapshot.yaml").read_text(encoding="utf-8"))
+    assert lock["documents"], "An empty registry snapshot checks nothing"
+    maps = root / "documents"
     maps.mkdir()
-    for path in sorted(FIXTURE_MAPS.glob("*.yaml")):
-        (maps / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    (maps / "overlays").mkdir()
-    for path in sorted(FIXTURE_OVERLAYS.glob("*.yaml")):
-        (maps / "overlays" / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    publish("local", str(maps), maps, documents=[("component_map", p.name) for p in sorted(maps.glob("*.yaml"))]
-            + [("component_map", f"overlays/{p.name}") for p in sorted((maps / "overlays").glob("*.yaml"))])
+    documents = []
+    for entry in lock["documents"]:
+        path = SEED_SNAPSHOT / entry["path"]
+        data = path.read_bytes()
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"Snapshot digest mismatch: {path}"
+        target = maps / entry["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        documents.append(("component_map", entry["path"]))
+    publish("local", str(maps), maps, documents=documents)
     registry.write_index(registry.crawl([f"local:{maps}"]), root / "index", name="test-seeds")
     return f"local:{root / 'index'}"
 

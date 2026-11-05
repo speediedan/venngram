@@ -28,7 +28,7 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[test]" ruff pyright
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests scripts
       - name: Type check
         run: pyright -p pyproject.toml
       - name: Test

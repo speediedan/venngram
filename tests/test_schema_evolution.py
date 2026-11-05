@@ -7,7 +7,6 @@ import yaml
 
 pytest.importorskip("pyarrow")
 
-from conftest import FIXTURE_OVERLAYS  # noqa: E402
 from test_registry import build, directory, TINY  # noqa: E402
 
 from venngram import NewerSchemaError, registry  # noqa: E402
@@ -20,7 +19,8 @@ from venngram.maps.rules import rules_from_document  # noqa: E402
 from venngram.recipe import Recipe  # noqa: E402
 from venngram.support import SupportRecord  # noqa: E402
 
-LORA = yaml.safe_load((FIXTURE_OVERLAYS / "peft_lora.yaml").read_text())
+LORA = {"schema_version": 5, "overlay": "peft.lora", "applies_when": {"module_names": ["lora_A"]},
+        "roles": {"lora_A": "adapter:{key}"}}
 
 
 @pytest.fixture(autouse=True)
