@@ -7,7 +7,7 @@ import yaml
 
 pytest.importorskip("pyarrow")
 
-from conftest import FIXTURE_MAPS  # noqa: E402
+from conftest import SEED_MAPS  # noqa: E402
 
 from venngram import registry  # noqa: E402
 from venngram.maps import component_map_for, known_architectures, register, unregister  # noqa: E402
@@ -43,7 +43,7 @@ def directory(root: Path, maps: dict[str, dict], records: dict[str, dict] = (), 
 
 
 def seed_doc(name: str) -> dict:
-    return yaml.safe_load((FIXTURE_MAPS / name).read_text())
+    return yaml.safe_load((SEED_MAPS / name).read_text())
 
 
 def build(tmp_path, locations, name="idx") -> str:
@@ -93,7 +93,7 @@ def test_registries_are_consulted_in_order_after_in_process_registrations(tmp_pa
     second = build(tmp_path, [directory(tmp_path / "b", {"llama.yaml": seed_doc("llama.yaml")})], "second")
     registry.set_registries([first, second])
     assert component_map_for("LlamaForCausalLM").architecture == "LlamaForCausalLM"  # found in the second
-    mine = load_component_map(FIXTURE_MAPS / "opt.yaml")
+    mine = load_component_map(SEED_MAPS / "opt.yaml")
     register(mine)
     try:
         assert component_map_for("OPTForCausalLM") is mine

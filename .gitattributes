@@ -1,0 +1,2 @@
+# Registry evidence is compared to published SHA-256 digests. Preserve the exact bytes on every OS.
+registry/snapshot/** -text

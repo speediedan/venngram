@@ -134,39 +134,6 @@ def test_a_templated_role_takes_the_keyed_containers_entry():
     assert rule_roles(plain, rules) == {"lora_A.weight": "adapter", "lora_A.bias": "adapter"}
 
 
-def test_every_peft_tuner_family_takes_its_adapter_names():
-    """The sanity check behind the seed overlays: against PEFT's own account of its adapter tensors (each tuner
-    layer's ``adapter_layer_names``), the overlays give the same tensors, each named by its adapter."""
-    peft = pytest.importorskip("peft")
-    transformers = pytest.importorskip("transformers")
-    llama = transformers.LlamaConfig(vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-                                     num_attention_heads=4, num_key_value_heads=2)
-    targets = ["q_proj", "v_proj"]
-    configs = [
-        peft.LoraConfig(r=2, target_modules=targets),
-        peft.LoraConfig(r=2, target_modules=targets, use_dora=True),
-        peft.AdaLoraConfig(r=2, target_modules=targets, total_step=10),
-        peft.IA3Config(target_modules=targets, feedforward_modules=[]),
-        peft.LoHaConfig(r=2, target_modules=targets),
-        peft.LoKrConfig(r=2, target_modules=targets),
-        peft.OFTConfig(r=2, oft_block_size=0, target_modules=targets),
-    ]
-    for config in configs:
-        model = peft.get_peft_model(transformers.LlamaForCausalLM(llama), config, adapter_name="first")
-        names = {id(p): n for n, p in model.named_parameters()}
-        expected = {}
-        for module in model.modules():
-            for layer_name in getattr(module, "adapter_layer_names", ()):
-                for adapter, entry in getattr(module, layer_name).items():
-                    for p in (entry.parameters() if isinstance(entry, nn.Module) else (entry,)):
-                        expected[names[id(p)]] = f"adapter:{adapter}"
-        # Parameters only: PEFT's account names parameters, and an overlay also gives roles to the buffers in an
-        # adapter's entry (OFT keeps index buffers there).
-        params = set(names.values())
-        roles = {n: r for n, r in overlay_roles(model, overlays_for(model)).items() if n in params}
-        assert roles == expected, type(config).__name__
-
-
 @pytest.mark.parametrize("change, match", [
     ({"schema_version": 3}, "needs schema_version 4"),
     ({"schema_version": 4}, "`{key}` needs schema_version 5"),

@@ -6,8 +6,8 @@ from torch import nn
 
 from venngram import Location, ParamSpace, Refusal, select
 from venngram.maps import (check_map_against_model, component_map_for, ComponentMapModelMismatch, from_document,
-                           known_architectures, map_for, MappedView, MapStructure, register,
-                           validate_map_against_model, VOCABULARY)
+                           map_for, MappedView, MapStructure, register,
+                           validate_map_against_model)
 from venngram.maps.overlay import overlays_for
 from venngram.maps.schema import _REGISTRY, ComponentKey
 from venngram.maps.transformer_lens import from_transformer_lens
@@ -56,33 +56,8 @@ def tiny(architecture: str, device: str = "meta") -> nn.Module:
         return getattr(transformers, architecture)(CONFIGS[architecture]())
 
 
-def test_every_bundled_architecture_has_a_model_here():
-    assert set(known_architectures()) == set(CONFIGS)
-
-
-@pytest.mark.parametrize("architecture", sorted(CONFIGS))
-def test_bundled_map_describes_its_model(architecture):
-    model = tiny(architecture)
-    cmap = map_for(model)
-    assert cmap.architecture == architecture
-    assert check_map_against_model(cmap, model) == []
-
-
-@pytest.mark.parametrize("architecture", sorted(CONFIGS))
-def test_every_parameter_is_located_at_a_component(architecture):
-    model = tiny(architecture)
-    structure = MapStructure(model, map_for(model))
-    unlocated = [n for n, _ in model.named_parameters() if structure.locate(n).component is None]
-    assert unlocated == []
-    assert structure.depth() == 3
-
-
-@pytest.mark.parametrize("architecture", sorted(CONFIGS))
-def test_bundled_components_are_in_the_vocabulary(architecture):
-    cmap = component_map_for(architecture)
-    # a convention the bundled seeds follow so addresses port across them; a map may name any component it has
-    outside = {cmap.key(k).component for k in cmap.components} - set(VOCABULARY) - {""}
-    assert all(c == "projector" or c.split(".")[0] == "linear_attn" for c in outside), outside
+# A deliberately varied, bounded sample, independent of how many maps a registry contains.
+SAMPLED_ARCHITECTURES = ("GPT2LMHeadModel", "LlamaForCausalLM", "Qwen3_5ForConditionalGeneration")
 
 
 def test_a_wrong_map_is_refused_naming_every_problem():

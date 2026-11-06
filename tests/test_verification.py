@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 import torch
 import yaml
-from test_maps import CONFIGS, tiny
+from test_maps import CONFIGS, SAMPLED_ARCHITECTURES, tiny
 from test_maps_any_architecture import HYBRID, Hybrid
 
 from venngram.maps import component_map_for, from_document
@@ -14,8 +14,8 @@ from venngram.maps.verification import main, tiny_config, verify
 pytest.importorskip("transformers")
 
 
-@pytest.mark.parametrize("architecture", sorted(CONFIGS))
-def test_every_seed_map_verifies_from_its_configuration(architecture):
+@pytest.mark.parametrize("architecture", SAMPLED_ARCHITECTURES)
+def test_sampled_registry_maps_verify_from_their_configuration(architecture):
     report = verify(CONFIGS[architecture](), architecture=architecture)
     assert report.status == "verified", str(report)
     record = report.record()

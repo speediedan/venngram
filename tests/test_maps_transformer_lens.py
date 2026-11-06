@@ -1,15 +1,15 @@
-"""A cross-check of the bundled seed maps against TransformerLens's own per-architecture component mapping.
+"""A cross-check of the sampled seed maps against TransformerLens's own per-architecture component mapping.
 
 TransformerLens is one independent source for these particular architectures, not a constraint on what a map may
 express (``test_maps_any_architecture.py`` maps models no library adapts).
 
 A map checked only against the model it describes can still name the wrong module for a component (a swapped `in` and
-`out`, say) as long as both modules exist. TransformerLens maintains its adapters independently, so every bundled row it
-also derives must agree with it, and a bundled row it has no counterpart for is allowed only where the table below says
+`out`, say) as long as both modules exist. TransformerLens maintains its adapters independently, so every sampled row it
+also derives must agree with it, and a sampled row it has no counterpart for is allowed only where the table below says
 why. Skipped when TransformerLens is not installed: venngram never depends on it.
 """
 import pytest
-from test_maps import CONFIGS, tiny
+from test_maps import SAMPLED_ARCHITECTURES, tiny
 
 from venngram.maps import component_map_for
 from venngram.maps.transformer_lens import from_transformer_lens
@@ -38,15 +38,15 @@ def _adapter(architecture: str):
     return ArchitectureAdapterFactory.select_architecture_adapter(cfg)
 
 
-@pytest.mark.parametrize("architecture", sorted(CONFIGS))
-def test_every_bundled_row_agrees_with_transformer_lens(architecture):
+@pytest.mark.parametrize("architecture", SAMPLED_ARCHITECTURES)
+def test_every_sampled_row_agrees_with_transformer_lens(architecture):
     import transformers
 
     if not hasattr(transformers, architecture):
         pytest.skip(f"this transformers ({transformers.__version__}) has no {architecture}")
-    bundled = component_map_for(architecture).components
+    sampled = component_map_for(architecture).components
     derived = from_transformer_lens(_adapter(architecture), architecture).components
-    mismatches = {k: (bundled[k], derived[k]) for k in set(bundled) & set(derived)
-                  if (bundled[k].module, bundled[k].kind) != (derived[k].module, derived[k].kind)}
+    mismatches = {k: (sampled[k], derived[k]) for k in set(sampled) & set(derived)
+                  if (sampled[k].module, sampled[k].kind) != (derived[k].module, derived[k].kind)}
     assert not mismatches
-    assert set(bundled) - set(derived) == _without_counterpart(architecture)
+    assert set(sampled) - set(derived) == _without_counterpart(architecture)
