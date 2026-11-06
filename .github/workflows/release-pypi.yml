@@ -3,7 +3,8 @@ name: PyPI
 # Builds the distributions on every push to main, so a packaging break surfaces before a release. A published GitHub
 # release attaches them to the release, then publishes to TestPyPI and, after that succeeds, to PyPI. Both publishes
 # use trusted publishing (OIDC): no API tokens, and each runs in its own environment so the publisher registered on
-# TestPyPI and on PyPI can be scoped to it.
+# TestPyPI and on PyPI can be scoped to it. A manual run with publish_testpypi publishes the ref's version to TestPyPI
+# alone, so a release candidate can exercise the publishing path; only a published GitHub release reaches PyPI.
 
 on:
   push:
@@ -11,6 +12,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      publish_testpypi:
+        description: "Publish this ref's version to TestPyPI (never PyPI)"
+        type: boolean
+        default: false
 
 jobs:
   build-package:
@@ -63,7 +69,7 @@ jobs:
   publish-testpypi:
     runs-on: ubuntu-22.04
     needs: build-package
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_testpypi)
     environment:
       name: testpypi
       url: https://test.pypi.org/p/venngram
