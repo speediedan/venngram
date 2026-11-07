@@ -337,6 +337,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | address book | 1 | 1 | ignored at the top level |
 | recipe | 1 to 2 | 2 | refused in `method` and in an op's parameters |
 | support record | 1 to 2 | 2 | refused; an unknown *section* is skipped with a warning |
+| verification record | 1 | 1 | ignored |
 | manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
 | registry index header | 1 | 1 | |
 
@@ -355,9 +356,9 @@ one is passed over without being fetched.
 **Settled before 0.1, and not yet.** The windows above, the newer-schema refusal and the registry rule are what 0.1
 commits to. Still open (speediedan/venngram#18): a `venngram migrate` that rewrites an old-schema document to the
 current one, golden fixtures of every published schema, a deprecation cycle (warn, then refuse, with a strict mode) for
-document kinds, API names and vocabulary names (maps already carry `deprecated_since` and `replacement`), a version
-check when reading verification records, an audit of the places a new architecture or tool still needs a venngram
-change, and a stated compatibility surface for each consumer.
+document kinds, API names and vocabulary names (maps already carry `deprecated_since` and `replacement`), an audit
+of the places a new architecture or tool still needs a venngram change, and a stated compatibility surface for each
+consumer.
 
 ## Agent skill
 

@@ -57,6 +57,7 @@ import yaml
 from torch import nn
 
 from venngram.__about__ import __version__
+from venngram.errors import NewerSchemaError
 from venngram.maps.check import check_map_against_model, MapProblem, stack_length, submodule
 from venngram.maps.rules import config_field, core_rules, evaluate, layered, RuleSet, Unstated
 from venngram.maps.schema import component_map_for, ComponentMap, load_component_map, PRIMARY_STACK
@@ -65,6 +66,35 @@ from venngram.resolve import component_matches
 
 #: The schema of a verification record.
 RECORD_SCHEMA_VERSION = 1
+
+
+def read_record(doc: Any, source: str = "<record>") -> dict[str, Any]:
+    """A stored verification record, checked against the schemas this venngram reads (keys it does not know are
+    ignored: a record is descriptive).
+
+    Raises:
+        NewerSchemaError: If the record's schema is newer than this venngram reads.
+        ValueError: If the record is unversioned, of a schema older than any this venngram reads, or names no
+            architecture.
+    """
+    if not isinstance(doc, dict):
+        raise ValueError(f"{source}: a verification record is a mapping, got {type(doc).__name__}.")
+    version = doc.get("schema_version")
+    if version is None:
+        raise ValueError(f"{source}: the verification record has no `schema_version`; one written by venngram states "
+                         f"it (this venngram writes {RECORD_SCHEMA_VERSION}).")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ValueError(f"{source}: `schema_version` is an integer, got {version!r}.")
+    if version > RECORD_SCHEMA_VERSION:
+        raise NewerSchemaError(f"{source}: verification record schema {version} is newer than this venngram reads "
+                               f"({RECORD_SCHEMA_VERSION}); upgrade venngram to read it.",
+                               kind="verification_record", version=version, newest=RECORD_SCHEMA_VERSION)
+    if version < 1:
+        raise ValueError(f"{source}: verification record schema {version} is older than any this venngram reads "
+                         f"(1 to {RECORD_SCHEMA_VERSION}).")
+    if not isinstance(doc.get("architecture"), str) or not doc["architecture"]:
+        raise ValueError(f"{source}: the verification record names no `architecture`.")
+    return doc
 
 
 @dataclass(frozen=True)
@@ -374,11 +404,13 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
             small random-init model built from the configuration (:func:`tiny_config`).
         order: Run the order check.
         against: A stored verification record (:meth:`VerificationReport.record`) whose observed order this run's must
-            equal (the ``against_record`` check; needs ``order``).
+            equal (the ``against_record`` check; needs ``order``). It is read with :func:`read_record` first.
 
     Returns:
         The report; :attr:`VerificationReport.passed` is false when any check failed.
     """
+    if against is not None:
+        against = read_record(against, "against")
     model, source = None, "module"
     if isinstance(target, str):
         from transformers import AutoConfig  # an optional dependency
@@ -440,7 +472,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     against = None
     if args.against:
         with open(args.against, encoding="utf-8") as fh:
-            against = yaml.safe_load(fh)
+            against = read_record(yaml.safe_load(fh), args.against)
     try:
         report = verify(args.model, cmap, architecture=args.architecture, rules=args.rules, core=not args.no_core,
                         order=not args.no_order, against=against)
@@ -461,6 +493,7 @@ __all__ = [
     "check_shapes",
     "CheckResult",
     "default_inputs",
+    "read_record",
     "RECORD_SCHEMA_VERSION",
     "rules_for",
     "TINY",
