@@ -1,0 +1,6 @@
+# Golden fixture: a rules at schema 2, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 2
+kind: rules
+name: golden
+verify: {}

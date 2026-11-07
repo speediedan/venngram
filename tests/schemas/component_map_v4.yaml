@@ -1,0 +1,11 @@
+# Golden fixture: a component map at schema 4, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 4
+architecture: TinyDecoder
+components:
+  blocks.{i}:
+    module: layers.{i}
+    kind: block
+  blocks.{i}.attn:
+    module: layers.{i}.attn
+    kind: attn

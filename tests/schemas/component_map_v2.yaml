@@ -1,0 +1,17 @@
+# Golden fixture: a component map at schema 2, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 2
+architecture: TinyDecoder
+properties:
+  golden_note: schema 2
+components:
+  blocks.{i}:
+    module: layers.{i}
+    kind: block
+  blocks.{i}.attn:
+    module: layers.{i}.attn
+    kind: attn
+  blocks.{i}.mlp:
+    module: layers.{i}.mlp
+    kind: mlp
+    layers: 0-3

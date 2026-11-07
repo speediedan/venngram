@@ -1,0 +1,7 @@
+# Golden fixture: a address book at schema 2, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 2
+name: golden
+sets:
+  top: 'role:adapter & layers:-4:'
+  top_grad: '@top & of:grad'

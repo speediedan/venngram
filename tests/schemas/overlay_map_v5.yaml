@@ -1,0 +1,9 @@
+# Golden fixture: a overlay map at schema 5, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 5
+overlay: golden.lora
+applies_when:
+  module_names:
+  - lora_A
+roles:
+  lora_A: adapter:{key}

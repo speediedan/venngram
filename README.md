@@ -355,8 +355,9 @@ while a malformed document of a schema it reads still fails. Each index row reco
 one is passed over without being fetched.
 
 **Settled before 0.1, and not yet.** The windows above, the newer-schema refusal and the registry rule are what 0.1
-commits to. Still open (speediedan/venngram#18): a `venngram migrate` that rewrites an old-schema document to the
-current one, golden fixtures of every published schema, a deprecation cycle (warn, then refuse, with a strict mode) for
+commits to. `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
+reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers
+honest. Still open (speediedan/venngram#18): a deprecation cycle (warn, then refuse, with a strict mode) for
 document kinds, API names and vocabulary names (maps already carry `deprecated_since` and `replacement`), an audit
 of the places a new architecture or tool still needs a venngram change, and a stated compatibility surface for each
 consumer.
