@@ -73,6 +73,7 @@ import yaml
 
 from venngram.address import Term
 from venngram.book import AddressBook
+from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
@@ -88,7 +89,7 @@ _BARE_SCOPES = ("all", "last", "prompt", "generated")
 _APPLY_TO = {"all_tokens": "all", "last_token": "last", "prompt_tokens": "prompt", "generated_tokens": "generated"}
 
 
-class RecipeSchemaWarning(DeprecationWarning):
+class RecipeSchemaWarning(VenngramDeprecationWarning, DeprecationWarning):
     """A recipe was read in an older schema and migrated; re-write it in the current one."""
 
 

@@ -47,7 +47,8 @@ value (a recipe giving them a ``dose`` or ``doses`` is refused when read). A sta
 recorded: the consumer supplies ``t`` for each member (a value per layer, or per unit, such as a layer's median
 residual norm over a unit's output column norm), declares ``statistic`` in its support record, and refuses a
 statistic it cannot compute, or one that is zero for ``normalize``, by name. ``statistic`` and ``normalize`` by the
-same statistic are inverses.
+same statistic are inverses. :func:`register_transform` adds a transform, with a stated meaning and conformance
+vectors of its own.
 
 :func:`transform_cases` returns conformance vectors (each a pipeline, its members' inputs and the expected values), and
 :func:`check_transforms` runs a consumer's evaluator against them, so two consumers that honour a recipe are tested to
@@ -138,8 +139,21 @@ TRANSFORMS: dict[str, Mapping[str, ParamSpec]] = {
     "statistic": {"name": ParamSpec(str, True)},        # v * a statistic the consumer computes, e.g. a layer median
 }
 
+#: What each transform computes, by name (the table above for the core ones; :func:`register_transform` adds one).
+TRANSFORM_MEANINGS: dict[str, str] = {
+    "scale": "v * factor",
+    "abs": "|v|",
+    "normalize": "by max_abs: v / max |v_m| over the op's members (zero throughout when every value is zero); by a "
+                 "statistic t: v / t",
+    "sign_of": "sign(e_c) * |v|, for the member's value e_c in `column` of the `from` evidence table",
+    "sign_aware_scale": "sign(s) * |v| * factor, for the member's score s in the `from` column",
+    "statistic": "v * t, for the named statistic t the consumer supplies",
+}
+
 #: Transforms that read the ``from`` evidence table, so apply only to a ``from`` value.
-EVIDENCE_TRANSFORMS = frozenset({"sign_of", "sign_aware_scale"})
+EVIDENCE_TRANSFORMS: set[str] = {"sign_of", "sign_aware_scale"}
+
+_REGISTERED_CASES: dict[str, tuple[Any, ...]] = {}
 
 
 @dataclass(frozen=True)
@@ -177,9 +191,51 @@ class TransformCase:
 
 
 def transform_cases() -> tuple[TransformCase, ...]:
-    """venngram's transform conformance vectors (``data/transform_vectors.yaml``), covering every core transform."""
+    """The transform conformance vectors: venngram's own (``data/transform_vectors.yaml``, covering every core
+    transform), then those each :func:`register_transform` supplied."""
     doc = yaml.safe_load((resources.files("venngram") / "data" / "transform_vectors.yaml").read_text("utf-8"))
-    return tuple(_case(raw) for raw in doc["cases"])
+    return tuple(_case(raw) for raw in doc["cases"]) + tuple(c for cs in _REGISTERED_CASES.values() for c in cs)
+
+
+def register_transform(name: str, params: Mapping[str, ParamSpec], *, meaning: str,
+                       cases: Sequence[Mapping[str, Any]], reads_evidence: bool = False, replace: bool = False) -> None:
+    """Register a value transform, so recipes may name it and consumers may declare it.
+
+    A transform is shared only with what it computes: ``meaning`` states it, and ``cases`` are conformance vectors in
+    the ``data/transform_vectors.yaml`` form (each a pipeline using it, its members' inputs and the expected values),
+    which :func:`check_transforms` then runs against every consumer's evaluator.
+
+    Raises:
+        ValueError: If the name is taken and ``replace`` is not set, ``meaning`` is empty, no case uses the transform,
+            a case is malformed, or a transform that reads the evidence table has a case whose value is not ``from``.
+    """
+    if name in TRANSFORMS and not replace:
+        raise ValueError(f"transform {name!r} is already registered; pass replace=True to replace it")
+    if not isinstance(meaning, str) or not meaning.strip():
+        raise ValueError(f"transform {name!r}: state what it computes (`meaning`)")
+    known = {**TRANSFORMS, name: params}
+    try:
+        parsed = tuple(_case(c) for c in cases)
+    except (KeyError, StopIteration, TypeError, ValueError) as err:
+        raise ValueError(f"transform {name!r}: a conformance case is malformed ({type(err).__name__}: {err})") from err
+    if not any(t.name == name for c in parsed for t in c.transform):
+        raise ValueError(f"transform {name!r}: no conformance case uses it")
+    for c in parsed:
+        unknown = [t.name for t in c.transform if t.name not in known]
+        if unknown:
+            raise ValueError(f"transform {name!r}: case {c.name!r} uses unknown transforms {unknown}")
+        if len(c.expect) != len(c.members):
+            raise ValueError(f"transform {name!r}: case {c.name!r} expects {len(c.expect)} values for "
+                             f"{len(c.members)} members")
+        if reads_evidence and c.source != "from":
+            raise ValueError(f"transform {name!r} reads the evidence table, so case {c.name!r} needs a `from` value")
+    TRANSFORMS[name] = params
+    TRANSFORM_MEANINGS[name] = meaning
+    _REGISTERED_CASES[name] = parsed
+    if reads_evidence:
+        EVIDENCE_TRANSFORMS.add(name)
+    else:
+        EVIDENCE_TRANSFORMS.discard(name)
 
 
 def _case(raw: Mapping[str, Any]) -> TransformCase:
@@ -363,11 +419,13 @@ __all__ = [
     "OpSpec",
     "ParamSpec",
     "register_op",
+    "register_transform",
     "Support",
     "TARGETS",
     "TOKEN_SCOPES",
     "Transform",
     "TransformCase",
+    "TRANSFORM_MEANINGS",
     "TransformMember",
     "transform_cases",
     "TRANSFORMS",

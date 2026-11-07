@@ -53,6 +53,7 @@ from typing import Any
 
 import yaml
 
+from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import NewerSchemaError
 from venngram.maps.overlay import _OVERLAYS, overlay_from_document, OverlayMap
 from venngram.maps.rules import rules_from_document
@@ -296,7 +297,7 @@ class ComponentMap:
         return ComponentKey.parse(key, self.stacks)
 
 
-class ComponentMapDeprecationWarning(UserWarning):
+class ComponentMapDeprecationWarning(VenngramDeprecationWarning, UserWarning):
     """A retired component map was loaded; its ``replacement`` names what to use instead."""
 
 

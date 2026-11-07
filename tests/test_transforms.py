@@ -12,7 +12,11 @@
 """Value transform conformance vectors, checked by an evaluator written here from the stated meanings."""
 import math
 
-from venngram.ops import check_transforms, EVIDENCE_TRANSFORMS, transform_cases, TransformCase, TRANSFORMS
+import pytest
+
+from venngram import ops
+from venngram.ops import (check_transforms, EVIDENCE_TRANSFORMS, ParamSpec, register_transform, TRANSFORM_MEANINGS,
+                          transform_cases, TransformCase, TRANSFORMS)
 
 
 def sign(x):
@@ -84,3 +88,63 @@ def test_a_case_reads_its_starting_values_from_its_source():
     assert [m.start for m in by_name["sign-of-column"].members] == [2.0, -3.0, -1.5]
     assert [m.start for m in by_name["normalize-by-statistic"].members] == [2.0, 3.0]
     assert by_name["scale-dose"].column is None and math.isclose(by_name["scale-dose"].members[0].start, 0.5)
+
+
+@pytest.fixture
+def registered():
+    """Restore the transform registry after a test registers one."""
+    saved = (dict(TRANSFORMS), dict(TRANSFORM_MEANINGS), set(EVIDENCE_TRANSFORMS), dict(ops._REGISTERED_CASES))
+    yield
+    for live, old in zip((TRANSFORMS, TRANSFORM_MEANINGS, EVIDENCE_TRANSFORMS, ops._REGISTERED_CASES), saved):
+        live.clear()
+        live.update(old)
+
+
+CLIP = {"name": "clip-at-one", "value": {"from": "score"}, "transform": [{"clip": {"bound": 1.0}}],
+        "members": [{"columns": {"score": -3.0}}, {"columns": {"score": 0.5}}], "expect": [-1.0, 0.5]}
+
+
+def test_a_registered_transform_brings_its_meaning_and_vectors(registered):
+    register_transform("clip", {"bound": ParamSpec(float, True)}, meaning="v clamped to [-bound, bound]",
+                       cases=[CLIP])
+    assert "clip" in TRANSFORMS and TRANSFORM_MEANINGS["clip"].startswith("v clamped")
+    assert transform_cases()[-1].name == "clip-at-one"
+
+    def evaluate(case):
+        if case.transform[0].name == "clip":
+            b = case.transform[0].params["bound"]
+            return [max(-b, min(b, m.start)) for m in case.members]
+        return reference(case)
+
+    assert check_transforms(evaluate) == []
+    assert check_transforms(reference) == ["clip-at-one: raised AssertionError: no reference meaning for clip"]
+
+
+@pytest.mark.parametrize("kwargs, match", [
+    ({"name": "scale"}, "already registered"),
+    ({"meaning": " "}, "state what it computes"),
+    ({"cases": [{**CLIP, "transform": ["abs"]}]}, "no conformance case uses it"),
+    ({"cases": [{**CLIP, "expect": [1.0]}]}, "expects 1 values for 2 members"),
+    ({"cases": [{**CLIP, "transform": [{"clip": {"bound": 1.0}}, "bogus"]}]}, r"unknown transforms \['bogus'\]"),
+    ({"cases": [{**CLIP, "value": {"dose": 1.0}}], "reads_evidence": True}, "needs a `from` value"),
+    ({"cases": [{"name": "broken"}]}, "conformance case is malformed"),
+])
+def test_a_transform_without_a_stated_meaning_or_sound_vectors_is_refused(registered, kwargs, match):
+    args = {"name": "clip", "params": {"bound": ParamSpec(float, True)}, "meaning": "v clamped", "cases": [CLIP],
+            **kwargs}
+    with pytest.raises(ValueError, match=match):
+        register_transform(args.pop("name"), args.pop("params"), **args)
+    assert "clip" not in TRANSFORMS
+
+
+def test_a_registered_evidence_transform_is_refused_on_a_dose_when_read(registered):
+    from test_recipe import add, recipe_doc
+
+    from venngram.errors import AddressError
+    from venngram.recipe import Recipe
+
+    register_transform("clip", {"bound": ParamSpec(float, True)}, meaning="v clamped", cases=[CLIP],
+                       reads_evidence=True)
+    doc = recipe_doc([add("chess", {"dose": 1.0, "transform": [{"clip": {"bound": 1.0}}]})])
+    with pytest.raises(AddressError, match=r"\['clip'\] read the evidence table"):
+        Recipe.from_mapping(doc)
