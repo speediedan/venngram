@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 from test_maps import CONFIGS, tiny  # noqa: E402
 
 from venngram.maps import component_map_for, known_architectures  # noqa: E402
+from venngram.maps.schema import from_document  # noqa: E402
 from venngram.maps.drafter import (bundled_drafting_rules, draft_map, draft_with_model, DraftingRules,  # noqa: E402
                                    map_document, mine_rules, ModuleTreeSource)
 from venngram.registry import mined_rules  # noqa: E402
@@ -105,6 +106,11 @@ def test_the_drafter_is_a_map_source():
     try:
         cmap, provenance = derive_map("module_tree", "LlamaForCausalLM", model=tiny("LlamaForCausalLM"))
         assert provenance.source == "module_tree" and cmap.properties["draft"] is True
+        doc = map_document(cmap, provenance)  # what a published map records about what derived it
+        assert doc["provenance"] == {"kind": "map_source", "source": "module_tree", "version": "2"}
+        read = from_document(yaml.safe_load(yaml.safe_dump(doc, sort_keys=False)))
+        assert read.properties == cmap.properties and read.properties["draft"] is True
+        assert read.components == cmap.components and "provenance" not in map_document(cmap)
         with pytest.raises(SourceError, match="needs the model"):
             derive_map("module_tree", "LlamaForCausalLM")
     finally:
