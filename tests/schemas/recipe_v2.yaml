@@ -1,0 +1,40 @@
+# Golden fixture: a recipe at schema 2, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 2
+kind: recipe
+name: old
+model:
+  id: Qwen/Qwen3.5-4B
+  revision: abc123
+  revision_source: pinned
+book:
+  schema_version: 1
+  name: book
+  portability: checkpoint
+  applies_to:
+    models:
+    - id: Qwen/Qwen3.5-4B
+      revision: abc123
+  sets:
+    chess:
+      point: mlp.out.hook_in
+      layers:
+      - 13
+      - 14
+      units:
+        13:
+        - 7956
+        14:
+        - 8949
+stages:
+- site: mlp.out.hook_in
+  tokens: all
+  ops:
+  - op: scale
+    target:
+      set: chess
+    value:
+      dose: 0.8
+      transform:
+      - statistic:
+          name: layer_median

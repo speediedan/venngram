@@ -1,0 +1,12 @@
+# Golden fixture: a support record at schema 3, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 3
+kind: support_record
+name: golden-steerer
+sections:
+  steering:
+    ops:
+    - scale
+    of:
+    - value
+    - grad
