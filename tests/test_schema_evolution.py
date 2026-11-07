@@ -16,6 +16,7 @@ from venngram.maps import component_map_for, from_document  # noqa: E402
 from venngram.maps.drafter import DraftingRules  # noqa: E402
 from venngram.maps.overlay import overlay_from_document, OVERLAY_SCHEMA_VERSION  # noqa: E402
 from venngram.maps.rules import rules_from_document  # noqa: E402
+from venngram.maps.verification import read_record, RECORD_SCHEMA_VERSION  # noqa: E402
 from venngram.recipe import Recipe  # noqa: E402
 from venngram.support import SupportRecord  # noqa: E402
 
@@ -35,6 +36,7 @@ def cache(tmp_path, monkeypatch):
     (rules_from_document, {"schema_version": 99, "kind": "rules", "name": "x", "verify": {}}, "rules"),
     (DraftingRules.from_mapping, {"schema_version": 99, "kind": "rules", "name": "x", "draft": {}}, "rules"),
     (SupportRecord.from_mapping, {"schema_version": 99, "kind": "support_record", "sections": {}}, "support_record"),
+    (read_record, {"schema_version": 99, "architecture": "TinyDecoder"}, "verification_record"),
 ])
 def test_a_too_new_document_is_refused_as_newer_not_as_malformed(read, doc, kind):
     with pytest.raises(NewerSchemaError, match="newer than this venngram reads") as err:
@@ -121,4 +123,41 @@ def test_newest_readable_follows_each_kind_and_overlay_subjects():
 
     assert registry.newest_readable("component_map", "LlamaForCausalLM") == COMPONENT_MAP_SCHEMA_VERSION
     assert registry.newest_readable("component_map", "overlay:peft.lora") == OVERLAY_SCHEMA_VERSION
-    assert registry.newest_readable("verification_record") is None
+    assert registry.newest_readable("verification_record") == RECORD_SCHEMA_VERSION
+
+
+RECORD = {"schema_version": RECORD_SCHEMA_VERSION, "architecture": "TinyDecoder", "status": "verified",
+          "checks": {}, "later_annotation": "ignored"}
+
+
+@pytest.mark.parametrize("doc, match", [
+    ({"architecture": "TinyDecoder", "status": "verified"}, "has no `schema_version`"),
+    ({**RECORD, "schema_version": "1"}, "is an integer"),
+    ({**RECORD, "schema_version": 0}, "older than any this venngram reads"),
+    ({**RECORD, "architecture": ""}, "names no `architecture`"),
+    (["not", "a", "record"], "is a mapping"),
+])
+def test_an_unreadable_verification_record_is_refused_by_name(doc, match):
+    with pytest.raises(ValueError, match=match) as err:
+        read_record(doc)
+    assert not isinstance(err.value, NewerSchemaError)
+    assert read_record(RECORD) == RECORD  # a key it does not know is kept, not refused
+
+
+def test_verify_against_a_newer_record_refuses_before_running():
+    from venngram.maps.verification import verify
+
+    with pytest.raises(NewerSchemaError, match="verification record schema 99"):
+        verify(object(), against={**RECORD, "schema_version": 99})
+
+
+def test_a_newer_verification_record_vouches_for_no_map(tmp_path):
+    newer = directory(tmp_path / "newer", {"tiny.yaml": TINY},
+                      {"tiny.record.yaml": {**RECORD, "schema_version": 99}})
+    with pytest.warns(registry.NewerSchemaWarning, match="verification_record schema 99"):
+        location = build(tmp_path, [newer])
+    registry.set_registries([location])
+    assert registry.rows("component_map", "TinyDecoder")[0].status == "unverified"
+    readable = directory(tmp_path / "readable", {"tiny.yaml": TINY}, {"tiny.record.yaml": RECORD})
+    registry.set_registries([build(tmp_path, [readable], name="idx2")])
+    assert registry.rows("component_map", "TinyDecoder")[0].status == "verified"
