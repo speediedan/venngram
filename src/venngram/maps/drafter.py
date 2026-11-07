@@ -355,11 +355,18 @@ def _first(rules: Sequence[DraftingRules], scope: str, name: str, siblings: set[
     return None
 
 
-def map_document(cmap: ComponentMap) -> dict[str, Any]:
-    """A component map as a schema 3 document (``from_document`` reads it back)."""
+def map_document(cmap: ComponentMap, provenance: Any = None) -> dict[str, Any]:
+    """A component map as a schema 3 document (``from_document`` reads it back), with its ``properties`` (a draft's
+    ``draft`` flag and what it leaves unconfirmed among them) and, given the :class:`~venngram.sources.Provenance` that
+    :func:`~venngram.sources.derive_map` returns, the source and version that derived it, which a registry index
+    records for the map. Both are descriptive keys: a reader that does not know them ignores them."""
     declared = {k: {"output": v.output, "sublayer": v.sublayer} for k, v in cmap.kinds.items()
                 if k not in BUNDLED_KINDS}
     doc: dict[str, Any] = {"schema_version": 3, "architecture": cmap.architecture}
+    if provenance is not None:
+        doc["provenance"] = provenance.to_mapping()
+    if cmap.properties:
+        doc["properties"] = dict(cmap.properties)
     if declared:
         doc["kinds"] = declared
     doc["components"] = {k: {"module": e.module, "kind": e.kind, **({"optional": True} if e.optional else {})}
