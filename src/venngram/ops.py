@@ -70,6 +70,8 @@ from typing import Any
 
 import yaml
 
+from venngram.address import OF
+
 OPERAND_KINDS = ("none", "vector", "pair", "subspace")
 TARGETS = ("activation", "units", "features")
 TOKEN_SCOPES = ("all", "last", "prompt", "generated", "positions", "slice")
@@ -250,6 +252,9 @@ class Support:
         transforms: [statistic]           # default: none
         sites: [mlp.out.hook_in, "blocks.*"]   # names or fnmatch patterns; default: any
         bases: [unfolded]                 # default: any
+
+    ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
+    ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
     """
 
     ops: frozenset[str]
@@ -260,6 +265,7 @@ class Support:
     sites: frozenset[str] | Callable[[str], bool] | None = None
     bases: frozenset[str] | None = None
     name: str | None = None
+    of: frozenset[str] = frozenset({"value"})
 
     def site_ok(self, site: str) -> bool:
         if self.sites is None:
@@ -309,7 +315,7 @@ class Support:
 #: Support record fields beyond ``ops``, with the names each may take (``None``: any name).
 _SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "tokens": TOKEN_SCOPES,
                                                       "values": VALUE_SOURCES, "transforms": None, "sites": None,
-                                                      "bases": None}
+                                                      "bases": None, "of": OF}
 _GLOB = re.compile(r"[*?\[]")
 
 
@@ -327,6 +333,10 @@ def check_support(recipe: Any, support: Support) -> list[str]:
                 out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
             if op.target_kind(recipe.book) not in support.targets:
                 out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
+            of = (recipe.book.sets()[op.target].of or "value") if op.target is not None else "value"
+            if of not in support.of:
+                out.append(f"{at}: target set `{op.target}` addresses `of: {of}`, which this consumer does not act on "
+                           f"(it declares {sorted(support.of)})")
             if tokens not in support.tokens:
                 out.append(f"{at}: token scope `{tokens}` is not supported")
             if op.value is not None:

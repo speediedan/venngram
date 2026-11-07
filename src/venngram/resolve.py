@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from venngram.address import And, Expr, Guarded, Minus, parse, Ref, Term, to_string
+from venngram.address import And, Expr, Guarded, Minus, parse, Ref, references, Term, terms, to_string
 from venngram.errors import AddressUnresolvable, Refusal
 from venngram.roles import selector_matches
 
@@ -159,9 +159,11 @@ _TARGET_PROVIDER = {"site": "a site resolver", "feature": "a latent resolver", "
 
 
 class _Evaluator:
-    def __init__(self, space: ParamSpace, sets: Mapping[str, Any]) -> None:
+    def __init__(self, space: ParamSpace, sets: Mapping[str, Any], *, masks: bool = False) -> None:
         self.space = space
         self.sets = sets
+        self.masks = masks
+        """Whether ``units`` on tensors is a gradient mask (the address is ``of: grad``), so it does not filter."""
         self.refusals: list[Refusal] = []
         self._cache: dict[str, list[str]] = {}
         self._stack: list[str] = []
@@ -216,10 +218,10 @@ class _Evaluator:
         if t.target != "param":
             return self.refuse(f"`{to_string(t)}` addresses a {t.target}, which resolves through "
                                f"{_TARGET_PROVIDER[t.target]} (interpretune supplies them), not over tensors")
-        if t.units is not None:
+        if t.units is not None and not self.masks:
             return self.refuse(f"`units:{t.units.spec}` on tensors: tuning granularity is the whole tensor, so a "
                                "tensor's units are tuned through a unit adapter, a tensor of its own with an `adapter` "
-                               "role")
+                               "role, or masked as gradients with `of: grad`")
         checks = self.checks(t)
         if checks is None:
             return []
@@ -271,6 +273,120 @@ class _Evaluator:
         return checks
 
 
+def gradient_of(address: Any, sets: Mapping[str, Any] | None = None) -> str:
+    """What a consumer acts on for ``address``: ``value``, or ``grad`` when its terms say ``of: grad``, following
+    references into ``sets``. ``of`` does not filter, so :func:`select` gives the same tensors either way.
+
+    >>> gradient_of("role:adapter & of:grad"), gradient_of("role:adapter")
+    ('grad', 'value')
+
+    Raises:
+        AddressUnresolvable: If its terms disagree on ``of`` (a set mixing values and gradients has no one thing to act
+            on), or a referenced set is missing.
+    """
+    expr = parse(address)
+    seen, refusals = _of_values(expr, sets or {})
+    if refusals:
+        raise AddressUnresolvable(to_string(expr), refusals)
+    return next(iter(seen), "value")
+
+
+def _of_values(expr: Expr, sets: Mapping[str, Any]) -> tuple[dict[str, list[str]], list[Refusal]]:
+    """The ``of`` values ``expr``'s terms set (each with where it came from), and the refusals: a missing set, or terms
+    that disagree."""
+    seen: dict[str, list[str]] = {}
+    refusals: list[Refusal] = []
+
+    def walk(e: Expr, via: str, stack: tuple[str, ...]) -> None:
+        for t in terms(e):
+            if t.of is not None:
+                seen.setdefault(t.of, []).append(via or to_string(t))
+        for name in references(e):
+            if name in stack:
+                continue  # a cycle is select's to report
+            if name not in sets:
+                refusals.append(Refusal(f"no set is named `@{name}`", tuple(sorted(f"@{s}" for s in sets))))
+                continue
+            walk(parse(sets[name]), f"@{name}", (*stack, name))
+
+    walk(expr, "", ())
+    if len(seen) > 1:
+        refusals.append(Refusal("its terms disagree on `of` (" + "; ".join(
+            f"`{v}` in {', '.join(dict.fromkeys(w))}" for v, w in seen.items()) + "): a set is either values or "
+            "gradients"))
+    return seen, refusals
+
+
+def _mask_terms(expr: Expr, sets: Mapping[str, Any]) -> tuple[list[Term], list[str]]:
+    """The terms of ``expr`` that set ``units``, following references, and why they cannot form one gradient mask: a
+    mask is taken from one conjunction, so a unit set under a union or a difference, or two unit sets, are refused."""
+    found: list[Term] = []
+    problems: list[str] = []
+
+    def walk(e: Expr, conjunctive: bool, stack: tuple[str, ...]) -> None:
+        if isinstance(e, Term):
+            if e.units is not None:
+                found.append(e)
+                if not conjunctive:
+                    problems.append(f"`units:{e.units.spec}` sits under a union or a difference")
+        elif isinstance(e, Ref):
+            if e.name in sets and e.name not in stack:
+                walk(parse(sets[e.name]), conjunctive, (*stack, e.name))
+        elif isinstance(e, Guarded):
+            walk(e.expr, conjunctive, stack)
+        elif isinstance(e, And):
+            for i in e.items:
+                walk(i, conjunctive, stack)
+        elif isinstance(e, Minus):
+            walk(e.left, conjunctive, stack)
+            walk(e.right, False, stack)
+        else:
+            for i in e.items:
+                walk(i, False, stack)
+
+    walk(expr, True, ())
+    if len(found) > 1:
+        problems.append("it intersects " + " and ".join(f"`units:{t.units.spec}`" for t in found if t.units))
+    return found, problems
+
+
+def gradient_masks(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = None, *,
+                   widths: Mapping[str, int]) -> dict[str, tuple[int, ...]]:
+    """The gradient mask of each tensor an ``of: grad`` address selects: the indices along its first axis (a weight's
+    output rows, a vector's entries) whose gradients are kept. A tensor the address selects without a unit set keeps
+    all of them; a per-layer unit set gives a tensor at a layer it does not name an empty mask.
+
+    Args:
+        address: An address whose terms say ``of: grad``.
+        space: The tensors to select from.
+        sets: Named sets that references resolve against.
+        widths: Each tensor's first-axis length, by name.
+
+    Raises:
+        AddressUnresolvable: As :func:`select`, if the address is not ``of: grad``, or its unit sets cannot form one
+            mask (a unit set under a union or a difference, or two unit sets intersected).
+    """
+    sets = sets or {}
+    expr = parse(address)
+    if gradient_of(expr, sets) != "grad":
+        raise AddressUnresolvable(to_string(expr), [Refusal("a gradient mask needs an `of: grad` address")])
+    found, problems = _mask_terms(expr, sets)
+    if problems:
+        raise AddressUnresolvable(to_string(expr), [Refusal(f"{p}: a gradient mask is taken from one conjunction")
+                                                    for p in problems])
+    names = select(expr, space, sets)
+    units = found[0].units if found else None
+    structure = space.structure
+    out: dict[str, tuple[int, ...]] = {}
+    for n in names:
+        if units is None:
+            out[n] = tuple(range(widths[n]))
+        else:
+            layer = structure.locate(n).layer if structure is not None and units.per_layer is not None else None
+            out[n] = units.for_layer(layer, widths[n])
+    return out
+
+
 def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = None) -> list[str]:
     """The tensors of ``space`` that ``address`` selects, in ``space`` order.
 
@@ -281,11 +397,17 @@ def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = Non
 
     Raises:
         AddressUnresolvable: With every refusal, if any field does not resolve, a referenced set is missing or matches
-            nothing, references form a cycle, or the address matches nothing (and is not ``optional``).
+            nothing, references form a cycle, the address matches nothing (and is not ``optional``), or its terms
+            disagree on ``of``. ``units`` on tensors is refused unless the address is ``of: grad``, where it is a
+            gradient mask (:func:`gradient_masks`) and does not filter.
     """
     expr = parse(address)
-    ev = _Evaluator(space, sets or {})
+    seen, of_refusals = _of_values(expr, sets or {})
+    ev = _Evaluator(space, sets or {}, masks=list(seen) == ["grad"])
     out = ev.run(expr)
+    for refusal in of_refusals:  # a missing set is the evaluator's to report as well, once
+        if refusal not in ev.refusals:
+            ev.refusals.append(refusal)
     if not out and not ev.refusals and not (isinstance(expr, Guarded) and expr.optional):
         ev.refuse("it matches no tensor")
     if ev.refusals:
@@ -295,6 +417,8 @@ def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = Non
 
 __all__ = [
     "component_matches",
+    "gradient_masks",
+    "gradient_of",
     "leaf_matches",
     "Location",
     "module_matches",

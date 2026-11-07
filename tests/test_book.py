@@ -49,7 +49,7 @@ def test_imports_are_namespaced_and_keep_their_own_references(model, tmp_path):
 
 @pytest.mark.parametrize("doc, match", [
     ({"name": "x", "sets": {"a": "role:adapter"}}, "`schema_version` is required"),
-    ({"schema_version": 2, "sets": {"a": "role:adapter"}}, "newer venngram"),
+    ({"schema_version": 3, "sets": {"a": "role:adapter"}}, "newer venngram"),
     ({"schema_version": 0, "sets": {"a": "role:adapter"}}, "older than"),
     ({"schema_version": 1, "sets": {}}, "non-empty mapping"),
     ({"schema_version": 1, "sets": {"a b": "role:adapter"}}, "not a valid set name"),

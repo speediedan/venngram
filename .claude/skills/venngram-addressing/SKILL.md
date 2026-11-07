@@ -35,6 +35,7 @@ tighter than `|`, and parentheses group. Operators are delimited by spaces, so v
 | `point` | an activation site (steering), not tensors | `point:resid_post` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, linear maps a site is read through | `features:sae` |
 | `units` | indices along a target's unit axis (neurons, features) | `units:[431, 1007]` |
+| `of` | `grad` acts on the gradient of what the rest selects (never filters; book schema 2); with `units` on tensors, a gradient mask | `of:grad` |
 
 Examples, on a four-block model with a LoRA pair under each block's `q_proj`:
 

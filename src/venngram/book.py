@@ -44,7 +44,8 @@ kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it int
 
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
-version; a key that changes what a set selects does.
+version; a key that changes what a set selects does. Schema 2 adds the ``of`` address field (a set's gradients), so a
+book whose sets use it is schema 2, and every other book stays readable as schema 1.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -72,12 +73,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from venngram.address import Expr, parse, references, rename_refs
+from venngram.address import Expr, parse, references, rename_refs, terms
 from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 1)
+SCHEMA_WINDOW = (1, 2)
+#: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
+OF_SCHEMA = 2
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -165,7 +168,7 @@ class AddressBook:
             source: Where it came from, for messages.
             base_dir: The directory relative imports resolve against (the current directory when ``None``).
             inline: A book written inside another document (a schedule's ``addresses`` key): ``schema_version`` and
-                ``name`` default to the current version and ``source``.
+                ``name`` default to the current version (the one its sets need) and ``source``.
 
         Raises:
             AddressError: If the book is malformed, an import cannot load or forms a cycle, a reference names no set,
@@ -200,6 +203,13 @@ class AddressBook:
                     own[set_name] = parse(address)
                 except VenngramError as err:
                     raise AddressError(f"{source}: set `{set_name}`: {err}") from err
+        uses_of = sorted(n for n, expr in own.items() if any(t.of is not None for t in terms(expr)))
+        if uses_of and inline and "schema_version" not in doc:
+            version = OF_SCHEMA  # an inline book takes the version its sets need
+        if uses_of and version < OF_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_of} use the `of` field, which needs address book schema "
+                               f"{OF_SCHEMA}, not {version}: an older venngram would refuse it by name rather than "
+                               "pass over it.")
         imports = cls._load_imports(doc.get("imports") or {}, source, base_dir, _loading)
         known = {k for k in own} | {f"{ns}.{s}" for ns, book in imports.items() for s in book.sets()}
         extra = {k: v for k, v in doc.items() if k not in _KNOWN_KEYS}
