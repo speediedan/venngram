@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from venngram.address import And, Expr, Guarded, Minus, parse, Ref, Term, to_string
+from venngram.address import And, Expr, Guarded, Minus, parse, Ref, references, Term, terms, to_string
 from venngram.errors import AddressUnresolvable, Refusal
 from venngram.roles import selector_matches
 
@@ -216,6 +216,10 @@ class _Evaluator:
         if t.target != "param":
             return self.refuse(f"`{to_string(t)}` addresses a {t.target}, which resolves through "
                                f"{_TARGET_PROVIDER[t.target]} (interpretune supplies them), not over tensors")
+        if t.units is not None and t.of == "grad":
+            return self.refuse(f"`units:{t.units.spec} & of:grad` on tensors is a gradient mask, and this version does "
+                               "not resolve one yet; address the whole tensors' gradients, or tune the units through "
+                               "a unit adapter")
         if t.units is not None:
             return self.refuse(f"`units:{t.units.spec}` on tensors: tuning granularity is the whole tensor, so a "
                                "tensor's units are tuned through a unit adapter, a tensor of its own with an `adapter` "
@@ -271,6 +275,44 @@ class _Evaluator:
         return checks
 
 
+def gradient_of(address: Any, sets: Mapping[str, Any] | None = None) -> str:
+    """What a consumer acts on for ``address``: ``value``, or ``grad`` when its terms say ``of: grad``, following
+    references into ``sets``. ``of`` does not filter, so :func:`select` gives the same tensors either way.
+
+    >>> gradient_of("role:adapter & of:grad"), gradient_of("role:adapter")
+    ('grad', 'value')
+
+    Raises:
+        AddressUnresolvable: If its terms disagree on ``of`` (a set mixing values and gradients has no one thing to act
+            on), or a referenced set is missing.
+    """
+    sets = sets or {}
+    expr = parse(address)
+    seen: dict[str, list[str]] = {}
+    refusals: list[Refusal] = []
+
+    def walk(e: Expr, via: str, stack: tuple[str, ...]) -> None:
+        for t in terms(e):
+            if t.of is not None:
+                seen.setdefault(t.of, []).append(via or to_string(t))
+        for name in references(e):
+            if name in stack:
+                continue  # a cycle is select's to report
+            if name not in sets:
+                refusals.append(Refusal(f"no set is named `@{name}`", tuple(sorted(f"@{s}" for s in sets))))
+                continue
+            walk(parse(sets[name]), f"@{name}", (*stack, name))
+
+    walk(expr, "", ())
+    if len(seen) > 1:
+        refusals.append(Refusal("its terms disagree on `of` (" + "; ".join(
+            f"`{v}` in {', '.join(dict.fromkeys(w))}" for v, w in seen.items()) + "): a set is either values or "
+            "gradients"))
+    if refusals:
+        raise AddressUnresolvable(to_string(expr), refusals)
+    return next(iter(seen), "value")
+
+
 def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = None) -> list[str]:
     """The tensors of ``space`` that ``address`` selects, in ``space`` order.
 
@@ -295,6 +337,7 @@ def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = Non
 
 __all__ = [
     "component_matches",
+    "gradient_of",
     "leaf_matches",
     "Location",
     "module_matches",

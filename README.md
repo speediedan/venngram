@@ -41,6 +41,7 @@ An address is a record whose fields intersect:
 | `point` | an activation site | `resid_post` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, and maps a site is read through | `sae`, `jlens` |
 | `units` | indices along a target's unit axis | `[431, 1007]` |
+| `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters | `grad` |
 
 The string form writes each field as `<field>:<value>`:
 
@@ -334,7 +335,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 4 | 4 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 | 1 | ignored at the top level |
+| address book | 1 to 2 | 1, or 2 when a set uses `of` | ignored at the top level |
 | recipe | 1 to 2 | 2 | refused in `method` and in an op's parameters |
 | support record | 1 to 2 | 2 | refused; an unknown *section* is skipped with a warning |
 | verification record | 1 | 1 | ignored |

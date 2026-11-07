@@ -37,6 +37,8 @@ space      a registered linear map the site is read through                     
 leaf       a tensor-name suffix, matched on whole segments                         ``weight``, ``lora_A.*``
 units      an index set along the target's unit axis: a list, a slice, or per      ``[431, 1007]``
            layer
+of         what the consumer acts on: ``value`` (the default) or ``grad``, the     ``grad``
+           gradient of what the rest of the address selects
 =========  ======================================================================  ===============================
 
 The string form:
@@ -49,6 +51,12 @@ The string form:
 
 In the mapping form, the fields of one mapping intersect, ``any: [...]`` unites, ``all: [...]`` intersects,
 ``exclude: ...`` subtracts, ``optional: true`` allows an empty match and ``expect: N`` requires exactly ``N`` members.
+
+``of`` does not filter: an address selects the same tensors or sites with it as without, and ``of: grad`` says that
+the consumer acts on their gradients (a tensor's gradient, or the gradient with respect to the activation at a site).
+It composes like any field (``(@top - @top_q) & of:grad``), and an expression whose terms disagree on it is refused
+when it is resolved (:func:`venngram.resolve.gradient_of`), since a set mixing values and gradients has no one thing
+to act on. A book that uses it is address book schema 2.
 
 >>> parse("role:adapter & layers:-4:")
 Term(role='adapter', layers=LayerSet('-4:'))
@@ -70,7 +78,9 @@ from venngram.roles import parse_selector
 from venngram.units import SidecarRef
 
 FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "features", "subspace", "space", "leaf",
-          "units")
+          "units", "of")
+#: What an address's consumer acts on (the ``of`` field).
+OF = ("value", "grad")
 COMBINATORS = ("any", "all", "exclude")
 MODIFIERS = ("optional", "expect")
 TARGETS = ("param", "site", "feature", "subspace")
@@ -267,6 +277,8 @@ def _check_field(name: str, value: Any) -> Any:
         return LayerSet.parse(value)
     if name == "units":
         return UnitSet.parse(value)
+    if name == "of" and value not in OF:
+        raise AddressError(f"The `of` field is {' or '.join(OF)}, got {value!r}.")
     if not isinstance(value, str) or not value:
         raise AddressError(f"The `{name}` field takes a non-empty string, got {value!r}.")
     if name == "role":
@@ -299,6 +311,7 @@ class Term:
     space: str | None = None
     leaf: str | None = None
     units: UnitSet | None = None
+    of: str | None = None
 
     def __post_init__(self) -> None:
         for f in FIELDS:
@@ -684,6 +697,7 @@ __all__ = [
     "Ref",
     "references",
     "rename_refs",
+    "OF",
     "TARGETS",
     "Term",
     "terms",
