@@ -96,7 +96,8 @@ selection and what is done to it travel together in one document. A treatment (a
 is ordered **stages**, each applying ordered **ops** at one site under one
 token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
-a per-unit table, or a column of recorded evidence through declared transforms). Ops are declared specs
+a per-unit table, or a column of recorded evidence through declared transforms, each with a stated meaning and
+conformance vectors a consumer's evaluator runs). Ops are declared specs
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, and any registered); venngram
 validates and composes them and never executes one. A token scope is `all`, `last`, `prompt` (the input, before any
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as

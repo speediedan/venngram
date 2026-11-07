@@ -22,9 +22,36 @@ The core ops (:data:`OPS`): ``replace``, ``add`` (sums), ``scale`` (multiplies),
 remove the component in a span, a ``fraction`` of it), ``patch`` (swap coordinates along a pair of directions) and
 ``clamp`` (bound coordinates in a basis). :func:`register_op` adds one.
 
-Values derived from evidence pass through a **transform pipeline** from a small declared vocabulary
-(:data:`TRANSFORMS`); a transform a consumer computes from the model (a dose normalized by a layer statistic) is a
-``statistic`` the consumer names and declares it supports.
+Values pass through a **transform pipeline** from a small declared vocabulary (:data:`TRANSFORMS`), applied in order
+to each member of the op: each unit or feature its target set names, or the whole activation, one member, for an op
+without a target. A member's value starts as the op's ``dose``, its own entry in ``doses``, or its own value in the
+``from`` column of the evidence table, and each transform maps it to the next:
+
+====================================  =============================================================================
+transform                             value for a member, given ``v``
+====================================  =============================================================================
+``scale {factor: f}``                 ``v * f``
+``abs``                               ``|v|``
+``normalize {by: max_abs}``           ``v / max(|v_m|)`` over the op's members ``m`` (not the whole evidence table);
+                                      zero for every member when every value is zero
+``normalize {by: <statistic>}``       ``v / t``: expresses ``v`` in units of the named statistic ``t``
+``statistic {name: <statistic>}``     ``v * t``: ``v`` is a dose in units of the named statistic ``t``, made absolute
+``sign_of {column: c}``               ``sign(e_c) * |v|``, for the member's value ``e_c`` in column ``c`` of the
+                                      ``from`` evidence table
+``sign_aware_scale {factor: f}``      ``sign(s) * |v| * f``, for the member's score ``s`` in the ``from`` column:
+                                      ``sign_of`` that column, then ``scale``
+====================================  =============================================================================
+
+``sign(0)`` is ``0``. ``sign_of`` and ``sign_aware_scale`` read the evidence table, so they apply only to a ``from``
+value (a recipe giving them a ``dose`` or ``doses`` is refused when read). A statistic is computed from the model, not
+recorded: the consumer supplies ``t`` for each member (a value per layer, or per unit, such as a layer's median
+residual norm over a unit's output column norm), declares ``statistic`` in its support record, and refuses a
+statistic it cannot compute, or one that is zero for ``normalize``, by name. ``statistic`` and ``normalize`` by the
+same statistic are inverses.
+
+:func:`transform_cases` returns conformance vectors (each a pipeline, its members' inputs and the expected values), and
+:func:`check_transforms` runs a consumer's evaluator against them, so two consumers that honour a recipe are tested to
+give it the same values.
 
 A consumer declares what it honours as a :class:`Support` record, in code or as the ``steering`` section of a
 ``support_record`` document (:mod:`venngram.support`); :func:`check_support` lists every refusal by name before anything
@@ -34,8 +61,10 @@ runs.
 """
 import builtins
 import fnmatch
+import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from importlib import resources
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,15 +126,92 @@ OPS: dict[str, OpSpec] = {spec.name: spec for spec in (
 #: Schema 1 op names read by :func:`venngram.recipe.migrate`.
 ALIASES = {"mul": "scale"}
 
-#: Value transforms, by name, with their parameters.
+#: Value transforms, by name, with their parameters (what each computes: the module docstring).
 TRANSFORMS: dict[str, Mapping[str, ParamSpec]] = {
     "scale": {"factor": ParamSpec(float, True)},
     "abs": {},
-    "normalize": {"by": ParamSpec(str, True)},          # max_abs, or a named statistic
+    "normalize": {"by": ParamSpec(str, True)},          # max_abs over the op's members, or v / a named statistic
     "sign_of": {"column": ParamSpec(str, True)},
     "sign_aware_scale": {"factor": ParamSpec(float, True)},
-    "statistic": {"name": ParamSpec(str, True)},        # a consumer-computed statistic, e.g. a layer residual median
+    "statistic": {"name": ParamSpec(str, True)},        # v * a statistic the consumer computes, e.g. a layer median
 }
+
+#: Transforms that read the ``from`` evidence table, so apply only to a ``from`` value.
+EVIDENCE_TRANSFORMS = frozenset({"sign_of", "sign_aware_scale"})
+
+
+@dataclass(frozen=True)
+class Transform:
+    """One step of a value's transform pipeline: a :data:`TRANSFORMS` name and its parameters."""
+
+    name: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TransformMember:
+    """One member's inputs to a conformance vector: its starting value, its row of the ``from`` evidence table, and
+    the statistics the consumer would supply for it."""
+
+    start: float
+    columns: Mapping[str, float] = field(default_factory=dict)
+    statistics: Mapping[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TransformCase:
+    """A conformance vector: a pipeline over an op's members, and the value each member must end with.
+
+    ``source`` is ``dose``, ``doses`` or ``from``; ``column`` is the ``from`` column (``None`` otherwise), whose value
+    in each member's ``columns`` is that member's ``start``.
+    """
+
+    name: str
+    source: str
+    column: str | None
+    transform: tuple[Transform, ...]
+    members: tuple[TransformMember, ...]
+    expect: tuple[float, ...]
+
+
+def transform_cases() -> tuple[TransformCase, ...]:
+    """venngram's transform conformance vectors (``data/transform_vectors.yaml``), covering every core transform."""
+    doc = yaml.safe_load((resources.files("venngram") / "data" / "transform_vectors.yaml").read_text("utf-8"))
+    return tuple(_case(raw) for raw in doc["cases"])
+
+
+def _case(raw: Mapping[str, Any]) -> TransformCase:
+    value = raw["value"]
+    source = next(iter(value))
+    column = value["from"] if source == "from" else None
+    members = []
+    for i, m in enumerate(raw["members"]):
+        columns = {str(k): float(v) for k, v in (m.get("columns") or {}).items()}
+        start = {"dose": lambda: value["dose"], "doses": lambda: value["doses"][i],
+                 "from": lambda: columns[str(column)]}[source]()
+        members.append(TransformMember(float(start), columns,
+                                       {str(k): float(v) for k, v in (m.get("statistics") or {}).items()}))
+    transform = tuple(Transform(item, {}) if isinstance(item, str) else Transform(*next(iter(item.items())))
+                      for item in raw["transform"])
+    return TransformCase(raw["name"], source, column, transform, tuple(members), tuple(float(e) for e in raw["expect"]))
+
+
+def check_transforms(evaluate: Callable[[TransformCase], Sequence[float]], *, rel_tol: float = 1e-9,
+                     abs_tol: float = 1e-12) -> list[str]:
+    """Every conformance vector ``evaluate`` (a consumer's evaluator, adapted to take a :class:`TransformCase` and
+    return one value per member) gets wrong, by name; empty when it agrees with venngram's meanings."""
+    out: list[str] = []
+    for case in transform_cases():
+        try:
+            got = [float(v) for v in evaluate(case)]
+        except Exception as err:  # a consumer's refusal or bug, reported by case rather than raised
+            out.append(f"{case.name}: raised {type(err).__name__}: {err}")
+            continue
+        ok = len(got) == len(case.expect) and all(
+            math.isclose(g, e, rel_tol=rel_tol, abs_tol=abs_tol) for g, e in zip(got, case.expect))
+        if not ok:
+            out.append(f"{case.name}: expected {list(case.expect)}, got {got}")
+    return out
 
 
 def register_op(spec: OpSpec, *, replace: bool = False) -> None:
@@ -239,7 +345,9 @@ def check_support(recipe: Any, support: Support) -> list[str]:
 __all__ = [
     "ALIASES",
     "check_support",
+    "check_transforms",
     "COMPOSITION",
+    "EVIDENCE_TRANSFORMS",
     "OPERAND_KINDS",
     "OPS",
     "OpSpec",
@@ -248,6 +356,10 @@ __all__ = [
     "Support",
     "TARGETS",
     "TOKEN_SCOPES",
+    "Transform",
+    "TransformCase",
+    "TransformMember",
+    "transform_cases",
     "TRANSFORMS",
     "VALUE_SOURCES",
 ]

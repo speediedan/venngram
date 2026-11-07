@@ -1,0 +1,69 @@
+# Conformance vectors for venngram's value transforms (venngram.ops.transform_cases, check_transforms). Each case is a
+# transform pipeline over one op's members: `value` is the op's value source (`dose`, `doses` as one starting value per
+# member, or `from: <column>`), each member gives its row of the `from` evidence table (`columns`) and the statistics
+# a consumer would supply for it, and `expect` is every member's value after the pipeline, in member order.
+schema_version: 1
+kind: transform_vectors
+cases:
+  - name: scale-dose
+    value: {dose: 0.5}
+    transform: [{scale: {factor: 4.0}}]
+    members: [{}, {}]
+    expect: [2.0, 2.0]
+  - name: abs-from
+    value: {from: score}
+    transform: [abs]
+    members: [{columns: {score: -2.0}}, {columns: {score: 3.0}}]
+    expect: [2.0, 3.0]
+  - name: normalize-max-abs
+    value: {from: score}
+    transform: [{normalize: {by: max_abs}}]
+    members: [{columns: {score: -2.0}}, {columns: {score: 1.0}}, {columns: {score: 4.0}}]
+    expect: [-0.5, 0.25, 1.0]
+  - name: normalize-max-abs-all-zero
+    value: {from: score}
+    transform: [{normalize: {by: max_abs}}]
+    members: [{columns: {score: 0.0}}, {columns: {score: 0.0}}]
+    expect: [0.0, 0.0]
+  - name: abs-then-normalize-max-abs
+    value: {from: score}
+    transform: [abs, {normalize: {by: max_abs}}]
+    members: [{columns: {score: -4.0}}, {columns: {score: 2.0}}]
+    expect: [1.0, 0.5]
+  - name: normalize-by-statistic
+    value: {doses: [2.0, 3.0]}
+    transform: [{normalize: {by: resid_median}}]
+    members: [{statistics: {resid_median: 4.0}}, {statistics: {resid_median: 6.0}}]
+    expect: [0.5, 0.5]
+  - name: statistic-makes-a-dose-absolute
+    value: {dose: 0.8}
+    transform: [{statistic: {name: layer_residual_median_over_down_column_l2}}]
+    members: [{statistics: {layer_residual_median_over_down_column_l2: 24.8}},
+              {statistics: {layer_residual_median_over_down_column_l2: 10.0}}]
+    expect: [19.84, 8.0]
+  - name: statistic-inverts-normalize
+    value: {doses: [3.0, -1.5]}
+    transform: [{normalize: {by: t}}, {statistic: {name: t}}]
+    members: [{statistics: {t: 2.5}}, {statistics: {t: 0.5}}]
+    expect: [3.0, -1.5]
+  - name: sign-of-column
+    value: {from: activation}
+    transform: [{sign_of: {column: score}}]
+    members: [{columns: {activation: 2.0, score: -1.0}}, {columns: {activation: -3.0, score: 0.0}},
+              {columns: {activation: -1.5, score: 0.25}}]
+    expect: [-2.0, 0.0, 1.5]
+  - name: sign-aware-scale
+    value: {from: score}
+    transform: [{sign_aware_scale: {factor: 4.0}}]
+    members: [{columns: {score: -0.5}}, {columns: {score: 2.0}}, {columns: {score: 0.0}}]
+    expect: [-2.0, 8.0, 0.0]
+  - name: sign-aware-scale-reads-the-score-not-the-value
+    value: {from: score}
+    transform: [abs, {sign_aware_scale: {factor: 2.0}}]
+    members: [{columns: {score: -3.0}}, {columns: {score: 1.0}}]
+    expect: [-6.0, 2.0]
+  - name: activation-base-with-score-sign
+    value: {from: activation}
+    transform: [{sign_of: {column: score}}, {scale: {factor: 2.0}}]
+    members: [{columns: {activation: 1.5, score: -0.2}}, {columns: {activation: -2.0, score: 0.7}}]
+    expect: [-3.0, 4.0]

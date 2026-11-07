@@ -75,7 +75,7 @@ from venngram.address import Term
 from venngram.book import AddressBook
 from venngram.errors import AddressError, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
-from venngram.ops import ALIASES, OPS, OpSpec, TRANSFORMS
+from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
 
 #: The recipe document schema this code writes.
 RECIPE_SCHEMA_VERSION = 2
@@ -144,12 +144,6 @@ class Tokens:
         if self.kind in _BARE_SCOPES:
             return self.kind
         return {"positions": list(self.positions or ())} if self.kind == "positions" else {"slice": self.slice}
-
-
-@dataclass(frozen=True)
-class Transform:
-    name: str
-    params: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -468,6 +462,10 @@ def _value(raw: Any, where: str) -> Value:
             raise AddressError(f"{where}: unknown transform {item!r} (known: {sorted(TRANSFORMS)}).")
         transform.append(Transform(name, _params(params, TRANSFORMS[name], f"{where} transform `{name}`")))
     src = sources[0]
+    reads_evidence = sorted({t.name for t in transform} & EVIDENCE_TRANSFORMS)
+    if reads_evidence and src != "from":
+        raise AddressError(f"{where}: {reads_evidence} read the evidence table, so apply only to a `from` value, not "
+                           f"`{src}`.")
     if src == "dose":
         if not _number(raw["dose"]):
             raise AddressError(f"{where}: `dose` is a number, got {raw['dose']!r}.")

@@ -104,6 +104,11 @@ def test_misused_ops_are_refused_by_name(op, match):
     (lambda r: r.update(stages=[]), "at least one"),
     (lambda r: r["stages"][0].update(tokens="first"), "`tokens` is all, last"),
     (lambda r: r.update(operands={"x": {"values": [1.0], "shape": [2]}}), "1 values for shape"),
+    (lambda r: r["stages"][0]["ops"][0]["value"].update(transform=[{"sign_of": {"column": "score"}}]),
+     r"\['sign_of'\] read the evidence table, so apply only to a `from` value, not `dose`"),
+    (lambda r: r["stages"][0]["ops"][0].update(value={"doses": {13: {7956: 1.0}},
+                                                      "transform": [{"sign_aware_scale": {"factor": 2.0}}]}),
+     r"\['sign_aware_scale'\] read the evidence table.*not `doses`"),
 ])
 def test_malformed_recipes_are_refused(change, match):
     doc = copy.deepcopy(recipe_doc([add("chess", {"dose": 1.0})]))
