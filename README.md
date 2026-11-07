@@ -354,13 +354,28 @@ documents written for a newer venngram, and a lookup passes over them with a war
 while a malformed document of a schema it reads still fails. Each index row records its document's schema, so a newer
 one is passed over without being fetched.
 
-**Settled before 0.1, and not yet.** The windows above, the newer-schema refusal and the registry rule are what 0.1
-commits to. `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
-reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers
-honest. Still open (speediedan/venngram#18): a deprecation cycle (warn, then refuse, with a strict mode) for
-document kinds, API names and vocabulary names (maps already carry `deprecated_since` and `replacement`), an audit
-of the places a new architecture or tool still needs a venngram change, and a stated compatibility surface for each
-consumer.
+**Compatibility in 0.1.** Committed: each kind's schema window above (a 0.1 reader reads every document its window
+covers and refuses a newer one as newer), the address grammar's string and mapping forms, and support-record checking
+(a consumer's refusals are reported by name before anything runs). Experimental: the rest of the Python API, as the
+warning on every module says; it may change in any 0.x release. A consumer pins a compatible-release range
+(`venngram>=0.1,<0.2`), declares what it honours in its own support record, and checks published documents with
+`python -m venngram.conformance`.
+
+**Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
+reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
+
+**Deprecation.** One cycle for a document schema, an API name or a vocabulary name (`venngram.deprecation`): a name
+deprecated in `0.N` warns (a `VenngramDeprecationWarning`) through `0.N` and is refused in `0.N+1`, by name and with
+its replacement; from 1.0 it warns for one full minor version. `VENNGRAM_STRICT=1`, or `with
+venngram.deprecation.strict():`, turns every such warning into an error.
+
+**Extension points.** What a new architecture or tool brings is registered or declared as data: recipe ops
+(`register_op`), value transforms (`register_transform`, with a stated meaning and conformance vectors), map sources
+and formats (entry points), stores, document loaders and book import schemes, support-record extension sections, a
+map's own component kinds and block stacks, rule sets, and the statistics, activation points and resolvers a consumer
+names. The address grammar's own vocabularies (fields, targets, `of`, token scopes, value sources, composition rules,
+operand kinds, portability, structure levels, role kinds and unit-set forms) stay closed on purpose: every consumer
+must read them the same way, so an unknown one is refused by name, and adding one is a schema change.
 
 ## Agent skill
 
