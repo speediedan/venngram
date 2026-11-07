@@ -507,9 +507,6 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
         term = sets[t["set"]]
         if not isinstance(term, Term) or (term.units is None and term.features is None):
             raise AddressError(f"{where}: target set `{t['set']}` must be one address with `units` or `features`.")
-        if term.of == "grad":
-            raise AddressError(f"{where}: target set `{t['set']}` addresses gradients (`of: grad`); a recipe's ops act "
-                               "on activations, and no support record declares steering gradients yet.")
         target = t["set"]
     operand = raw.get("operand")
     if operand is not None:

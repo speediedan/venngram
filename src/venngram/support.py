@@ -71,7 +71,9 @@ from venngram.errors import NewerSchemaError
 from venngram.ops import check_support, Support
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 2)
+SCHEMA_WINDOW = (1, 3)
+#: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
+OF_SCHEMA = 3
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -394,6 +396,9 @@ class SupportRecord:
         name = doc.get("name")
         name = str(name) if name is not None else None
         if version == 1:
+            if "of" in doc:
+                raise ValueError(f"{source}: `of` is declared in the `steering` section of a schema {OF_SCHEMA} "
+                                 "record, not at the top level of a schema 1 one.")
             return cls(name=name, sections={"steering": Support.from_mapping(doc, source=source)})
         unknown = sorted(set(doc) - set(_TOP_KEYS))
         if unknown:
@@ -408,6 +413,9 @@ class SupportRecord:
         for kind, body in raw.items():
             where = f"{source}: section `{kind}`"
             if kind in _SECTIONS:
+                if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
+                    raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
+                                     "venngram would refuse the record by name rather than pass over it.")
                 sections[kind] = _SECTIONS[kind](body, source=where)
                 continue
             if kind in extensions:
@@ -442,7 +450,8 @@ class SupportRecord:
             return cls.from_mapping(yaml.safe_load(fh), source=str(path))
 
     def to_mapping(self) -> dict[str, Any]:
-        """The record as a schema 2 document (skipped sections are written back as they were read)."""
+        """The record as a schema 2 document, or 3 when its steering section declares ``of`` (skipped sections are
+        written back as they were read)."""
         sections: dict[str, Any] = {}
         for kind, contract in self.sections.items():
             if isinstance(contract, Support):
@@ -452,7 +461,8 @@ class SupportRecord:
             else:
                 raise ValueError(f"section `{kind}` ({type(contract).__name__}) has no `to_mapping`.")
         sections.update(self.skipped)
-        out: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "kind": "support_record"}
+        needs_of = any(isinstance(c, Support) and c.of != Support.of for c in self.sections.values())
+        out: dict[str, Any] = {"schema_version": OF_SCHEMA if needs_of else SCHEMA_VERSION, "kind": "support_record"}
         if self.name is not None:
             out["name"] = self.name
         if self.description is not None:
@@ -497,6 +507,8 @@ def _steering_mapping(s: Support) -> dict[str, Any]:
         if callable(s.sites):
             raise ValueError("a steering section whose `sites` is a predicate cannot be written as a document.")
         out["sites"] = sorted(s.sites)
+    if s.of != Support.of:
+        out["of"] = sorted(s.of)
     return out
 
 
