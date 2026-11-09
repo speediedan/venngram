@@ -327,6 +327,12 @@ and a model's physical parameters, with a role for each tensor.
 [Fine-Tuning Scheduler](https://github.com/speediedan/finetuning-scheduler) consumes it, and its schedules accept
 addresses.
 
+A view may assign roles itself (a view over spliced transcoders reports them as `instrument`, say), and a consumer
+attaching modules of its own declares their roles cooperatively, with `BoundView.declare_roles` or
+`resolve_view(model, roles=...)`. A declared role on a tensor the view does not assign is merged and selectable by
+`role:`; one that differs from the view's own is a conflict, refused with the tensor and both roles, never resolved by
+precedence. `ViewConformance` checks both, so every view implementation is held to the same rule.
+
 ## Versions and evolution
 
 Published documents outlive the venngram that wrote them, so every document kind carries one integer

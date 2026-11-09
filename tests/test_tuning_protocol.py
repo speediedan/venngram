@@ -107,3 +107,62 @@ def test_a_views_structure_defaults_to_the_physical_structure_of_its_root():
     model = TinyDecoder(depth=3)
     structure = tv.as_view(tv.CanonicalView(model)).structure()
     assert isinstance(structure, PhysicalStructure) and structure.depth() == 3
+
+
+class SplicedView:
+    """A view that assigns roles itself, as a view over a model with spliced transcoders does: every transcoder
+    tensor is ``instrument``, and it says nothing about any other tensor."""
+
+    def __init__(self) -> None:
+        self.root = torch.nn.ModuleDict({"block": torch.nn.Linear(4, 4), "transcoder": torch.nn.Linear(4, 8),
+                                         "steer": torch.nn.Linear(4, 4)})
+
+    def support(self):
+        return tv.TunableSupport(trainable=True, declared_roles=frozenset({"base", "instrument"}))
+
+    def to_physical(self, logical):
+        return {n: (n,) for n in logical}
+
+    def to_logical(self, physical):
+        return list(physical)
+
+    def roles(self):
+        return {n: "instrument" for n, _ in self.root.named_parameters() if n.startswith("transcoder.")}
+
+
+def test_a_self_assigning_view_merges_cooperative_roles():
+    view = tv.as_view(SplicedView())
+    view.declare_roles({"steer.weight": "intervention:steer", "steer.bias": "intervention:steer",
+                        "transcoder.weight": "instrument"})  # equal to the view's own: accepted
+    roles = view.roles()
+    assert roles["steer.weight"] == "intervention:steer" and roles["transcoder.weight"] == "instrument"
+    assert view.declared == {"steer.weight": "intervention:steer", "steer.bias": "intervention:steer"}
+    assert view.support().declared_roles == {"base", "instrument", "intervention"}
+    from venngram.roles import select
+
+    assert select("role:intervention:steer", list(roles), roles) == ["steer.weight", "steer.bias"]
+    report = tv.ViewConformance(SplicedView).run()
+    assert report.ok and {"cooperative_roles_merge", "cooperative_roles_conflict"} <= set(report.ran), report
+
+
+def test_a_conflicting_declaration_is_refused_by_name_and_changes_nothing():
+    view = tv.as_view(SplicedView())
+    with pytest.raises(tv.TunableViewError, match=r"'transcoder.bias': the view assigns 'instrument', declared "
+                                                  r"'latent:tc'"):
+        view.declare_roles({"steer.weight": "intervention", "transcoder.bias": "latent:tc"})
+    assert view.declared == {} and "steer.weight" not in view.roles()
+    view.declare_roles({"steer.weight": "intervention"})
+    with pytest.raises(tv.TunableViewError, match="declared 'intervention' earlier, now 'adapter'"):
+        view.declare_roles({"steer.weight": "adapter"})
+    with pytest.raises(RoleError, match="name neither a parameter nor a buffer"):
+        view.declare_roles({"nowhere.weight": "adapter"})
+
+
+def test_promoted_roles_count_as_assigned_and_resolve_view_declares():
+    view = tv.as_view(SplicedView())
+    view.promote(["transcoder.weight"], "latent:tc")
+    with pytest.raises(tv.TunableViewError, match="the view assigns 'latent:tc'"):
+        view.declare_roles({"transcoder.weight": "instrument"})
+    model = torch.nn.Linear(2, 2)
+    bound = tv.resolve_view(model, roles={"bias": "adapter"})
+    assert bound.roles() == {"bias": "adapter"} and "adapter" in bound.support().declared_roles

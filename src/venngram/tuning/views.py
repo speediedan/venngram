@@ -26,11 +26,21 @@ identity view every plain model gets.
 Views are discovered, in order, from an explicit ``view`` argument, then a view attached to the model as its
 ``tunable_view`` attribute, then :class:`CanonicalView` (see :func:`resolve_view`).
 
+**Cooperative roles.** A view may assign roles itself (a view over a model with spliced transcoders reports them as
+``instrument``, say), and a consumer that attaches modules of its own (a trainable intervention, a latent model) may
+declare roles for their tensors through :meth:`BoundView.declare_roles` (or ``resolve_view(..., roles=...)``). The rule
+holds for every view, because the bound view applies it: a declared role on a tensor the view does not assign is
+merged and reported like the view's own, selectable by ``role:``, and its kind joins the support record's declared
+kinds; a declared role equal to the one the view assigns is accepted; a declared role that differs from the view's
+own is a conflict, refused by name with the tensor and both roles, never resolved by precedence. A tensor the view
+assigns is one in its own :meth:`~TunableViewExtras.roles` (a ``base`` it lists explicitly counts), or one promoted
+since.
+
 .. warning:: This is an experimental API and may change in a future release.
 """
 import itertools
 from collections.abc import Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 from torch import nn, Tensor
@@ -316,6 +326,7 @@ class BoundView:
         self.view = view
         self._support: TunableSupport | None = None
         self._promoted: dict[str, str] = {}
+        self._declared: dict[str, str] = {}
 
     @property
     def root(self) -> nn.Module:
@@ -328,6 +339,9 @@ class BoundView:
                 raise TunableViewError(f"{type(self.view).__name__}.support() must return a `TunableSupport`, got"
                                             f" {type(support).__name__}.")
             self._support = support
+        if self._declared:  # a cooperative declaration's role kinds are declared like the view's own
+            return replace(self._support,
+                           declared_roles=self._support.declared_roles | declared_kinds(self._declared))
         return self._support
 
     def to_physical(self, logical: Sequence[str]) -> Mapping[str, tuple[str, ...]]:
@@ -352,8 +366,38 @@ class BoundView:
         return [list(g) for g in self._member("depth_groups")()]
 
     def roles(self) -> Mapping[str, str]:
-        """The view's roles, with the roles of tensors promoted since (see :meth:`promote`)."""
-        return {**self.view_roles(), **self._promoted}
+        """The view's roles, merged with the cooperatively declared ones (see :meth:`declare_roles`) and the roles of
+        tensors promoted since (see :meth:`promote`)."""
+        return {**self._declared, **self.view_roles(), **self._promoted}
+
+    def declare_roles(self, roles: Mapping[str, str]) -> dict[str, str]:
+        """Declare roles for tensors the view does not assign itself (the module docstring states the rule).
+
+        Returns:
+            The roles declared on this view so far.
+
+        Raises:
+            RoleError: If a role is invalid or a key names neither a parameter nor a buffer of the root.
+            TunableViewError: If a declared role differs from the role the view assigns that tensor (every conflict
+                is named, with both roles), or from one declared earlier; nothing is declared then.
+        """
+        roles = validate_roles(roles, (n for n, _ in self.root.named_parameters()),
+                               (n for n, _ in self.root.named_buffers()))
+        assigned = {**self.view_roles(), **self._promoted}
+        conflicts = [f"{n!r}: the view assigns {assigned[n]!r}, declared {r!r}" for n, r in roles.items()
+                     if n in assigned and assigned[n] != r]
+        conflicts += [f"{n!r}: declared {self._declared[n]!r} earlier, now {r!r}" for n, r in roles.items()
+                      if n in self._declared and self._declared[n] != r]
+        if conflicts:
+            raise TunableViewError(f"{type(self.view).__name__} refuses these role declarations, which conflict with "
+                                   f"roles it already has: {'; '.join(conflicts)}.")
+        self._declared.update({n: r for n, r in roles.items() if n not in assigned})
+        return dict(self._declared)
+
+    @property
+    def declared(self) -> dict[str, str]:
+        """The roles declared cooperatively (see :meth:`declare_roles`) on tensors the view does not assign."""
+        return dict(self._declared)
 
     def view_roles(self) -> dict[str, str]:
         """The roles the view itself reports, without promotions."""
@@ -407,18 +451,21 @@ def as_view(view: Any) -> BoundView:
     return view if isinstance(view, BoundView) else BoundView(view)
 
 
-def resolve_view(model: nn.Module, view: Any | None = None) -> BoundView:
+def resolve_view(model: nn.Module, view: Any | None = None, *, roles: Mapping[str, str] | None = None) -> BoundView:
     """Find the view for ``model``: ``view`` when given, else a view attached as ``model.tunable_view``, else
-    :class:`CanonicalView` over ``model``.
+    :class:`CanonicalView` over ``model``. ``roles`` are declared cooperatively on it (:meth:`BoundView.declare_roles`).
 
     Raises:
-        TunableViewError: If the chosen object is not a tunable view.
+        TunableViewError: If the chosen object is not a tunable view, or a declared role conflicts with the view's.
     """
     if view is None:
         view = getattr(model, VIEW_ATTR, None)
     if view is None:
         view = CanonicalView(model)
-    return as_view(view)
+    bound = as_view(view)
+    if roles:
+        bound.declare_roles(roles)
+    return bound
 
 
 class CanonicalView(ViewDefaults):

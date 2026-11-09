@@ -41,7 +41,8 @@ from typing import Any
 
 import torch
 
-from venngram.roles import declared_kinds, role_kind, validate_roles
+from venngram.roles import declared_kinds, role_kind, select, validate_roles
+from .errors import TunableViewError
 from .views import as_view, BoundView, instrument_state_keys, TunableSupport
 
 
@@ -91,6 +92,12 @@ def _check(condition: bool, msg: str) -> None:
         raise ConformanceError(msg)
 
 
+def _unassigned(view: BoundView) -> list[str]:
+    """The root's parameters the view assigns no role."""
+    assigned = view.roles()
+    return [n for n, _ in view.root.named_parameters() if n not in assigned]
+
+
 def _instrument_parameters(view: BoundView) -> list[str]:
     params = {n for n, _ in view.root.named_parameters()}
     return sorted(n for n, r in view.roles().items() if n in params and role_kind(r) == "instrument")
@@ -122,6 +129,10 @@ class ViewConformance:
                             self._roles_valid),
             ConformanceCase("promotion", "promotion", lambda s, v: s.trainable and bool(_instrument_parameters(v)),
                             self._promotion),
+            ConformanceCase("cooperative_roles_merge", "roles", lambda s, v: s.trainable and bool(_unassigned(v)),
+                            self._cooperative_roles_merge),
+            ConformanceCase("cooperative_roles_conflict", "roles", lambda s, v: s.trainable and bool(v.view_roles()),
+                            self._cooperative_roles_conflict),
         )}
 
     def cases(self) -> list[ConformanceCase]:
@@ -238,6 +249,38 @@ class ViewConformance:
         validate_roles(roles, (n for n, _ in view.root.named_parameters()), (n for n, _ in view.root.named_buffers()))
         undeclared = sorted(declared_kinds(roles) - view.support().declared_roles)
         _check(not undeclared, f"The support record does not declare these role kinds the view uses: {undeclared}.")
+
+    def _cooperative_roles_merge(self) -> None:
+        """A role declared on a tensor the view does not assign is reported, selectable by ``role:``, and declared in
+        the support record, while the view's own roles are unchanged."""
+        view = self._fresh()
+        own = view.view_roles()
+        name = _unassigned(view)[0]
+        role = "intervention:conformance"
+        view.declare_roles({name: role})
+        roles = view.roles()
+        _check(roles.get(name) == role, f"A declared role was not reported: {name!r} has {roles.get(name)!r}.")
+        _check(select("role:intervention", list(roles), roles) == [name],
+               f"`role:intervention` does not select the tensor declared {role!r}.")
+        _check(all(roles.get(n) == r for n, r in own.items()), "Declaring a role changed a role the view assigns.")
+        _check("intervention" in view.support().declared_roles,
+               "The support record does not declare the kind of a cooperatively declared role.")
+
+    def _cooperative_roles_conflict(self) -> None:
+        """A declared role that differs from one the view assigns is refused, naming the tensor and both roles, and
+        changes nothing."""
+        view = self._fresh()
+        name, own = next(iter(view.view_roles().items()))
+        other = "intervention:conformance" if role_kind(own) != "intervention" else "adapter:conformance"
+        try:
+            view.declare_roles({name: other})
+        except TunableViewError as err:
+            text = str(err)
+            _check(name in text and own in text and other in text,
+                   f"A conflicting declaration was refused without naming the tensor and both roles: {text}")
+        else:
+            raise ConformanceError(f"Declaring {other!r} on {name!r}, which the view assigns {own!r}, was accepted.")
+        _check(view.roles().get(name) == own and not view.declared, "A refused declaration changed the roles.")
 
     def _promotion(self) -> None:
         """Promoting the ``instrument`` parameters to a ``latent`` role keeps their names, reports the new role,
