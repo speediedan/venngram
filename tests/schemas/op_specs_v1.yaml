@@ -1,0 +1,13 @@
+# Golden fixture: an op specs document at schema 1, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 1
+kind: op_specs
+name: golden-ops
+ops:
+- name: golden_clip
+  operand: [none]
+  params:
+    bound: {type: float, required: true, range: [0.0, 100.0]}
+  targets: [activation, units]
+  value: none
+  composition: ordered

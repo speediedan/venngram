@@ -19,8 +19,15 @@ is the consumer's). An :class:`OpSpec` declares an op's operand kinds, its param
 and how two of it compose on one target (``sum``, ``product``, ``max``, ``min``, or ``ordered``: never merged).
 
 The core ops (:data:`OPS`): ``replace``, ``add`` (sums), ``scale`` (multiplies), ``project`` and ``reject`` (keep or
-remove the component in a span, a ``fraction`` of it), ``patch`` (swap coordinates along a pair of directions) and
-``clamp`` (bound coordinates in a basis). :func:`register_op` adds one.
+remove the component in a span, a ``fraction`` of it), ``patch`` (swap coordinates along a pair of directions),
+``clamp`` (bound coordinates in a basis) and ``replace_with_error`` (a straight-through substitution: for an operand
+``o`` at an activation ``x`` it gives ``o + sg(x - o)``, where ``sg`` stops the gradient, so the forward value is ``x``
+and the gradient through the substitution reaches ``o``, not ``x``; the error term a spliced latent model trains
+with). An op's ``of`` says which target sets it may act on: values, gradients (``of: grad``), or both.
+:func:`register_op` adds an op in code; :func:`read_op_specs` reads declarations published as an ``op_specs``
+document, so a recipe naming a published op validates without its publisher's code. :func:`op_cases` and
+:func:`check_ops` are conformance vectors for ops whose meaning is numeric, as :func:`transform_cases` and
+:func:`check_transforms` are for transforms.
 
 Values pass through a **transform pipeline** from a small declared vocabulary (:data:`TRANSFORMS`), applied in order
 to each member of the op: each unit or feature its target set names, or the whole activation, one member, for an op
@@ -73,6 +80,9 @@ import yaml
 
 from venngram.address import OF
 
+#: The ``op_specs`` document schemas this code reads.
+OP_SPECS_WINDOW = (1, 1)
+
 OPERAND_KINDS = ("none", "vector", "pair", "subspace")
 TARGETS = ("activation", "units", "features")
 TOKEN_SCOPES = ("all", "last", "prompt", "generated", "positions", "slice")
@@ -106,6 +116,8 @@ class OpSpec:
     composition: str = "ordered"
     at_least_one_of: tuple[str, ...] = ()
     """Parameters of which at least one must be given (a clamp needs a bound)."""
+    of: tuple[str, ...] = OF
+    """What its target sets may address: ``value`` (activations), ``grad`` (gradients), or both."""
 
     def combine(self, a: float, b: float) -> float:
         """Two values of this op on one target, combined (only for a ``sum``/``product``/``max``/``min`` op)."""
@@ -124,7 +136,11 @@ OPS: dict[str, OpSpec] = {spec.name: spec for spec in (
     OpSpec("patch", ("pair",), {}, ("basis",), ("activation",), "none"),
     OpSpec("clamp", ("vector", "subspace"), {"min": ParamSpec(), "max": ParamSpec()}, ("basis",), ("activation",),
            "none", at_least_one_of=("min", "max")),
+    OpSpec("replace_with_error", ("none", "vector"), of=("value",)),
 )}
+
+#: The ops venngram defines; a document may not redeclare one.
+CORE_OPS = frozenset(OPS)
 
 #: Schema 1 op names read by :func:`venngram.recipe.migrate`.
 ALIASES = {"mul": "scale"}
@@ -281,12 +297,191 @@ def register_op(spec: OpSpec, *, replace: bool = False) -> None:
     """
     if spec.name in OPS and not replace:
         raise ValueError(f"op {spec.name!r} is already registered; pass replace=True to replace it")
+    _check_spec(spec)
+    OPS[spec.name] = spec
+
+
+def _check_spec(spec: OpSpec) -> None:
     bad = ([k for k in spec.operand if k not in OPERAND_KINDS] + [t for t in spec.targets if t not in TARGETS]
            + ([spec.composition] if spec.composition not in COMPOSITION else [])
-           + ([spec.value] if spec.value not in ("required", "optional", "none") else []))
+           + ([spec.value] if spec.value not in ("required", "optional", "none") else [])
+           + [o for o in spec.of if o not in OF])
     if bad:
         raise ValueError(f"op {spec.name!r}: unknown {bad}")
-    OPS[spec.name] = spec
+
+
+_PARAM_TYPES: dict[str, builtins.type] = {"float": float, "int": int, "str": str, "bool": bool}
+_OP_KEYS = ("name", "operand", "params", "requires", "targets", "value", "token_override", "composition",
+            "at_least_one_of", "of")
+
+
+def op_spec_from_mapping(raw: Any, *, source: str = "<inline>") -> OpSpec:
+    """One op declaration from an ``op_specs`` document (see :func:`read_op_specs`).
+
+    Raises:
+        ValueError: If it has unknown keys, no name, a parameter of an unknown type, or a malformed field.
+    """
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("name"), str) or not raw["name"]:
+        raise ValueError(f"{source}: an op declaration is a mapping with a `name`.")
+    where = f"{source}: op `{raw['name']}`"
+    unknown = sorted(set(raw) - set(_OP_KEYS))
+    if unknown:
+        raise ValueError(f"{where}: unknown keys {unknown} (known: {list(_OP_KEYS)}).")
+
+    def names(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+        value = raw.get(key, list(default))
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError(f"{where}: `{key}` is a list of names, got {value!r}.")
+        return tuple(value)
+
+    params: dict[str, ParamSpec] = {}
+    raw_params = raw.get("params") or {}
+    if not isinstance(raw_params, Mapping):
+        raise ValueError(f"{where}: `params` maps a parameter's name to {{type, required, range}}.")
+    for pname, p in raw_params.items():
+        p = p or {}
+        if not isinstance(p, Mapping) or set(p) - {"type", "required", "range"}:
+            raise ValueError(f"{where}: parameter `{pname}` is {{type, required, range}}, got {p!r}.")
+        ptype = p.get("type", "float")
+        if ptype not in _PARAM_TYPES:
+            raise ValueError(f"{where}: parameter `{pname}` has type {ptype!r}; known: {list(_PARAM_TYPES)}.")
+        rng = p.get("range")
+        if rng is not None and not (isinstance(rng, list) and len(rng) == 2
+                                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in rng)):
+            raise ValueError(f"{where}: parameter `{pname}`'s `range` is [low, high], got {rng!r}.")
+        params[str(pname)] = ParamSpec(_PARAM_TYPES[ptype], bool(p.get("required", False)),
+                                       (float(rng[0]), float(rng[1])) if rng is not None else None)
+    for key in ("value", "composition"):
+        if key in raw and not isinstance(raw[key], str):
+            raise ValueError(f"{where}: `{key}` is a name, got {raw[key]!r}.")
+    if not isinstance(raw.get("token_override", False), bool):
+        raise ValueError(f"{where}: `token_override` is true or false.")
+    default = OpSpec(raw["name"])
+    return OpSpec(raw["name"], names("operand", default.operand), params, names("requires", default.requires),
+                  names("targets", default.targets), raw.get("value", default.value),
+                  raw.get("token_override", default.token_override), raw.get("composition", default.composition),
+                  names("at_least_one_of", default.at_least_one_of), names("of", default.of))
+
+
+def op_spec_to_mapping(spec: OpSpec) -> dict[str, Any]:
+    """An op declaration as an ``op_specs`` document writes it."""
+    type_names = {t: n for n, t in _PARAM_TYPES.items()}
+    params = {}
+    for name, p in spec.params.items():
+        if p.type not in type_names:
+            raise ValueError(f"op {spec.name!r}: parameter `{name}` has type {p.type.__name__}, which a document "
+                             f"cannot carry (known: {list(_PARAM_TYPES)}).")
+        params[name] = {"type": type_names[p.type], "required": p.required,
+                        **({"range": list(p.range)} if p.range is not None else {})}
+    return {"name": spec.name, "operand": list(spec.operand), "params": params, "requires": list(spec.requires),
+            "targets": list(spec.targets), "value": spec.value, "token_override": spec.token_override,
+            "composition": spec.composition, "at_least_one_of": list(spec.at_least_one_of), "of": list(spec.of)}
+
+
+def write_op_specs(specs: Sequence[OpSpec], *, name: str, description: str | None = None) -> dict[str, Any]:
+    """An ``op_specs`` document declaring ``specs``, for a consumer to publish the ops it registered."""
+    doc: dict[str, Any] = {"schema_version": OP_SPECS_WINDOW[1], "kind": "op_specs", "name": name}
+    if description is not None:
+        doc["description"] = description
+    doc["ops"] = [op_spec_to_mapping(s) for s in specs]
+    return doc
+
+
+def read_op_specs(doc: Any, *, source: str = "<inline>", register: bool = True) -> tuple[OpSpec, ...]:
+    """Read an ``op_specs`` document and, unless ``register`` is false, register its ops, so a recipe naming them
+    validates and is checked against support records exactly as one naming a code-registered op.
+
+    .. code-block:: yaml
+
+        schema_version: 1
+        kind: op_specs
+        name: example-tensor-ops
+        ops:
+          - name: soft_clip
+            operand: [none]
+            params: {bound: {type: float, required: true, range: [0.0, 100.0]}}
+            targets: [activation, units]
+            value: none
+            composition: ordered
+
+    Fields left out take :class:`OpSpec`'s defaults. Reading a declaration identical to the registered one is a
+    no-op, so a document can be read more than once.
+
+    Raises:
+        NewerSchemaError: If the document's schema is newer than this venngram reads.
+        ValueError: If it is malformed, redeclares a core op, or declares an op already registered differently (by
+            name, as :func:`register_op` refuses).
+    """
+    from venngram.errors import NewerSchemaError
+
+    if not isinstance(doc, Mapping) or doc.get("kind") != "op_specs":
+        raise ValueError(f"{source}: an op declaration document is `kind: op_specs`.")
+    version, (lo, hi) = doc.get("schema_version"), OP_SPECS_WINDOW
+    if isinstance(version, int) and not isinstance(version, bool) and version > hi:
+        raise NewerSchemaError(f"{source}: op_specs schema {version} is newer than this venngram reads ({lo} to "
+                               f"{hi}); upgrade venngram.", kind="op_specs", version=version, newest=hi)
+    if not isinstance(version, int) or isinstance(version, bool) or version < lo:
+        raise ValueError(f"{source}: this venngram reads op_specs schemas {lo} to {hi}, got {version!r}.")
+    unknown = sorted(set(doc) - {"schema_version", "kind", "name", "description", "ops"})
+    if unknown:
+        raise ValueError(f"{source}: unknown keys {unknown}.")
+    raw = doc.get("ops")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{source}: `ops` is a non-empty list of op declarations.")
+    specs = tuple(op_spec_from_mapping(r, source=source) for r in raw)
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name in seen:
+            raise ValueError(f"{source}: declares `{spec.name}` twice.")
+        seen.add(spec.name)
+        if spec.name in CORE_OPS:
+            raise ValueError(f"{source}: `{spec.name}` is a core op; a document cannot redeclare it.")
+        if spec.name in OPS and OPS[spec.name] != spec:
+            raise ValueError(f"{source}: op `{spec.name}` is already registered with a different declaration.")
+        if spec.name not in OPS:
+            _check_spec(spec)  # every declaration is checked before any is registered
+    if register:
+        for spec in specs:
+            if spec.name not in OPS:
+                register_op(spec)
+    return specs
+
+
+@dataclass(frozen=True)
+class OpCase:
+    """A conformance vector for an op: its inputs, and what a consumer must compute from them."""
+
+    name: str
+    op: str
+    inputs: Mapping[str, tuple[float, ...]]
+    expect: Mapping[str, tuple[float, ...]]
+
+
+def op_cases(op: str | None = None) -> tuple[OpCase, ...]:
+    """venngram's op conformance vectors (``data/op_vectors.yaml``), all of them or ``op``'s."""
+    doc = yaml.safe_load((resources.files("venngram") / "data" / "op_vectors.yaml").read_text("utf-8"))
+    cases = tuple(OpCase(c["name"], c["op"], {k: tuple(float(x) for x in v) for k, v in c["inputs"].items()},
+                         {k: tuple(float(x) for x in v) for k, v in c["expect"].items()}) for c in doc["cases"])
+    return tuple(c for c in cases if op is None or c.op == op)
+
+
+def check_ops(evaluate: Callable[[OpCase], Mapping[str, Sequence[float]]], *, op: str | None = None,
+              rel_tol: float = 1e-9, abs_tol: float = 1e-12) -> list[str]:
+    """Every op conformance vector ``evaluate`` (a consumer's implementation, adapted to take an :class:`OpCase` and
+    return each expected quantity by name) gets wrong, by name; empty when it agrees."""
+    out: list[str] = []
+    for case in op_cases(op):
+        try:
+            got = {k: tuple(float(x) for x in v) for k, v in evaluate(case).items()}
+        except Exception as err:  # a consumer's refusal or bug, reported by case rather than raised
+            out.append(f"{case.name}: raised {type(err).__name__}: {err}")
+            continue
+        for key, want in case.expect.items():
+            have = got.get(key)
+            if have is None or len(have) != len(want) or not all(
+                    math.isclose(h, w, rel_tol=rel_tol, abs_tol=abs_tol) for h, w in zip(have, want)):
+                out.append(f"{case.name}: `{key}` expected {list(want)}, got {None if have is None else list(have)}")
+    return out
 
 
 @dataclass(frozen=True)
@@ -410,14 +605,22 @@ def check_support(recipe: Any, support: Support) -> list[str]:
 
 __all__ = [
     "ALIASES",
+    "check_ops",
     "check_support",
     "check_transforms",
+    "CORE_OPS",
     "COMPOSITION",
     "EVIDENCE_TRANSFORMS",
     "OPERAND_KINDS",
     "OPS",
+    "op_cases",
+    "op_spec_from_mapping",
+    "op_spec_to_mapping",
+    "OP_SPECS_WINDOW",
+    "OpCase",
     "OpSpec",
     "ParamSpec",
+    "read_op_specs",
     "register_op",
     "register_transform",
     "Support",
@@ -430,4 +633,5 @@ __all__ = [
     "transform_cases",
     "TRANSFORMS",
     "VALUE_SOURCES",
+    "write_op_specs",
 ]
