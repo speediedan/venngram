@@ -456,13 +456,20 @@ def _load_rules(path: Path) -> Any:
     return load_rules_document(path)
 
 
+def _load_op_specs(path: Path) -> Any:
+    """Read an ``op_specs`` document and register its ops (:func:`venngram.ops.read_op_specs`)."""
+    from venngram.ops import read_op_specs
+
+    return read_op_specs(_read_yaml(path), source=str(path))
+
+
 register_store("local", LocalStore(), versioned=False)
 register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
-                       ("support_record", _load_support)):
+                       ("support_record", _load_support), ("op_specs", _load_op_specs)):
     register_loader(_kind, _loader)
 
 

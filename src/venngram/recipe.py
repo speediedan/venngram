@@ -509,6 +509,9 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
         if not isinstance(term, Term) or (term.units is None and term.features is None):
             raise AddressError(f"{where}: target set `{t['set']}` must be one address with `units` or `features`.")
         target = t["set"]
+        if (term.of or "value") not in spec.of:
+            raise AddressError(f"{where}: target set `{target}` addresses `of: {term.of or 'value'}`, and this op acts "
+                               f"on {list(spec.of)}.")
     operand = raw.get("operand")
     if operand is not None:
         if operand not in operands:

@@ -37,7 +37,8 @@ recipe              1 -> 2     one ``method`` and its ``treatments`` become one 
 support record      1 -> 2     the top-level steering contract moves under ``sections.steering``
 ==================  =========  ==================================================================================
 
-An address book (schema 2 only adds ``of``), a support record at schema 2 or 3, and a rule set are current already.
+An address book (schema 2 only adds ``of``), a support record at schema 2 or 3, a rule set and an ``op_specs``
+document are current already.
 A document newer than this venngram reads is refused as :class:`~venngram.errors.NewerSchemaError`.
 
 .. warning:: This is an experimental API and may change in a future release.
@@ -131,6 +132,12 @@ def _book(doc: dict[str, Any], source: str) -> Any:
     return AddressBook.from_mapping(doc, source=source)
 
 
+def _op_specs(doc: dict[str, Any], source: str) -> Any:
+    from venngram.ops import read_op_specs
+
+    return read_op_specs(doc, source=source, register=False)
+
+
 def _rules(doc: dict[str, Any], source: str) -> Any:
     from venngram.maps.rules import rules_from_document
 
@@ -139,7 +146,8 @@ def _rules(doc: dict[str, Any], source: str) -> Any:
 
 _STEPS: dict[str, Callable[[dict[str, Any], str, list[str]], dict[str, Any]]] = {
     "component_map": _component_map, "overlay_map": _overlay_map, "recipe": _recipe,
-    "support_record": _support_record, "address_book": _current(_book), "rules": _current(_rules)}
+    "support_record": _support_record, "address_book": _current(_book), "rules": _current(_rules),
+    "op_specs": _current(_op_specs)}
 
 
 def migrate(doc: Mapping[str, Any], *, source: str = "<document>") -> tuple[dict[str, Any], list[str]]:

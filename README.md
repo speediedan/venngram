@@ -99,8 +99,10 @@ token scope. An op acts on the whole activation, a set's units or a latent space
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
 a per-unit table, or a column of recorded evidence through declared transforms, each with a stated meaning and
 conformance vectors a consumer's evaluator runs). Ops are declared specs
-(`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, and any registered); venngram
-validates and composes them and never executes one. A token scope is `all`, `last`, `prompt` (the input, before any
+(`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, `replace_with_error`, and any
+registered in code or read from a published `op_specs` document); venngram validates and composes them and never
+executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
+gives $o + \mathrm{sg}(x - o)$, so the forward value is $x$ and the gradient reaches $o$, not $x$. A token scope is `all`, `last`, `prompt` (the input, before any
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
 a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
 records" below), and `check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
@@ -339,6 +341,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | recipe | 1 to 2 | 2 | refused in `method` and in an op's parameters |
 | support record | 1 to 3 | 2, or 3 when its steering section declares `of` | refused; an unknown *section* is skipped with a warning |
 | verification record | 1 | 1 | ignored |
+| op declarations (`op_specs`) | 1 | 1 | refused |
 | manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
 | registry index header | 1 | 1 | |
 
@@ -370,7 +373,7 @@ its replacement; from 1.0 it warns for one full minor version. `VENNGRAM_STRICT=
 venngram.deprecation.strict():`, turns every such warning into an error.
 
 **Extension points.** What a new architecture or tool brings is registered or declared as data: recipe ops
-(`register_op`), value transforms (`register_transform`, with a stated meaning and conformance vectors), map sources
+(`register_op`, or published as an `op_specs` document), value transforms (`register_transform`, with a stated meaning and conformance vectors), map sources
 and formats (entry points), stores, document loaders and book import schemes, support-record extension sections, a
 map's own component kinds and block stacks, rule sets, and the statistics, activation points and resolvers a consumer
 names. The address grammar's own vocabularies (fields, targets, `of`, token scopes, value sources, composition rules,

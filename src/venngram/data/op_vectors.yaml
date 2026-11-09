@@ -1,0 +1,19 @@
+# Conformance vectors for core ops whose meaning is numeric (venngram.ops.op_cases, check_ops). Each case gives an
+# op's inputs elementwise and what a consumer must compute from them. For replace_with_error, `x` is the activation,
+# `o` the operand and `g` the gradient arriving at the op's output; `value` is the forward value, `grad_x` and
+# `grad_o` the gradients that reach the activation and the operand through the substitution o + sg(x - o).
+schema_version: 1
+kind: op_vectors
+cases:
+  - name: replace-with-error-keeps-the-forward-value
+    op: replace_with_error
+    inputs: {x: [1.5, -2.0, 0.0], o: [1.0, 0.5, -3.0], g: [1.0, 1.0, 1.0]}
+    expect: {value: [1.5, -2.0, 0.0]}
+  - name: replace-with-error-routes-the-gradient-to-the-operand
+    op: replace_with_error
+    inputs: {x: [1.5, -2.0, 0.0], o: [1.0, 0.5, -3.0], g: [0.25, -4.0, 2.0]}
+    expect: {grad_o: [0.25, -4.0, 2.0], grad_x: [0.0, 0.0, 0.0]}
+  - name: replace-with-error-when-the-operand-equals-the-activation
+    op: replace_with_error
+    inputs: {x: [0.5, 2.0], o: [0.5, 2.0], g: [3.0, -1.0]}
+    expect: {value: [0.5, 2.0], grad_o: [3.0, -1.0], grad_x: [0.0, 0.0]}
