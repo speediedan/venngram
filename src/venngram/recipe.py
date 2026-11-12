@@ -48,7 +48,11 @@ unit adapter), which declares what it honours as a :class:`~venngram.ops.Support
 module (:mod:`venngram.sources`).
 
 **Targets**: an op acts on the whole activation (no ``target``), the units a book set names, or the features of a
-latent space a book set names (its ``space`` and ``features``; the consumer supplies the space's encoder). **Values**:
+latent space a book set names (its ``space`` and ``features``; the consumer supplies the space's encoder). A unit
+target may be one address with explicit layers and ``units``, or a composition of such sets at one site with the book's
+set algebra (``@a & @b``, ``@a | @b``, ``@a - @control``), evaluated over ``(layer, unit)`` pairs; a ``layers``-only
+term in it filters by layer (``(@a & @b & layers:12) - @control``). A composed target is resolved when the recipe is
+read, and refused by name if it is empty, mixes sites, composes feature sets or names units only by slice. **Values**:
 a ``dose``, a per-unit ``doses`` table, or ``from`` a column of recorded evidence through a ``transform`` pipeline of
 declared transforms (:data:`~venngram.ops.TRANSFORMS`). **Tokens** are set per stage; an op may override them only if
 its spec allows. ``prompt`` is every position of the input before any generated token; ``generated`` is every
@@ -71,12 +75,13 @@ from typing import Any
 
 import yaml
 
-from venngram.address import Term
+from venngram.address import And, Expr, Guarded, Minus, Or, Ref, Term, to_string
 from venngram.book import AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
-from venngram.errors import AddressError, NewerAddressSchemaError
+from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
+from venngram.resolve import gradient_of
 
 #: The recipe document schema this code writes.
 RECIPE_SCHEMA_VERSION = 2
@@ -187,18 +192,30 @@ class Op:
         return OPS[self.op]
 
     def target_kind(self, book: AddressBook) -> str:
-        """``activation`` (no target), ``units`` or ``features``, from the target set."""
+        """``activation`` (no target), ``units`` or ``features``, from the target set (a composed target is a unit
+        set: a recipe refuses any other composition when it is read)."""
         if self.target is None:
             return "activation"
         term = book.sets()[self.target]
-        return "units" if isinstance(term, Term) and term.units is not None else "features"
+        if not isinstance(term, Term):
+            return "units"
+        return "units" if term.units is not None else "features"
+
+    def target_of(self, book: AddressBook) -> str:
+        """What the op acts on at its target: ``value`` or ``grad`` (``value`` without a target)."""
+        if self.target is None:
+            return "value"
+        term = book.sets()[self.target]
+        if isinstance(term, Term):
+            return term.of or "value"
+        return _UnitSets(book.sets(), self.target, "<recipe>").resolve()[1]
 
     def unit_doses(self, book: AddressBook, source: str = "<recipe>") -> dict[tuple[int, int], float]:
         """``(layer, unit) -> dose`` for a unit-targeted op whose value is a ``dose`` or ``doses``."""
         if self.target is None or self.value is None or self.value.source not in ("dose", "doses"):
             raise AddressError(f"{source}: `{self.op}` has no unit doses (it needs a unit set target and a dose).")
         out = {}
-        for layer, unit in _units(book.sets()[self.target], self.target, source):
+        for layer, unit in _units(book.sets(), self.target, source):
             dose = self.value.dose if self.value.source == "dose" else (self.value.doses or {}).get(layer, {}).get(unit)
             if dose is not None:
                 out[(layer, unit)] = dose
@@ -506,11 +523,16 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
         if not isinstance(t, Mapping) or t.get("set") not in sets:
             raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}), got {t!r}.")
         term = sets[t["set"]]
-        if not isinstance(term, Term) or (term.units is None and term.features is None):
-            raise AddressError(f"{where}: target set `{t['set']}` must be one address with `units` or `features`.")
+        if isinstance(term, Term):
+            if term.units is None and term.features is None:
+                raise AddressError(f"{where}: target set `{t['set']}` must be one address with `units` or `features`, "
+                                   "or a composition of unit sets.")
+            of = term.of
+        else:
+            of = _UnitSets(sets, t["set"], where).resolve()[1]
         target = t["set"]
-        if (term.of or "value") not in spec.of:
-            raise AddressError(f"{where}: target set `{target}` addresses `of: {term.of or 'value'}`, and this op acts "
+        if (of or "value") not in spec.of:
+            raise AddressError(f"{where}: target set `{target}` addresses `of: {of or 'value'}`, and this op acts "
                                f"on {list(spec.of)}.")
     operand = raw.get("operand")
     if operand is not None:
@@ -561,10 +583,11 @@ def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand],
     return Stage(raw["site"], ops, _tokens(raw.get("tokens"), where))
 
 
-def _units(expr: Any, name: str, source: str) -> list[tuple[int, int]]:
-    """The ``(layer, unit)`` pairs a set names, for a set whose layers and units are explicit."""
-    if not isinstance(expr, Term) or expr.units is None:
-        raise AddressError(f"{source}: set `{name}` must be one address with `units` to carry doses.")
+def _term_units(expr: Term, name: str, source: str) -> list[tuple[int, int]]:
+    """The ``(layer, unit)`` pairs one address names, for an address whose layers and units are explicit."""
+    if expr.units is None:
+        raise AddressError(f"{source}: set `{name}` must be one address with `units`, or a composition of unit sets, "
+                           "to carry doses.")
     units = expr.units
     if units.per_layer is not None:
         layers = [k for k, _ in units.per_layer]
@@ -581,6 +604,114 @@ def _units(expr: Any, name: str, source: str) -> list[tuple[int, int]]:
                                "explicit units.")
         out += [(layer, u) for u in idx]
     return out
+
+
+def _layer_filter(expr: Expr) -> tuple[int, ...] | None:
+    """The layers a ``layers``-only term names, or ``None`` for any other expression."""
+    if isinstance(expr, Term) and set(expr.set_fields()) == {"layers"}:
+        return expr.layers.indices  # type: ignore[union-attr]
+    return None
+
+
+def _of_only(expr: Expr) -> bool:
+    # `of` does not filter (venngram.address), so an `of`-only term in an intersection says what is acted on and no more
+    return isinstance(expr, Term) and set(expr.set_fields()) == {"of"}
+
+
+class _UnitSets:
+    """The ``(layer, unit)`` pairs a book set names when it composes unit sets with the set algebra.
+
+    This is the recipe's counterpart of the tensor resolution in :mod:`venngram.resolve`: ``&`` intersects, ``|``
+    unites and ``-`` subtracts, over pairs rather than tensor names. Every unit address it reaches must be at one site
+    (the same fields besides ``layers``, ``units`` and ``of``), since a recipe's stage gives the site; ``of`` is read
+    as :func:`~venngram.resolve.gradient_of` reads it.
+    """
+
+    def __init__(self, sets: Mapping[str, Expr], name: str, source: str) -> None:
+        self.sets, self.name, self.source = sets, name, source
+        self.sites: dict[tuple[tuple[str, str], ...], str] = {}
+        self._stack: list[str] = []
+
+    def refuse(self, why: str) -> AddressError:
+        return AddressError(f"{self.source}: set `{self.name}` {why}.")
+
+    def resolve(self) -> tuple[list[tuple[int, int]], str]:
+        """The set's pairs in order of first appearance, and what is acted on there (``value`` or ``grad``)."""
+        self._stack.append(self.name)
+        out = self.run(self.sets[self.name])
+        if len(self.sites) > 1:
+            raise self.refuse(f"composes units at different sites ({', '.join(sorted(self.sites.values()))}); a "
+                              "stage applies at one site, so compose sets of one site")
+        if not out:
+            raise self.refuse("names no units: its composition is empty")
+        try:
+            of = gradient_of(self.sets[self.name], self.sets)
+        except AddressUnresolvable as err:
+            raise self.refuse("; ".join(str(r) for r in err.refusals)) from err
+        return out, of
+
+    def run(self, expr: Expr) -> list[tuple[int, int]]:
+        if isinstance(expr, Ref):
+            if expr.name in self._stack:
+                raise self.refuse(f"references form a cycle: {' -> '.join('@' + s for s in self._stack + [expr.name])}")
+            if expr.name not in self.sets:
+                raise self.refuse(f"references `@{expr.name}`, which the book does not name (sets: "
+                                  f"{sorted(self.sets)})")
+            self._stack.append(expr.name)
+            out = self.run(self.sets[expr.name])
+            self._stack.pop()
+            return out
+        if isinstance(expr, Guarded):
+            out = self.run(expr.expr)
+            if expr.expect is not None and len(out) != expr.expect:
+                raise self.refuse(f"has `{to_string(expr.expr)}` name {len(out)} units where `expect` requires "
+                                  f"{expr.expect}")
+            return out
+        if isinstance(expr, Term):
+            return self.term(expr)
+        if isinstance(expr, Minus):
+            layers = _layer_filter(expr.right)
+            left = self.run(expr.left)
+            if layers is not None:
+                return [p for p in left if p[0] not in layers]
+            drop = set(self.run(expr.right))
+            return [p for p in left if p not in drop]
+        items = tuple(i for i in expr.items if not (isinstance(expr, And) and _of_only(i)))
+        filters = [_layer_filter(i) for i in items]
+        if isinstance(expr, Or) and any(f is not None for f in filters):
+            raise self.refuse("unites a `layers`-only term, which names every unit of its layers; a recipe needs "
+                              "explicit units")
+        results = [self.run(i) for i, f in zip(items, filters) if f is None]
+        if not results:
+            raise self.refuse("intersects only `layers` terms, which name no explicit units")
+        if isinstance(expr, Or):
+            return list(dict.fromkeys(p for r in results for p in r))
+        keep = set.intersection(*(set(r) for r in results[1:])) if len(results) > 1 else None
+        layers = [f for f in filters if f is not None]
+        return [p for p in results[0] if (keep is None or p in keep) and all(p[0] in f for f in layers)]
+
+    def term(self, t: Term) -> list[tuple[int, int]]:
+        if t.features is not None:
+            raise self.refuse(f"composes the feature set `{to_string(t)}`; a feature target is one address with "
+                              "`features`, and feature sets do not compose in a recipe")
+        if t.layers is not None and t.layers.indices is None and set(t.set_fields()) == {"layers"}:
+            raise self.refuse(f"filters by `{to_string(t)}`, which depends on the model's depth; name the layers "
+                              "explicitly")
+        if t.units is None:
+            raise self.refuse(f"composes `{to_string(t)}`, which names no explicit units")
+        site = tuple((k, str(v)) for k, v in t.set_fields().items() if k not in ("layers", "units", "of"))
+        self.sites.setdefault(site, to_string(Term(**{k: getattr(t, k) for k, _ in site})) if site
+                              else "no site fields")
+        return _term_units(t, self.name, self.source)
+
+
+def _units(sets: Mapping[str, Expr], name: str, source: str) -> list[tuple[int, int]]:
+    """The ``(layer, unit)`` pairs a book set names: one address with explicit layers and units, or a composition of
+    such sets at one site (see :class:`_UnitSets`)."""
+    expr = sets[name]
+    if isinstance(expr, Term):
+        return _term_units(expr, name, source)
+    return _UnitSets(sets, name, source).resolve()[0]
 
 
 @dataclass(frozen=True)
@@ -618,8 +749,8 @@ def _commute(a: BoundOp, b: BoundOp) -> bool:
         return True
     if a.op.target is not None and b.op.target is not None and a.op.value is not None and b.op.value is not None:
         try:
-            ua = set(_units(a.recipe.book.sets()[a.op.target], a.op.target, a.recipe.source))
-            ub = set(_units(b.recipe.book.sets()[b.op.target], b.op.target, b.recipe.source))
+            ua = set(_units(a.recipe.book.sets(), a.op.target, a.recipe.source))
+            ub = set(_units(b.recipe.book.sets(), b.op.target, b.recipe.source))
         except AddressError:
             return False
         return not ua & ub
