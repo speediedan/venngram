@@ -69,12 +69,32 @@ VOCABULARY: tuple[str, ...] = (
     "embed", "pos_embed", "ln_final", "unembed",
 )
 
+#: The side of each vocabulary component whose coordinates are its **units**: the side not on the residual stream (an
+#: MLP's neurons are the ``out`` side of ``mlp.in`` and the ``in`` side of ``mlp.out``; a head's dimensions the
+#: ``out`` side of ``attn.q`` and the ``in`` side of ``attn.o``; the vocabulary the ``in`` side of ``embed`` and the
+#: ``out`` side of ``unembed``). A norm acts elementwise, so its one axis is both. This is a fact of the vocabulary, not
+#: of an architecture: a map row whose module disagrees maps the wrong module, which the width rules already refuse.
+#: The containers (``attn``, ``mlp``) and components outside the vocabulary have none.
+UNIT_SIDES: dict[str, str] = {
+    "ln1": "out", "attn.q": "out", "attn.k": "out", "attn.v": "out", "attn.qkv": "out", "attn.o": "in",
+    "attn.q_norm": "out", "attn.k_norm": "out", "ln1_post": "out", "ln2": "out", "mlp.gate": "out", "mlp.in": "out",
+    "mlp.out": "in", "ln2_post": "out", "embed": "in", "pos_embed": "in", "ln_final": "out", "unembed": "out",
+}
+
+#: How a row's two-dimensional weight lays out its ``in`` and ``out`` sides: ``out_in`` (``nn.Linear``: a row per
+#: output) or ``in_out`` (GPT-2's ``Conv1D``, ``nn.Embedding``: a row per input). A measured fact, which the map builder
+#: records (:func:`~venngram.maps.verification.with_layouts`) and verification checks.
+LAYOUTS = ("out_in", "in_out")
+
 #: The schema this code writes and reads by default. An additive descriptive key (a property, an annotation) never
 #: bumps it, because readers ignore unknown keys of that class; an applicability key (one that changes which rows apply
 #: or how a row resolves, such as a per-row layer predicate or a second block stack) always does, because a reader that
 #: skipped one would resolve the wrong rows silently. 2 added ``kinds``, ``stacks`` and per-row ``layers``; 3 added
-#: per-row ``optional``.
-COMPONENT_MAP_SCHEMA_VERSION = 4
+#: per-row ``optional``; 5 added per-row ``layout`` (4 is the schema the overlay shape arrived with).
+COMPONENT_MAP_SCHEMA_VERSION = 5
+
+#: The first schema whose rows may carry ``layout`` (it says which tensor axis a unit index runs along).
+LAYOUT_SCHEMA_VERSION = 5
 
 #: The oldest schema this code reads. Published maps outlive the code that wrote them, so the reader accepts a window.
 COMPONENT_MAP_SCHEMA_MIN_READABLE = 1
@@ -175,6 +195,8 @@ class ComponentEntry:
     optional: bool = False
     """The row applies at the covered layers where its module exists (a hybrid stack whose attention and
     linear-attention layers alternate in a pattern that varies by model size). It must exist on at least one."""
+    layout: str | None = None
+    """How the module's two-dimensional weight lays out its sides (:data:`LAYOUTS`); ``None`` when not recorded."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +280,11 @@ class ComponentMap:
         if entry is None:
             return None
         return entry.module.replace("{i}", str(layer)) if layer is not None else entry.module
+
+    def layout_of(self, component: str, layer: int | None, stack: str | None = None) -> str | None:
+        """The recorded :data:`LAYOUTS` value of the row mapping ``component`` at ``layer``, or ``None``."""
+        entry = self._entry(component, layer, stack)
+        return entry.layout if entry is not None else None
 
     def kind_of(self, component: str, layer: int | None, stack: str | None = None) -> str | None:
         """The component's kind, or ``None`` if unmapped there."""
@@ -397,8 +424,14 @@ def _rows(rows: Any, source: str, kinds: dict[str, KindSpec], stacks: dict[str, 
         if sep and head not in stacks:
             raise ValueError(f"{where}: names the block stack {head!r}, which the document does not declare under "
                              "`stacks:`")
-        # only `module`, `kind`, `layers` and `optional` are read: a later schema may annotate rows at no cost here
-        components[name] = ComponentEntry(module=row["module"], kind=row["kind"], layers=layers, optional=optional)
+        layout = row.get("layout")
+        if "layout" in row and (version < LAYOUT_SCHEMA_VERSION or layout not in LAYOUTS):
+            raise ValueError(f"{where}: `layout` is a schema-{LAYOUT_SCHEMA_VERSION} key, one of {list(LAYOUTS)} (a "
+                             "reader that skipped it would index a unit along the wrong axis); declare "
+                             f"schema_version: {LAYOUT_SCHEMA_VERSION}")
+        # only `module`, `kind`, `layers`, `optional` and `layout` are read: a later schema may annotate rows here
+        components[name] = ComponentEntry(module=row["module"], kind=row["kind"], layers=layers, optional=optional,
+                                          layout=layout)
     return components
 
 
@@ -534,6 +567,8 @@ __all__ = [
     "KindSpec",
     "known_architectures",
     "KNOWN_PROPERTIES",
+    "LAYOUT_SCHEMA_VERSION",
+    "LAYOUTS",
     "load_component_map",
     "load_map",
     "map_from_document",
@@ -541,6 +576,7 @@ __all__ = [
     "register",
     "registered_architectures",
     "RowLayers",
+    "UNIT_SIDES",
     "unregister",
     "VOCABULARY",
 ]

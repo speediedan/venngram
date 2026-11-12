@@ -18,6 +18,10 @@ A vocabulary structure provider built from a component map: each tensor is place
 under a row's module belongs to that row whatever lies between, so an adapter PEFT attaches under ``q_proj``
 (``...q_proj.lora_A.default.weight``) is located as ``attn.q``, exactly as the weight it adapts.
 
+A tensor's **unit axis** (:meth:`MapStructure.unit_dim`) is the dimension of a row's own weight or bias that runs
+along its component's units: the side :data:`~venngram.maps.schema.UNIT_SIDES` names, through the row's recorded
+``layout``. Only a row's own tensors have one; an adapter under the row's module does not.
+
 The map's module paths are written from the architecture class (``LlamaForCausalLM``). A provider over a submodule of
 it (the ``LlamaModel`` inside) drops the leading segments that root does not have, found from where the blocks are;
 rows outside that root (``lm_head``) then locate nothing.
@@ -36,7 +40,7 @@ from torch import nn
 
 from venngram.errors import Refusal
 from venngram.maps.check import stack_length, submodule
-from venngram.maps.schema import component_map_for, ComponentMap, PRIMARY_STACK
+from venngram.maps.schema import component_map_for, ComponentMap, PRIMARY_STACK, UNIT_SIDES
 from venngram.resolve import Location, strip_wrappers
 
 
@@ -225,6 +229,37 @@ class MapStructure:
             if not owner:
                 return Location()
             owner = owner.rpartition(".")[0]
+
+    def unit_dim(self, name: str, ndim: int) -> int | Refusal:
+        """The dimension of the tensor ``name`` (of ``ndim`` dimensions) that runs along its component's units, or why
+        it has none: it is not a row's own weight or bias, its component has no unit side, its row records no
+        ``layout``, or (a vector) it lies along the side that is not its units."""
+        if self.refusal is not None:
+            return self.refusal
+        owner = strip_wrappers(name).rpartition(".")[0]
+        loc = self._table.get(owner)
+        if loc is None:
+            found = self.locate(name)
+            if found.component is not None:
+                return Refusal(f"`{name}` lies under the `{found.component}` row's module, not on it: only a row's own "
+                               "weight and bias have a unit axis")
+            return Refusal(f"`{name}` is located at no component")
+        component = loc.component or ""
+        side = UNIT_SIDES.get(component)
+        if side is None:
+            return Refusal(f"component `{component or 'blocks'}` has no unit side (venngram.maps.schema.UNIT_SIDES "
+                           "names the vocabulary's)")
+        if ndim == 1:
+            if side == "out":  # a bias, or a norm's elementwise weight
+                return 0
+            return Refusal(f"`{name}` lies along the `out` side of `{component}`, whose units are its `in` side")
+        if ndim != 2:
+            return Refusal(f"`{name}` has {ndim} dimensions; a unit axis is defined for a vector or a matrix")
+        layout = self.cmap.layout_of(component, loc.layer, loc.stack)
+        if layout is None:
+            return Refusal(f"the {self.cmap.architecture} component map records no `layout` for `{component}` "
+                           "(component map schema 5, written by `venngram.maps.verification.with_layouts`)")
+        return (0 if side == "out" else 1) if layout == "out_in" else (0 if side == "in" else 1)
 
     def depth(self, stack: str | None = None) -> int | Refusal:
         """The number of blocks in ``stack`` (the primary one when ``None``), or why it is unknown."""

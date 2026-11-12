@@ -21,7 +21,7 @@ from venngram.migrate import kind_of, main, migrate
 
 SCHEMAS = Path(__file__).parent / "schemas"
 FIXTURES = sorted(SCHEMAS.glob("*.yaml"))
-CURRENT = {"component_map": 4, "overlay_map": 5, "recipe": 2, "support_record": None, "address_book": None,
+CURRENT = {"component_map": 5, "overlay_map": 5, "recipe": 2, "support_record": None, "address_book": None,
            "rules": 2, "op_specs": 1}
 
 
@@ -31,7 +31,7 @@ def load(path):
 
 def test_every_published_schema_has_a_fixture():
     names = {p.stem for p in FIXTURES}
-    assert {f"component_map_v{v}" for v in (1, 2, 3, 4)} | {"overlay_map_v4", "overlay_map_v5", "recipe_v1",
+    assert {f"component_map_v{v}" for v in (1, 2, 3, 4, 5)} | {"overlay_map_v4", "overlay_map_v5", "recipe_v1",
                                                             "recipe_v2", "support_record_v1", "support_record_v2",
                                                             "support_record_v3", "address_book_v1",
                                                             "address_book_v2", "rules_v2", "op_specs_v1"} == names
@@ -56,7 +56,7 @@ def test_a_fixture_migrates_to_a_current_document_once(path):
 def test_the_steps_are_the_documented_changes():
     migrated, steps = migrate(load(SCHEMAS / "component_map_v1.yaml"))
     assert migrated["properties"] == {"golden_note": "schema 1"} and "facts" not in migrated
-    assert steps == ["component map 1 -> 2: `facts` renamed `properties`", "component map 2 -> 4: version only"]
+    assert steps == ["component map 1 -> 2: `facts` renamed `properties`", "component map 2 -> 5: version only"]
     record, steps = migrate(load(SCHEMAS / "support_record_v1.yaml"))
     assert record["sections"] == {"steering": {"ops": ["add", "scale"], "targets": ["units"], "tokens": ["all"]}}
     assert record["name"] == "golden-steerer" and len(steps) == 1
@@ -82,8 +82,8 @@ def test_the_command_prints_or_writes_the_migrated_document(tmp_path, capsys):
     path.write_text((SCHEMAS / "component_map_v1.yaml").read_text())
     assert main([str(path)]) == 0
     out = capsys.readouterr()
-    assert yaml.safe_load(out.out)["schema_version"] == 4 and "`facts` renamed" in out.err
+    assert yaml.safe_load(out.out)["schema_version"] == 5 and "`facts` renamed" in out.err
     assert load(path)["schema_version"] == 1  # printed, not written
-    assert main([str(path), "--write"]) == 0 and load(path)["schema_version"] == 4
+    assert main([str(path), "--write"]) == 0 and load(path)["schema_version"] == 5
     path.write_text("schema_version: 1\nkind: index\n")
     assert main([str(path)]) == 1 and "not `index`" in capsys.readouterr().err
