@@ -1,0 +1,23 @@
+# Golden fixture: a component map at schema 5, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 5
+architecture: TinyDecoder
+components:
+  embed:
+    module: embed
+    kind: embed
+    layout: in_out
+  blocks.{i}:
+    module: layers.{i}
+    kind: block
+  blocks.{i}.mlp:
+    module: layers.{i}.mlp
+    kind: mlp
+  blocks.{i}.mlp.in:
+    module: layers.{i}.mlp.up
+    kind: linear
+    layout: out_in
+  blocks.{i}.mlp.out:
+    module: layers.{i}.mlp.down
+    kind: linear
+    layout: out_in

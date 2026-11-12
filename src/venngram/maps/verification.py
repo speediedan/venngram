@@ -25,7 +25,10 @@ of the same architecture.
   grouped-query attention ``attn.q`` and ``attn.k`` differ, so a swap fails);
 - **order**: forward pre-hooks on the modules no other mapped module sits under record when each component starts,
   and every order chain is checked where its components fired, which catches swapped labels that widths cannot
-  (``ln1`` for ``ln2``).
+  (``ln1`` for ``ln2``);
+- **layout**: every row's recorded ``layout`` (schema 5) is the one its module's weight has
+  (:func:`measure_layout`). A row that records none is counted, not failed: a unit along its tensor's axis is then
+  refused where it is asked for. :func:`with_layouts` records the measured layouts into a map document.
 
 What the shapes and order checks expect is data, not code: a rule set (:mod:`~venngram.maps.rules`), layered from the
 bundled ``core`` set, the map's own ``verification:`` section and any the caller passes. So a map for an architecture
@@ -60,7 +63,8 @@ from venngram.__about__ import __version__
 from venngram.errors import NewerSchemaError
 from venngram.maps.check import check_map_against_model, MapProblem, stack_length, submodule
 from venngram.maps.rules import config_field, core_rules, evaluate, layered, RuleSet, Unstated
-from venngram.maps.schema import component_map_for, ComponentMap, load_component_map, PRIMARY_STACK
+from venngram.maps.schema import (component_map_for, ComponentMap, from_document, LAYOUT_SCHEMA_VERSION,
+                                  load_component_map, PRIMARY_STACK)
 from venngram.maps.structure import map_for, MapStructure
 from venngram.resolve import component_matches
 
@@ -190,6 +194,88 @@ def _measure(module: Any, what: str) -> int | None:
     if what == "rows":
         return int(weight.shape[0]) if weight.dim() >= 1 else None
     return weight.numel() if what == "numel" else weight.dim()
+
+
+def measure_layout(module: Any) -> str | None:
+    """How ``module``'s two-dimensional weight lays out its sides: ``out_in`` (``nn.Linear``), ``in_out`` (GPT-2's
+    transposed ``Conv1D``, ``nn.Embedding``), or ``None`` when it has no weight whose sides can be told apart.
+
+    >>> measure_layout(nn.Linear(3, 5)), measure_layout(nn.Embedding(7, 3)), measure_layout(nn.LayerNorm(3))
+    ('out_in', 'in_out', None)
+    """
+    weight = getattr(module, "weight", None)
+    if not isinstance(weight, torch.Tensor) or weight.dim() != 2:
+        return None
+    shape = tuple(weight.shape)
+    sides = ((getattr(module, "in_features", None), getattr(module, "out_features", None)),  # nn.Linear
+             (getattr(module, "num_embeddings", None), getattr(module, "embedding_dim", None)),  # nn.Embedding
+             (getattr(module, "nx", None), getattr(module, "nf", None)))  # Conv1D: weight is [nx, nf]
+    for (n_in, n_out), declared in zip(sides, ("out_in", "in_out", "in_out")):
+        if isinstance(n_in, int) and isinstance(n_out, int):
+            # the module says which side is which; the shape must agree with what its type stores
+            expect = (n_out, n_in) if declared == "out_in" else (n_in, n_out)
+            return declared if shape == expect else None
+    return None
+
+
+def _row_modules(cmap: ComponentMap, model: nn.Module) -> Iterable[tuple[str, int | None, Any]]:
+    """Every (row key, layer, module) the map places in ``model``, for the layers each row covers."""
+    for key, entry in cmap.components.items():
+        k = cmap.key(key)
+        template = cmap.block_template(k.stack or PRIMARY_STACK)
+        depth = stack_length(model, template) if k.in_block and template else 0
+        for layer in [i for i in range(depth) if entry.layers is None or entry.layers.covers(i)] if k.in_block \
+                else [None]:
+            module = submodule(model, entry.module if layer is None else entry.module.replace("{i}", str(layer)))
+            if module is not None:
+                yield key, layer, module
+
+
+def check_layout(cmap: ComponentMap, model: nn.Module) -> CheckResult:
+    """The **layout** check: every recorded row ``layout`` is the one :func:`measure_layout` finds on its module."""
+    problems: list[MapProblem] = []
+    checked = unrecorded = 0
+    for key, layer, module in _row_modules(cmap, model):
+        declared, measured = cmap.components[key].layout, measure_layout(module)
+        if declared is None:
+            unrecorded += measured is not None
+            continue
+        checked += 1
+        if measured is None:
+            problems.append(MapProblem(key, layer, f"records layout {declared}, but its module has no weight whose "
+                                       "sides can be told apart"))
+        elif measured != declared:
+            problems.append(MapProblem(key, layer, f"records layout {declared}, its weight is {measured}"))
+    note = f"{checked} layouts checked" + (f", {unrecorded} two-dimensional weights record none" if unrecorded else "")
+    return CheckResult("layout", "failed" if problems else "passed", tuple(problems), note)
+
+
+def with_layouts(doc: Any, model: nn.Module, source: str = "<document>") -> dict[str, Any]:
+    """``doc`` (a component map document) with each row's measured :func:`measure_layout` recorded, at schema 5.
+
+    This is how the map builder records layouts, so a published map never states one by hand. A row whose module has
+    no measurable weight records none; a row whose layers disagree is refused, since one row has one layout.
+
+    Raises:
+        ValueError: If the document is malformed, or a row's modules measure different layouts on different layers.
+    """
+    from venngram.migrate import migrate
+
+    out = migrate(doc, source=source)[0] if doc.get("schema_version", 0) < LAYOUT_SCHEMA_VERSION else copy.deepcopy(doc)
+    cmap = from_document(out, source)
+    found: dict[str, set[str]] = {}
+    for key, _layer, module in _row_modules(cmap, model):
+        measured = measure_layout(module)
+        if measured is not None:
+            found.setdefault(key, set()).add(measured)
+    for key, layouts in found.items():
+        if len(layouts) > 1:
+            raise ValueError(f"{source}: component {key!r} measures layouts {sorted(layouts)} on different layers; "
+                             "one row has one layout, so split it by `layers`")
+        out["components"][key]["layout"] = layouts.pop()
+    out["schema_version"] = max(out["schema_version"], LAYOUT_SCHEMA_VERSION)
+    from_document(out, source)
+    return out
 
 
 def check_shapes(cmap: ComponentMap, model: nn.Module, config: Any, rules: RuleSet | None = None) -> CheckResult:
@@ -429,7 +515,7 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
     if model is None:
         model = _build(config, arch, "meta")
     checks = [CheckResult("exists", *_status(check_map_against_model(cmap, model))), check_partition(cmap, model),
-              check_shapes(cmap, model, config, ruleset)]
+              check_shapes(cmap, model, config, ruleset), check_layout(cmap, model)]
     if order:
         checks.append(_order(cmap, target, config, arch, inputs, ruleset))
         if against is not None:
@@ -488,11 +574,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "check_against",
+    "check_layout",
     "check_order",
     "check_partition",
     "check_shapes",
     "CheckResult",
     "default_inputs",
+    "measure_layout",
     "read_record",
     "RECORD_SCHEMA_VERSION",
     "rules_for",
@@ -500,6 +588,7 @@ __all__ = [
     "tiny_config",
     "verify",
     "VerificationReport",
+    "with_layouts",
 ]
 
 if __name__ == "__main__":

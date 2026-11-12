@@ -273,6 +273,14 @@ A rule applies only where the map names its component and the configuration stat
 reported `partial` rather than failed for what nothing claims. Each record keeps the order observed in the first block,
 evidence a later checkpoint can be compared against without any rule.
 
+A component's **units** lie on the side of it that is not the residual stream (`venngram.maps.schema.UNIT_SIDES`): an
+MLP's neurons are the `out` side of `mlp.in` and the `in` side of `mlp.out`, a head's dimensions the `out` side of
+`attn.q` and the `in` side of `attn.o`. That is a fact of the vocabulary. Which tensor dimension a side is depends on the
+module (`nn.Linear` stores `[out, in]`, GPT-2's `Conv1D` and `nn.Embedding` store `[in, out]`), so a schema 5 map records
+each row's measured `layout`: `venngram.maps.verification.with_layouts(doc, model)` writes it, the `layout` check refuses
+one the module disagrees with, and `MapStructure.unit_dim(name, ndim)` gives the dimension of a row's own weight or
+bias that runs along its units, refusing by name a tensor that has none.
+
 ```bash
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or venngram.maps.verify(config_or_model)
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a later run must observe the same order
@@ -343,7 +351,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 
 | Kind | Reads | Writes | Keys it does not know |
 | --- | --- | --- | --- |
-| component map | 1 to 4 | 4 | ignored when descriptive |
+| component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
 | address book | 1 to 2 | 1, or 2 when a set uses `of` | ignored at the top level |

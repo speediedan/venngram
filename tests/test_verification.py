@@ -9,7 +9,9 @@ from test_maps_any_architecture import HYBRID, Hybrid
 
 from venngram.maps import component_map_for, from_document
 from venngram.maps.schema import ComponentEntry
-from venngram.maps.verification import main, tiny_config, verify
+from venngram.maps.drafter import map_document
+from venngram.maps.structure import MapStructure
+from venngram.maps.verification import main, tiny_config, verify, with_layouts
 
 pytest.importorskip("transformers")
 
@@ -19,7 +21,8 @@ def test_sampled_registry_maps_verify_from_their_configuration(architecture):
     report = verify(CONFIGS[architecture](), architecture=architecture)
     assert report.status == "verified", str(report)
     record = report.record()
-    assert record["status"] == "verified" and set(record["checks"]) == {"exists", "partition", "shapes", "order"}
+    assert record["status"] == "verified" and set(record["checks"]) == {"exists", "partition", "shapes", "layout",
+                                                                                "order"}
     assert record["config"]["source"] == "config" and len(record["config"]["sha256"]) == 64
 
 
@@ -79,7 +82,7 @@ def test_a_model_is_verified_as_it_is_and_a_custom_map_is_partial_where_rules_do
     model, cmap = Hybrid(), from_document(yaml.safe_load(HYBRID))
     report = verify(model, cmap)  # no configuration: no widths to read and no small model to build
     assert report.status == "partial", str(report)
-    assert [c.status for c in report.checks] == ["passed", "passed", "skipped", "skipped"]
+    assert [c.status for c in report.checks] == ["passed", "passed", "skipped", "passed", "skipped"]
 
     def run(m):
         x = m.tok(torch.tensor([[1, 2, 3]]))
@@ -130,3 +133,64 @@ def test_a_run_is_compared_against_a_stored_record():
     assert check.status == "failed" and "stack 'blocks'" in str(check.problems[0])
     other = verify(config, architecture="LlamaForCausalLM", against={**record, "architecture": "OPTForCausalLM"})
     assert other.check("against_record").status == "failed"
+
+
+def seed_document(architecture):
+    from pathlib import Path
+
+    return yaml.safe_load(Path(component_map_for(architecture).source).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("architecture, neurons", [
+    # (mlp.in weight's unit dimension, mlp.out weight's): GPT-2's Conv1D stores [in, out], nn.Linear [out, in]
+    ("GPT2LMHeadModel", (1, 0)),
+    ("LlamaForCausalLM", (0, 1)),
+])
+def test_the_builder_records_measured_layouts_and_a_tensor_names_its_unit_dimension(architecture, neurons):
+    model = tiny(architecture)
+    doc = with_layouts(seed_document(architecture), model)
+    assert doc["schema_version"] == 5 and doc["components"]["embed"]["layout"] == "in_out"
+    assert "layout" not in doc["components"]["blocks.{i}.ln1"]  # a vector has one axis, so nothing to record
+    cmap = from_document(doc)
+    written = map_document(cmap)  # the map builder writes the layouts back, at schema 5
+    assert written["schema_version"] == 5 and from_document(written).components == cmap.components
+    layout = verify(model, cmap, order=False).check("layout")
+    assert layout.status == "passed" and layout.note.endswith("layouts checked")
+    structure = MapStructure(model, cmap)
+    params = dict(model.named_parameters())
+    up, down = (next(n for n in params if cmap.module_for(c, 1).replace("{i}", "1") + ".weight" == n)
+                for c in ("mlp.in", "mlp.out"))
+    assert (structure.unit_dim(up, 2), structure.unit_dim(down, 2)) == neurons
+    assert params[up].shape[neurons[0]] == params[down].shape[neurons[1]]  # both run along the MLP's hidden width
+    embed = next(n for n in params if n.startswith(cmap.module_for("embed", None)))
+    assert structure.unit_dim(embed, 2) == 0  # a row per token
+    bias = down.replace(".weight", ".bias")
+    if bias in params:  # mlp.out's bias lies on the residual side, not along its neurons
+        assert "whose units are its `in` side" in str(structure.unit_dim(bias, 1))
+
+
+def test_a_unit_dimension_is_refused_by_name_where_it_is_not_defined():
+    model = tiny("LlamaForCausalLM")
+    unrecorded = MapStructure(model, component_map_for("LlamaForCausalLM"))  # the published map records no layout
+    assert "records no `layout` for `mlp.out`" in str(unrecorded.unit_dim("model.layers.0.mlp.down_proj.weight", 2))
+    structure = MapStructure(model, from_document(with_layouts(seed_document("LlamaForCausalLM"), model)))
+    assert "only a row's own weight and bias" in str(
+        structure.unit_dim("model.layers.0.mlp.down_proj.lora_A.default.weight", 2))
+    assert "has 3 dimensions" in str(structure.unit_dim("model.layers.0.mlp.down_proj.weight", 3))
+    assert "located at no component" in str(structure.unit_dim("elsewhere.weight", 2))
+
+
+def test_a_recorded_layout_is_checked_and_needs_schema_5():
+    model = tiny("LlamaForCausalLM")
+    doc = with_layouts(seed_document("LlamaForCausalLM"), model)
+    doc["components"]["blocks.{i}.mlp.out"]["layout"] = "in_out"
+    doc["components"]["blocks.{i}.ln1"]["layout"] = "out_in"
+    layout = verify(model, from_document(doc), order=False).check("layout")
+    assert layout.status == "failed"
+    assert any("records layout in_out, its weight is out_in" in str(p) for p in layout.problems)
+    assert any("no weight whose sides can be told apart" in str(p) for p in layout.problems)
+    with pytest.raises(ValueError, match="`layout` is a schema-5 key"):
+        from_document({**doc, "schema_version": 4})
+    with pytest.raises(ValueError, match="one of \\['out_in', 'in_out'\\]"):
+        from_document({**doc, "components": {"embed": {"module": "model.embed_tokens", "kind": "embed",
+                                                       "layout": "rows"}}})
