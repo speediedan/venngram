@@ -45,7 +45,8 @@ kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it int
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
 version; a key that changes what a set selects does. Schema 2 adds the ``of`` address field (a set's gradients), so a
-book whose sets use it is schema 2, and every other book stays readable as schema 1.
+book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
+``weights`` section (ops on parameters), which an older reader would pass over silently.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -78,9 +79,11 @@ from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 2)
+SCHEMA_WINDOW = (1, 3)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
+#: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
+WEIGHTS_SCHEMA = 3
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -206,6 +209,16 @@ class AddressBook:
         uses_of = sorted(n for n, expr in own.items() if any(t.of is not None for t in terms(expr)))
         if uses_of and inline and "schema_version" not in doc:
             version = OF_SCHEMA  # an inline book takes the version its sets need
+        raw_treatments = doc.get("treatments")
+        with_weights = sorted(n for n, body in raw_treatments.items()
+                              if isinstance(body, Mapping) and "weights" in body) \
+            if isinstance(raw_treatments, Mapping) else []
+        if with_weights and inline and "schema_version" not in doc:
+            version = WEIGHTS_SCHEMA
+        if with_weights and version < WEIGHTS_SCHEMA:
+            raise AddressError(f"{source}: the treatments {with_weights} have `weights`, which need address book "
+                               f"schema {WEIGHTS_SCHEMA}, not {version}: an older venngram would pass over them "
+                               "silently.")
         if uses_of and version < OF_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_of} use the `of` field, which needs address book schema "
                                f"{OF_SCHEMA}, not {version}: an older venngram would refuse it by name rather than "

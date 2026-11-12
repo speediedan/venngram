@@ -300,6 +300,7 @@ def newest_readable(kind: str, subject: str = "") -> int | None:
     from venngram.maps.schema import COMPONENT_MAP_SCHEMA_VERSION
     from venngram.maps.verification import RECORD_SCHEMA_VERSION
     from venngram.ops import OP_SPECS_WINDOW
+    from venngram.patches import WEIGHT_PATCH_WINDOW
     from venngram.recipe import RECIPE_WINDOW
     from venngram.support import SCHEMA_WINDOW as SUPPORT_WINDOW
 
@@ -307,7 +308,7 @@ def newest_readable(kind: str, subject: str = "") -> int | None:
         return OVERLAY_SCHEMA_VERSION if subject.startswith(OVERLAY_SUBJECT_PREFIX) else COMPONENT_MAP_SCHEMA_VERSION
     return {"rules": RULES_SCHEMA_VERSION, "address_book": BOOK_WINDOW[1], "recipe": RECIPE_WINDOW[1],
             "support_record": SUPPORT_WINDOW[1], "verification_record": RECORD_SCHEMA_VERSION,
-            "op_specs": OP_SPECS_WINDOW[1]}.get(kind)
+            "op_specs": OP_SPECS_WINDOW[1], "weight_patch": WEIGHT_PATCH_WINDOW[1]}.get(kind)
 
 
 def _pass_over(reference: str, detail: str) -> None:

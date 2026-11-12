@@ -463,13 +463,21 @@ def _load_op_specs(path: Path) -> Any:
     return read_op_specs(_read_yaml(path), source=str(path))
 
 
+def _load_weight_patch(path: Path) -> Any:
+    """Read a ``weight_patch`` document, checking its sidecar (:func:`venngram.patches.read_weight_patch`)."""
+    from venngram.patches import read_weight_patch
+
+    return read_weight_patch(path)
+
+
 register_store("local", LocalStore(), versioned=False)
 register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
-                       ("support_record", _load_support), ("op_specs", _load_op_specs)):
+                       ("support_record", _load_support), ("op_specs", _load_op_specs),
+                       ("weight_patch", _load_weight_patch)):
     register_loader(_kind, _loader)
 
 

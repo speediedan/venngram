@@ -1,0 +1,11 @@
+# Golden fixture: an op specs document at schema 2, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 2
+kind: op_specs
+name: golden-weight-ops
+ops:
+- name: golden_soft_zero
+  operand: [none, delta]
+  targets: [param, param_units]
+  value: optional
+  composition: ordered

@@ -58,12 +58,26 @@ declared transforms (:data:`~venngram.ops.TRANSFORMS`). **Tokens** are set per s
 its spec allows. ``prompt`` is every position of the input before any generated token; ``generated`` is every
 position the consumer generates, at each decode step (a consumer that does not generate refuses it by name).
 
+**Weights**: a recipe's ``weights`` section (recipe schema 3) lists ops on parameters, in order, applied to the tensors
+before any stage runs and kept in them (a consumer materializes them, reversibly or for export). Each names a target set
+that addresses tensors (no ``point``, ``features`` or ``subspace``): a whole tensor is a ``param`` target, a set with
+``units`` a ``param_units`` one, along each tensor's unit axis (:meth:`venngram.maps.structure.MapStructure.unit_dim`).
+A weight op acts on every token, so its token scope is ``all``, and on the tensor's value, never ``of: grad``. An
+``add`` or ``replace`` may take a ``delta`` operand, a weight patch (``operands: {edit: {patch: edit.yaml}}``,
+:mod:`venngram.patches`). A recipe may have ``weights`` and no ``stages``.
+
+.. code-block:: yaml
+
+    weights:
+      - {op: scale, target: {set: chess_columns}, value: {dose: 0.0}}       # zero neurons' write columns
+      - {op: add, target: {set: down_13}, operand: edit}                     # a low-rank patch from a document
+
 **Composition** (:func:`compose`): recipes on one model revision compose stage by stage. Without an order, ops from
 different recipes at one site must commute (the same summing or multiplying op, or disjoint unit sets); otherwise the
 composition must state ``order: listed``.
 
-**Versions**: schema 2 is written; schema 1 (one ``method`` and its ``treatments``) is read through :func:`migrate`
-with a deprecation warning.
+**Versions**: schema 2 is written, or schema 3 when the recipe has ``weights``; schema 1 (one ``method`` and its
+``treatments``) is read through :func:`migrate` with a deprecation warning.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -75,19 +89,23 @@ from typing import Any
 
 import yaml
 
-from venngram.address import And, Expr, Guarded, Minus, Or, Ref, Term, to_string
+from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
 from venngram.book import AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
 from venngram.resolve import gradient_of
+from venngram.units import _sha256 as _sha256_file
 
 #: The recipe document schema this code writes.
 RECIPE_SCHEMA_VERSION = 2
 
 #: The recipe schemas this code reads (schema 1 through :func:`migrate`).
-RECIPE_WINDOW = (1, 2)
+RECIPE_WINDOW = (1, 3)
+
+#: The first recipe schema with a ``weights`` section (a key an older reader would pass over silently).
+WEIGHTS_SCHEMA = 3
 
 #: Token scopes written as a bare string.
 _BARE_SCOPES = ("all", "last", "prompt", "generated")
@@ -100,7 +118,8 @@ class RecipeSchemaWarning(VenngramDeprecationWarning, DeprecationWarning):
 
 @dataclass(frozen=True)
 class Operand:
-    """A named tensor an op acts with: inline ``values`` or a sidecar ``{file, key, sha256}``, a shape and a basis."""
+    """A named tensor an op acts with: inline ``values`` or a sidecar ``{file, key, sha256}``, a shape and a basis; or a
+    weight patch (``{patch: <path>}``, a ``delta`` operand), whose shape is the tensor's."""
 
     name: str
     shape: tuple[int, ...]
@@ -110,13 +129,31 @@ class Operand:
     key: str | None = None
     sha256: str | None = None
     values: tuple[float, ...] | None = None
+    patch: str | None = None
+    """The path of a ``weight_patch`` document, for a ``delta`` operand (``sha256`` is then the document's)."""
 
     @property
     def kind(self) -> str:
+        if self.patch is not None:
+            return "delta"
         return "vector" if len(self.shape) == 1 else ("pair" if self.shape[0] == 2 else "subspace")
 
+    def weight_patch(self, base_dir: str | Path = ".") -> Any:
+        """The :class:`~venngram.patches.WeightPatch` a ``delta`` operand names, read relative to ``base_dir``."""
+        from venngram.patches import read_weight_patch
+
+        if self.patch is None:
+            raise AddressError(f"operand `{self.name}` is not a weight patch.")
+        path = Path(base_dir) / self.patch
+        if self.sha256 is not None and path.is_file() and _sha256_file(path) != self.sha256.lower():
+            raise AddressError(f"operand `{self.name}`: {path} differs from the sha256 the recipe names.")
+        return read_weight_patch(path)
+
     def load(self, base_dir: str | Path = ".") -> tuple[tuple[float, ...], tuple[int, ...]]:
-        """The operand's values (row-major) and shape, reading its sidecar relative to ``base_dir``."""
+        """The operand's values (row-major) and shape, reading its sidecar relative to ``base_dir`` (a weight patch's
+        dense delta, for a ``delta`` operand)."""
+        if self.patch is not None:
+            return self.weight_patch(base_dir).delta(), self.shape
         if self.values is not None:
             return self.values, self.shape
         values, shape = read_operand(Path(base_dir) / str(self.file), str(self.key), sha256=self.sha256)
@@ -126,6 +163,8 @@ class Operand:
         return values, shape
 
     def to_mapping(self) -> dict[str, Any]:
+        if self.patch is not None:
+            return {"patch": self.patch, **({"sha256": self.sha256} if self.sha256 is not None else {})}
         out: dict[str, Any] = {}
         if self.values is not None:
             out["values"] = list(self.values)
@@ -186,6 +225,8 @@ class Op:
     params: Mapping[str, Any] = field(default_factory=dict)
     value: Value | None = None
     tokens: Tokens | None = None
+    weights: bool = False
+    """An op of the recipe's ``weights`` section: its target is a parameter."""
 
     @property
     def spec(self) -> OpSpec:
@@ -193,7 +234,10 @@ class Op:
 
     def target_kind(self, book: AddressBook) -> str:
         """``activation`` (no target), ``units`` or ``features``, from the target set (a composed target is a unit
-        set: a recipe refuses any other composition when it is read)."""
+        set: a recipe refuses any other composition when it is read); for a ``weights`` op, ``param`` or
+        ``param_units``."""
+        if self.weights:
+            return "param_units" if _names_units(book.sets(), self.target) else "param"
         if self.target is None:
             return "activation"
         term = book.sets()[self.target]
@@ -215,7 +259,7 @@ class Op:
         if self.target is None or self.value is None or self.value.source not in ("dose", "doses"):
             raise AddressError(f"{source}: `{self.op}` has no unit doses (it needs a unit set target and a dose).")
         out = {}
-        for layer, unit in _units(book.sets(), self.target, source):
+        for layer, unit in _units(book.sets(), self.target, source):  # a param_units target's units, likewise
             dose = self.value.dose if self.value.source == "dose" else (self.value.doses or {}).get(layer, {}).get(unit)
             if dose is not None:
                 out[(layer, unit)] = dose
@@ -258,6 +302,8 @@ class Recipe:
     book: AddressBook
     stages: tuple[Stage, ...]
     operands: Mapping[str, Operand] = field(default_factory=dict)
+    weights: tuple[Op, ...] = ()
+    """The ``weights`` section: ops on parameters, in order, applied before any stage."""
     book_ref: Any = None
     """What the document says for ``book`` (a path, or the inline mapping), kept so it round-trips."""
     revision_source: str = "pinned"
@@ -299,13 +345,24 @@ class Recipe:
         if pinned and not any(m.get("id") == model["id"] and m.get("revision") == model["revision"] for m in pinned):
             raise AddressError(f"{source}: the book pins {[(m.get('id'), m.get('revision')) for m in pinned]}, not the "
                                f"recipe's {(model['id'], model['revision'])}.")
-        operands = {name: _operand(name, raw, source) for name, raw in (doc.get("operands") or {}).items()}
+        operands = {name: _operand(name, raw, source, base_dir) for name, raw in (doc.get("operands") or {}).items()}
+        raw_weights = doc.get("weights")
+        if raw_weights is not None:
+            if version < WEIGHTS_SCHEMA:
+                raise AddressError(f"{source}: `weights` needs recipe schema {WEIGHTS_SCHEMA}, not {version}: an older "
+                                   "venngram would pass over it silently.")
+            if not isinstance(raw_weights, list) or not raw_weights:
+                raise AddressError(f"{source}: `weights` lists at least one op on a parameter.")
+        weights = tuple(_op(o, f"{source}: weights op {j}", book, operands, weights=True)
+                        for j, o in enumerate(raw_weights or ()))
         raw_stages = doc.get("stages")
-        if not isinstance(raw_stages, list) or not raw_stages:
-            raise AddressError(f"{source}: `stages` lists at least one {{site, ops}}.")
+        if raw_stages is None and weights:
+            raw_stages = []
+        if not isinstance(raw_stages, list) or not (raw_stages or weights):
+            raise AddressError(f"{source}: `stages` lists at least one {{site, ops}} (or the recipe has `weights`).")
         stages = tuple(_stage(raw, i, book, operands, source) for i, raw in enumerate(raw_stages))
         return cls(name=str(doc.get("name") or source), model_id=model["id"], revision=model["revision"], book=book,
-                   stages=stages, operands=operands, book_ref=raw_book,
+                   stages=stages, operands=operands, weights=weights, book_ref=raw_book,
                    revision_source=model.get("revision_source", "pinned"), sampling=dict(doc.get("sampling") or {}),
                    evidence=dict(doc.get("evidence") or {}), metadata=dict(doc.get("metadata") or {}), source=source,
                    base_dir=str(base_dir) if base_dir is not None else None)
@@ -324,8 +381,9 @@ class Recipe:
         header = sorted({"schema_version", "kind", "name", "book"} & set(body))
         if header:
             raise AddressError(f"{source}: a treatment is written in the book it treats, so it has no {header}.")
-        return cls.from_mapping({"schema_version": RECIPE_SCHEMA_VERSION, "kind": "recipe", "name": name, **body,
-                                 "book": book}, source=source, base_dir=base_dir)
+        version = WEIGHTS_SCHEMA if "weights" in body else RECIPE_SCHEMA_VERSION
+        return cls.from_mapping({"schema_version": version, "kind": "recipe", "name": name, **body, "book": book},
+                                source=source, base_dir=base_dir)
 
     def to_treatment(self) -> dict[str, Any]:
         """This recipe as an entry of its book's ``treatments`` section."""
@@ -346,14 +404,18 @@ class Recipe:
             return cls.from_mapping(yaml.safe_load(fh), source=str(path), base_dir=path.parent)
 
     def to_mapping(self) -> dict[str, Any]:
-        """The recipe as a schema 2 document."""
+        """The recipe as a schema 2 document (schema 3 when it has ``weights``)."""
         doc: dict[str, Any] = {
-            "schema_version": RECIPE_SCHEMA_VERSION, "kind": "recipe", "name": self.name,
+            "schema_version": WEIGHTS_SCHEMA if self.weights else RECIPE_SCHEMA_VERSION, "kind": "recipe",
+            "name": self.name,
             "model": {"id": self.model_id, "revision": self.revision, "revision_source": self.revision_source},
             "book": self.book_ref}
         if self.operands:
             doc["operands"] = {k: o.to_mapping() for k, o in self.operands.items()}
-        doc["stages"] = [s.to_mapping() for s in self.stages]
+        if self.weights:
+            doc["weights"] = [o.to_mapping() for o in self.weights]
+        if self.stages or not self.weights:
+            doc["stages"] = [s.to_mapping() for s in self.stages]
         for key in ("sampling", "evidence", "metadata"):
             if getattr(self, key):
                 doc[key] = dict(getattr(self, key))
@@ -413,7 +475,13 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _operand(name: str, raw: Any, source: str) -> Operand:
+def _operand(name: str, raw: Any, source: str, base_dir: str | Path | None = None) -> Operand:
+    if isinstance(raw, Mapping) and "patch" in raw:
+        unknown = sorted(set(raw) - {"patch", "sha256"})
+        if unknown or not isinstance(raw["patch"], str) or not raw["patch"]:
+            raise AddressError(f"{source}: a weight patch operand `{name}` is {{patch: <path>, sha256}}, got {raw!r}.")
+        o = Operand(name, (), patch=raw["patch"], sha256=raw.get("sha256"))
+        return replace(o, shape=o.weight_patch(base_dir or ".").shape)
     if not isinstance(raw, Mapping) or not isinstance(raw.get("shape"), list) or not raw["shape"] \
             or not all(isinstance(d, int) and d > 0 for d in raw["shape"]) or len(raw["shape"]) > 2:
         raise AddressError(f"{source}: operand `{name}` gives a `shape` of one or two positive dimensions.")
@@ -503,7 +571,7 @@ def _value(raw: Any, where: str) -> Value:
     return Value("from", evidence=frm["evidence"], column=frm["column"], transform=tuple(transform))
 
 
-def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]) -> Op:
+def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand], weights: bool = False) -> Op:
     if not isinstance(raw, Mapping) or not isinstance(raw.get("op"), str):
         raise AddressError(f"{where}: an op is {{op, ...}}, got {raw!r}.")
     name = raw["op"]
@@ -517,13 +585,17 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
     if unknown:
         raise AddressError(f"{where}: unknown keys {sorted(unknown)}.")
     target = None
+    if weights and "target" not in raw:
+        raise AddressError(f"{where}: a `weights` op names the tensors it acts on (`target: {{set: ...}}`).")
     if "target" in raw:
         t = raw["target"]
         sets = book.sets()
         if not isinstance(t, Mapping) or t.get("set") not in sets:
             raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}), got {t!r}.")
         term = sets[t["set"]]
-        if isinstance(term, Term):
+        if weights:
+            of = _check_param_set(sets, t["set"], where)
+        elif isinstance(term, Term):
             if term.units is None and term.features is None:
                 raise AddressError(f"{where}: target set `{t['set']}` must be one address with `units` or `features`, "
                                    "or a composition of unit sets.")
@@ -540,8 +612,11 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
             raise AddressError(f"{where}: operand `{operand}` is not declared (operands: {sorted(operands)}).")
         kinds = [k for k in spec.operand if k != "none"]
         o = operands[operand]
-        fits = (o.kind == "vector" and "vector" in kinds) or (len(o.shape) == 2 and (
-            ("pair" in kinds and o.shape[0] == 2) or "subspace" in kinds))
+        if o.kind == "delta" and not weights:
+            raise AddressError(f"{where}: operand `{operand}` is a weight patch, which only a `weights` op applies.")
+        fits = (o.kind == "delta" and "delta" in kinds) if o.kind == "delta" else \
+            (o.kind == "vector" and "vector" in kinds) or (len(o.shape) == 2 and (
+                ("pair" in kinds and o.shape[0] == 2) or "subspace" in kinds))
         if not fits:
             raise AddressError(f"{where}: operand `{operand}` of shape {list(o.shape)} is not a "
                                f"{' or '.join(kinds) or 'valid'} operand for this op.")
@@ -558,17 +633,55 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
         raise AddressError(f"{where}: takes no `value`.")
     if value is None and (spec.value == "required" or (operand is None and spec.value != "none")):
         raise AddressError(f"{where}: needs a `value`{'' if spec.value == 'required' else ' or an operand'}.")
-    kind = "activation" if target is None else Op(name, target).target_kind(book)
+    kind = "activation" if target is None else Op(name, target, weights=weights).target_kind(book)
     if kind not in spec.targets:
         raise AddressError(f"{where}: acts on {list(spec.targets)}, not `{kind}`.")
-    if value is not None and value.source == "doses" and kind != "units":
+    if value is not None and value.source == "doses" and kind not in ("units", "param_units"):
         raise AddressError(f"{where}: per-unit `doses` need a target set with `units`.")
     tokens = None
-    if "tokens" in raw:
+    if weights and "tokens" in raw:
+        scope = _tokens(raw["tokens"], where)
+        if scope.kind != "all":
+            raise AddressError(f"{where}: a `weights` op changes the tensor itself, so it acts on every token: its "
+                               f"token scope is `all`, not `{scope.kind}`.")
+    elif "tokens" in raw:
         if not spec.token_override:
             raise AddressError(f"{where}: cannot override its stage's `tokens`.")
         tokens = _tokens(raw["tokens"], where)
-    return Op(name, target, operand, params, value, tokens)
+    return Op(name, target, operand, params, value, tokens, weights)
+
+
+def _leaf_terms(sets: Mapping[str, Expr], name: str) -> list[Term]:
+    """Every term the set ``name`` reaches, following references (the book refuses cycles when it loads)."""
+    out: list[Term] = []
+    seen: set[str] = set()
+    todo = [name]
+    while todo:
+        n = todo.pop()
+        if n in seen or n not in sets:
+            continue
+        seen.add(n)
+        out += terms(sets[n])
+        todo += references(sets[n])
+    return out
+
+
+def _names_units(sets: Mapping[str, Expr], name: str | None) -> bool:
+    return name is not None and any(t.units is not None for t in _leaf_terms(sets, name))
+
+
+def _check_param_set(sets: Mapping[str, Expr], name: str, where: str) -> str:
+    """Refuse a ``weights`` target set that does not address tensors, or addresses their gradients; ``value``."""
+    for t in _leaf_terms(sets, name):
+        if t.target != "param":
+            raise AddressError(f"{where}: target set `{name}` addresses a {t.target} (`{to_string(t)}`); a `weights` "
+                               "op acts on tensors, so its set names no `point`, `features` or `subspace`.")
+        if t.of not in (None, "value"):
+            raise AddressError(f"{where}: target set `{name}` addresses `of: {t.of}`; a `weights` op changes a "
+                               "tensor's value, not its gradient.")
+    if _names_units(sets, name) and not isinstance(sets[name], Term):
+        _UnitSets(sets, name, where).resolve()  # a composed unit set resolves when the recipe is read, as in a stage
+    return "value"
 
 
 def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand], source: str) -> Stage:
@@ -798,6 +911,29 @@ def compose(recipes: Sequence[Recipe], *, ordered: bool = False) -> list[Compose
     return out
 
 
+def compose_weights(recipes: Sequence[Recipe], *, ordered: bool = False) -> tuple[BoundOp, ...]:
+    """The ``weights`` ops several recipes on one model revision amount to, in recipe order.
+
+    Without ``ordered``, weight ops from different recipes must commute as stage ops do: the same summing or
+    multiplying op (additive deltas on one tensor sum), or ops on disjoint units.
+
+    Raises:
+        AddressError: If the recipes pin different revisions, or two weight ops do not commute and no order is given.
+    """
+    compose(recipes, ordered=True)  # the revision check; stages are composed by `compose` itself
+    out: list[BoundOp] = []
+    for r in recipes:
+        for o in r.weights:
+            b = BoundOp(o, r)
+            if not ordered:
+                clash = next((a for a in out if a.recipe is not r and not _commute(a, b)), None)
+                if clash is not None:
+                    raise AddressError(f"{r.source}: weights op `{o.op}` does not commute with `{clash.op.op}` from "
+                                       f"{clash.recipe.source}; compose with an order.")
+            out.append(b)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class Composition:
     """Several recipes applied together, in order when ``ordered``."""
@@ -808,6 +944,10 @@ class Composition:
     def stages(self) -> list[ComposedStage]:
         """The stages to apply, in order (see :func:`compose`)."""
         return compose(self.recipes, ordered=self.ordered)
+
+    def weights(self) -> tuple[BoundOp, ...]:
+        """The weight ops to apply before any stage, in order (see :func:`compose_weights`)."""
+        return compose_weights(self.recipes, ordered=self.ordered)
 
 
 def load_recipe(path: str | Path) -> Recipe | Composition:
@@ -830,6 +970,7 @@ def load_recipe(path: str | Path) -> Recipe | Composition:
 __all__ = [
     "BoundOp",
     "compose",
+    "compose_weights",
     "ComposedStage",
     "Composition",
     "load_recipe",
@@ -840,6 +981,7 @@ __all__ = [
     "RECIPE_SCHEMA_VERSION",
     "RECIPE_WINDOW",
     "RecipeSchemaWarning",
+    "WEIGHTS_SCHEMA",
     "Stage",
     "Tokens",
     "Transform",

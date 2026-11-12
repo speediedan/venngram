@@ -68,12 +68,14 @@ import yaml
 from venngram.address import FIELDS, references, TARGETS, terms
 from venngram.book import AddressBook, PORTABILITY, STRUCTURE_LEVELS
 from venngram.errors import NewerSchemaError
-from venngram.ops import check_support, Support
+from venngram.ops import check_support, PARAM_TARGETS, Support
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 3)
+SCHEMA_WINDOW = (1, 4)
 #: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
 OF_SCHEMA = 3
+#: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
+PARAM_SCHEMA = 4
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -399,6 +401,9 @@ class SupportRecord:
             if "of" in doc:
                 raise ValueError(f"{source}: `of` is declared in the `steering` section of a schema {OF_SCHEMA} "
                                  "record, not at the top level of a schema 1 one.")
+            if _param_targets(doc):
+                raise ValueError(f"{source}: a parameter target is declared in the `steering` section of a schema "
+                                 f"{PARAM_SCHEMA} record, not at the top level of a schema 1 one.")
             return cls(name=name, sections={"steering": Support.from_mapping(doc, source=source)})
         unknown = sorted(set(doc) - set(_TOP_KEYS))
         if unknown:
@@ -416,6 +421,10 @@ class SupportRecord:
                 if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
                     raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
                                      "venngram would refuse the record by name rather than pass over it.")
+                if kind == "steering" and _param_targets(body) and version < PARAM_SCHEMA:
+                    raise ValueError(f"{where}: the parameter targets {_param_targets(body)} need support record "
+                                     f"schema {PARAM_SCHEMA}, not {version}: an older venngram would refuse the record "
+                                     "by name rather than pass over it.")
                 sections[kind] = _SECTIONS[kind](body, source=where)
                 continue
             if kind in extensions:
@@ -461,8 +470,11 @@ class SupportRecord:
             else:
                 raise ValueError(f"section `{kind}` ({type(contract).__name__}) has no `to_mapping`.")
         sections.update(self.skipped)
-        needs_of = any(isinstance(c, Support) and c.of != Support.of for c in self.sections.values())
-        out: dict[str, Any] = {"schema_version": OF_SCHEMA if needs_of else SCHEMA_VERSION, "kind": "support_record"}
+        steering = [c for c in self.sections.values() if isinstance(c, Support)]
+        needs_of = any(c.of != Support.of for c in steering)
+        version = PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
+            OF_SCHEMA if needs_of else SCHEMA_VERSION
+        out: dict[str, Any] = {"schema_version": version, "kind": "support_record"}
         if self.name is not None:
             out["name"] = self.name
         if self.description is not None:
@@ -495,6 +507,11 @@ class SupportRecord:
         if self.steering is None:
             return self._refuse_missing("steering", f"recipe `{getattr(recipe, 'name', '?')}`")
         return check_support(recipe, self.steering)
+
+
+def _param_targets(body: Any) -> list[str]:
+    targets = body.get("targets") if isinstance(body, Mapping) else None
+    return sorted(set(targets) & set(PARAM_TARGETS)) if isinstance(targets, list) else []
 
 
 def _steering_mapping(s: Support) -> dict[str, Any]:

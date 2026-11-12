@@ -24,6 +24,15 @@ remove the component in a span, a ``fraction`` of it), ``patch`` (swap coordinat
 ``o`` at an activation ``x`` it gives ``o + sg(x - o)``, where ``sg`` stops the gradient, so the forward value is ``x``
 and the gradient through the substitution reaches ``o``, not ``x``; the error term a spliced latent model trains
 with). An op's ``of`` says which target sets it may act on: values, gradients (``of: grad``), or both.
+
+**Targets** are an activation (no target), the ``units`` or ``features`` a book set names at a site, or a **parameter**:
+a whole tensor (``param``) or units of it along its unit axis (``param_units``; :data:`~venngram.maps.schema.UNIT_SIDES`
+says which side, a map's ``layout`` which dimension). A parameter op lives in a recipe's ``weights`` section and is
+materialized into the tensor, so it has no token scope but ``all``. ``add``, ``scale`` and ``replace`` declare both
+parameter targets; ``project`` and ``reject`` declare ``param`` (for a matrix ``W`` and a direction ``u`` on its ``out``
+side, ``reject`` with fraction ``a`` gives ``(I - a u u^T) W``: the activation ``reject`` at its output, folded in);
+``patch`` and ``clamp`` declare none. A weight ``add`` or ``replace`` may take a ``delta`` operand: a weight patch
+(:mod:`venngram.patches`). ``fraction`` may exceed 1 (over-rejection) on every target.
 :func:`register_op` adds an op in code; :func:`read_op_specs` reads declarations published as an ``op_specs``
 document, so a recipe naming a published op validates without its publisher's code. :func:`op_cases` and
 :func:`check_ops` are conformance vectors for ops whose meaning is numeric, as :func:`transform_cases` and
@@ -81,10 +90,17 @@ import yaml
 from venngram.address import OF
 
 #: The ``op_specs`` document schemas this code reads.
-OP_SPECS_WINDOW = (1, 1)
+OP_SPECS_WINDOW = (1, 2)
 
-OPERAND_KINDS = ("none", "vector", "pair", "subspace")
-TARGETS = ("activation", "units", "features")
+#: The first ``op_specs`` schema whose declarations may name a parameter target or a ``delta`` operand.
+PARAM_OP_SPECS_SCHEMA = 2
+
+OPERAND_KINDS = ("none", "vector", "pair", "subspace", "delta")
+#: What an op may act on at a site: the whole activation, a set's units, a latent space's features.
+ACTIVATION_TARGETS = ("activation", "units", "features")
+#: What an op in a recipe's ``weights`` section may act on: a whole tensor, or units of it along its unit axis.
+PARAM_TARGETS = ("param", "param_units")
+TARGETS = ACTIVATION_TARGETS + PARAM_TARGETS
 TOKEN_SCOPES = ("all", "last", "prompt", "generated", "positions", "slice")
 VALUE_SOURCES = ("dose", "doses", "from")
 COMPOSITION = ("sum", "product", "max", "min", "ordered")
@@ -109,7 +125,9 @@ class OpSpec:
     operand: tuple[str, ...] = ("none",)
     params: Mapping[str, ParamSpec] = field(default_factory=dict)
     requires: tuple[str, ...] = ()
-    targets: tuple[str, ...] = TARGETS
+    targets: tuple[str, ...] = ACTIVATION_TARGETS
+    """What it may act on (:data:`TARGETS`); left out, the activation targets, so a declaration written before
+    parameter targets keeps its meaning."""
     value: str = "optional"
     """``required``, ``optional`` or ``none``."""
     token_override: bool = False
@@ -124,15 +142,15 @@ class OpSpec:
         return _COMBINE[self.composition](a, b)
 
 
-_FRACTION = ParamSpec(float, False, (0.0, 1.0))
+_FRACTION = ParamSpec(float, False, (0.0, math.inf))  # above 1 over-projects (over-rejection keeps going past zero)
 
 #: The registered ops, by name.
 OPS: dict[str, OpSpec] = {spec.name: spec for spec in (
-    OpSpec("replace", ("none", "vector"), targets=TARGETS),
-    OpSpec("add", ("none", "vector"), composition="sum"),
-    OpSpec("scale", ("none",), value="required", composition="product"),
-    OpSpec("project", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation",), "none"),
-    OpSpec("reject", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation",), "none"),
+    OpSpec("replace", ("none", "vector", "delta"), targets=TARGETS),
+    OpSpec("add", ("none", "vector", "delta"), targets=TARGETS, composition="sum"),
+    OpSpec("scale", ("none",), targets=TARGETS, value="required", composition="product"),
+    OpSpec("project", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation", "param"), "none"),
+    OpSpec("reject", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation", "param"), "none"),
     OpSpec("patch", ("pair",), {}, ("basis",), ("activation",), "none"),
     OpSpec("clamp", ("vector", "subspace"), {"min": ParamSpec(), "max": ParamSpec()}, ("basis",), ("activation",),
            "none", at_least_one_of=("min", "max")),
@@ -378,9 +396,15 @@ def op_spec_to_mapping(spec: OpSpec) -> dict[str, Any]:
             "composition": spec.composition, "at_least_one_of": list(spec.at_least_one_of), "of": list(spec.of)}
 
 
+def _needs_param_schema(spec: OpSpec) -> bool:
+    return bool(set(spec.targets) & set(PARAM_TARGETS)) or "delta" in spec.operand
+
+
 def write_op_specs(specs: Sequence[OpSpec], *, name: str, description: str | None = None) -> dict[str, Any]:
-    """An ``op_specs`` document declaring ``specs``, for a consumer to publish the ops it registered."""
-    doc: dict[str, Any] = {"schema_version": OP_SPECS_WINDOW[1], "kind": "op_specs", "name": name}
+    """An ``op_specs`` document declaring ``specs``, for a consumer to publish the ops it registered: schema 1, or 2
+    when a declaration names a parameter target or a ``delta`` operand."""
+    version = PARAM_OP_SPECS_SCHEMA if any(_needs_param_schema(s) for s in specs) else 1
+    doc: dict[str, Any] = {"schema_version": version, "kind": "op_specs", "name": name}
     if description is not None:
         doc["description"] = description
     doc["ops"] = [op_spec_to_mapping(s) for s in specs]
@@ -431,6 +455,10 @@ def read_op_specs(doc: Any, *, source: str = "<inline>", register: bool = True) 
     specs = tuple(op_spec_from_mapping(r, source=source) for r in raw)
     seen: set[str] = set()
     for spec in specs:
+        if version < PARAM_OP_SPECS_SCHEMA and _needs_param_schema(spec):
+            raise ValueError(f"{source}: op `{spec.name}` names a parameter target or a `delta` operand, which needs "
+                             f"op_specs schema {PARAM_OP_SPECS_SCHEMA}, not {version}: an older venngram would refuse "
+                             "it by name rather than pass over it.")
         if spec.name in seen:
             raise ValueError(f"{source}: declares `{spec.name}` twice.")
         seen.add(spec.name)
@@ -455,22 +483,26 @@ class OpCase:
     op: str
     inputs: Mapping[str, tuple[float, ...]]
     expect: Mapping[str, tuple[float, ...]]
+    target: str = "activation"
+    """The target kind the case exercises (:data:`TARGETS`), for an evaluator that implements only some."""
 
 
-def op_cases(op: str | None = None) -> tuple[OpCase, ...]:
-    """venngram's op conformance vectors (``data/op_vectors.yaml``), all of them or ``op``'s."""
+def op_cases(op: str | None = None, *, target: str | None = None) -> tuple[OpCase, ...]:
+    """venngram's op conformance vectors (``data/op_vectors.yaml``), all of them or ``op``'s (and ``target``'s)."""
     doc = yaml.safe_load((resources.files("venngram") / "data" / "op_vectors.yaml").read_text("utf-8"))
     cases = tuple(OpCase(c["name"], c["op"], {k: tuple(float(x) for x in v) for k, v in c["inputs"].items()},
-                         {k: tuple(float(x) for x in v) for k, v in c["expect"].items()}) for c in doc["cases"])
-    return tuple(c for c in cases if op is None or c.op == op)
+                         {k: tuple(float(x) for x in v) for k, v in c["expect"].items()},
+                         c.get("target", "activation")) for c in doc["cases"])
+    return tuple(c for c in cases if (op is None or c.op == op) and (target is None or c.target == target))
 
 
 def check_ops(evaluate: Callable[[OpCase], Mapping[str, Sequence[float]]], *, op: str | None = None,
-              rel_tol: float = 1e-9, abs_tol: float = 1e-12) -> list[str]:
+              target: str | None = None, rel_tol: float = 1e-9, abs_tol: float = 1e-12) -> list[str]:
     """Every op conformance vector ``evaluate`` (a consumer's implementation, adapted to take an :class:`OpCase` and
-    return each expected quantity by name) gets wrong, by name; empty when it agrees."""
+    return each expected quantity by name) gets wrong, by name; empty when it agrees. ``op`` and ``target`` limit
+    the vectors to the ones a consumer implements."""
     out: list[str] = []
-    for case in op_cases(op):
+    for case in op_cases(op, target=target):
         try:
             got = {k: tuple(float(x) for x in v) for k, v in evaluate(case).items()}
         except Exception as err:  # a consumer's refusal or bug, reported by case rather than raised
@@ -497,7 +529,7 @@ class Support:
         kind: support_record
         name: example-steerer
         ops: [add, scale]
-        targets: [units]                  # default: every target
+        targets: [units]                  # default: every activation target
         tokens: [all, prompt]             # default: [all]
         values: [dose, doses]             # default: [dose, doses]
         transforms: [statistic]           # default: none
@@ -506,10 +538,12 @@ class Support:
 
     ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
     ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
+    A parameter target (``param``, ``param_units``: a recipe's ``weights`` section) is declared in ``targets`` of a
+    schema 4 record's ``steering`` section.
     """
 
     ops: frozenset[str]
-    targets: frozenset[str] = frozenset(TARGETS)
+    targets: frozenset[str] = frozenset(ACTIVATION_TARGETS)
     tokens: frozenset[str] = frozenset({"all"})
     values: frozenset[str] = frozenset({"dose", "doses"})
     transforms: frozenset[str] = frozenset()
@@ -573,6 +607,13 @@ _GLOB = re.compile(r"[*?\[]")
 def check_support(recipe: Any, support: Support) -> list[str]:
     """Every way ``recipe`` (a :class:`venngram.recipe.Recipe`) asks for something ``support`` does not honour."""
     out: list[str] = []
+    for j, op in enumerate(getattr(recipe, "weights", ())):
+        at = f"weights op {j} (`{op.op}`)"
+        if op.op not in support.ops:
+            out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
+        if op.target_kind(recipe.book) not in support.targets:
+            out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
+        out += _value_and_operand(op, recipe, support, at)
     for i, stage in enumerate(recipe.stages):
         where = f"stage {i} ({stage.site})"
         if not support.site_ok(stage.site):
@@ -590,20 +631,27 @@ def check_support(recipe: Any, support: Support) -> list[str]:
                            f"(it declares {sorted(support.of)})")
             if tokens not in support.tokens:
                 out.append(f"{at}: token scope `{tokens}` is not supported")
-            if op.value is not None:
-                if op.value.source not in support.values:
-                    out.append(f"{at}: value source `{op.value.source}` is not supported")
-                for t in op.value.transform:
-                    if t.name not in support.transforms:
-                        out.append(f"{at}: transform `{t.name}` is not supported")
-            if op.operand is not None and support.bases is not None:
-                basis = recipe.operands[op.operand].basis
-                if basis not in support.bases:
-                    out.append(f"{at}: operand `{op.operand}` is in basis `{basis}`, which is not supported")
+            out += _value_and_operand(op, recipe, support, at)
+    return out
+
+
+def _value_and_operand(op: Any, recipe: Any, support: Support, at: str) -> list[str]:
+    out: list[str] = []
+    if op.value is not None:
+        if op.value.source not in support.values:
+            out.append(f"{at}: value source `{op.value.source}` is not supported")
+        for t in op.value.transform:
+            if t.name not in support.transforms:
+                out.append(f"{at}: transform `{t.name}` is not supported")
+    if op.operand is not None and support.bases is not None and recipe.operands[op.operand].kind != "delta":
+        basis = recipe.operands[op.operand].basis  # a weight patch is in the tensor's own coordinates, not a basis
+        if basis not in support.bases:
+            out.append(f"{at}: operand `{op.operand}` is in basis `{basis}`, which is not supported")
     return out
 
 
 __all__ = [
+    "ACTIVATION_TARGETS",
     "ALIASES",
     "check_ops",
     "check_support",
@@ -619,6 +667,8 @@ __all__ = [
     "OP_SPECS_WINDOW",
     "OpCase",
     "OpSpec",
+    "PARAM_OP_SPECS_SCHEMA",
+    "PARAM_TARGETS",
     "ParamSpec",
     "read_op_specs",
     "register_op",
