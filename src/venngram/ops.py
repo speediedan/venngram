@@ -584,7 +584,7 @@ def check_support(recipe: Any, support: Support) -> list[str]:
                 out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
             if op.target_kind(recipe.book) not in support.targets:
                 out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
-            of = (recipe.book.sets()[op.target].of or "value") if op.target is not None else "value"
+            of = op.target_of(recipe.book)
             if of not in support.of:
                 out.append(f"{at}: target set `{op.target}` addresses `of: {of}`, which this consumer does not act on "
                            f"(it declares {sorted(support.of)})")

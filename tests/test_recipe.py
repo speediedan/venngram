@@ -71,6 +71,71 @@ def test_values_from_evidence_and_features_targets():
     assert recipe.stages[0].tokens.positions == (5, 6)
 
 
+UNIT_SETS = {"a": {12: [1, 2, 3]}, "b": {12: [3, 4]}, "c": {14: [5, 6]}, "ctl": {12: [2], 14: [6]}}
+
+
+def composed(stages, sets, **kwargs):
+    """A recipe over a book of schema 2 (the composition tests also use ``of``)."""
+    doc = recipe_doc(stages, sets, **kwargs)
+    doc["book"]["schema_version"] = 2
+    return Recipe.from_mapping(doc, source=kwargs.get("name", "<inline>"))
+
+
+@pytest.mark.parametrize("expr, pairs", [
+    ("@a & @b", [(12, 3)]),
+    ("@a | @b", [(12, 1), (12, 2), (12, 3), (12, 4)]),
+    ("@a - @b", [(12, 1), (12, 2)]),
+    ("(@a | @c) - @ctl", [(12, 1), (12, 3), (14, 5)]),
+    ("(@a | @c) & layers:14", [(14, 5), (14, 6)]),
+    ("(@a | @c) - layers:14", [(12, 1), (12, 2), (12, 3)]),
+    ("@either - @ctl", [(12, 1), (12, 3), (12, 4)]),
+    ({"all": ["@a", "@b"], "expect": 1}, [(12, 3)]),
+])
+def test_a_unit_target_composes_sets_with_the_set_algebra(expr, pairs):
+    sets = {**UNIT_SETS, "either": "@a | @b", "t": expr}
+    recipe = composed([add("t", {"dose": 0.5})], sets)
+    op = recipe.stages[0].ops[0]
+    assert op.target_kind(recipe.book) == "units"
+    assert list(op.unit_doses(recipe.book)) == pairs and set(op.unit_doses(recipe.book).values()) == {0.5}
+
+
+def test_a_composed_unit_target_takes_per_unit_doses_commutes_when_disjoint_and_reads_of():
+    sets = {**UNIT_SETS, "both": "@a & @b", "rest": "@a - @b"}
+    doses = {"doses": {12: {3: 2.0, 1: 9.0}}}
+    recipe = composed([add("both", doses)], sets)
+    assert recipe.stages[0].ops[0].unit_doses(recipe.book) == {(12, 3): 2.0}
+    scaled = composed([{"site": "mlp.out.hook_in", "ops": [
+        {"op": "scale", "target": {"set": "rest"}, "value": {"dose": 2.0}}]}], sets, name="s")
+    (stage,) = compose([recipe, scaled])
+    assert stage.unit_doses("add") == {(12, 3): 2.0} and stage.unit_doses("scale") == {(12, 1): 2.0, (12, 2): 2.0}
+    grads = composed([add("g", {"dose": 1.0})], {**UNIT_SETS, "g": "(@a & @b) & of:grad"})
+    assert grads.stages[0].ops[0].target_of(grads.book) == "grad"
+    assert grads.stages[0].ops[0].unit_doses(grads.book) == {(12, 3): 1.0}
+    values_only = Support(ops=frozenset({"add"}), targets=frozenset({"units"}))
+    assert check_support(recipe, values_only) == []
+    assert any("addresses `of: grad`" in r for r in check_support(grads, values_only))
+
+
+@pytest.mark.parametrize("expr, match", [
+    ("@a - @a", "set `t` names no units: its composition is empty"),
+    ("@a | @other_site", r"composes units at different sites \(point:mlp.in.hook_out, point:mlp.out.hook_in\)"),
+    ("@a & @top", "composes the feature set .* feature sets do not compose in a recipe"),
+    ("@a | layers:12", "unites a `layers`-only term"),
+    ("@a & layers:-4:", "depends on the model's depth"),
+    ("@a & point:mlp.out.hook_in", "names no explicit units"),
+    ("@a | @deep", "names its units for every layer of a slice or parity"),
+    ("(@a & of:value) | @g", "its terms disagree on `of`"),
+    ({"all": ["@a", "@b"], "expect": 2}, r"name 1 units where `expect` requires 2"),
+])
+def test_a_composed_unit_target_is_refused_by_name(expr, match):
+    sets = {**UNIT_SETS, "t": expr, "top": {"space": "transcoder", "features": "3,7", "layers": [12]},
+            "other_site": {"point": "mlp.in.hook_out", "layers": [12], "units": [9]},
+            "deep": {"point": "mlp.out.hook_in", "layers": "-4:", "units": [1]},
+            "g": {"point": "mlp.out.hook_in", "layers": [12], "units": [1], "of": "grad"}}
+    with pytest.raises(AddressError, match=match):
+        composed([add("t", {"dose": 1.0})], sets)
+
+
 @pytest.mark.parametrize("op, match", [
     ({"op": "lerp"}, "unknown op 'lerp'"),
     ({"op": "mul", "value": {"dose": 2.0}}, "`mul` is now `scale`"),

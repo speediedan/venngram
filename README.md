@@ -98,7 +98,10 @@ is ordered **stages**, each applying ordered **ops** at one site under one
 token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
 a per-unit table, or a column of recorded evidence through declared transforms, each with a stated meaning and
-conformance vectors a consumer's evaluator runs). Ops are declared specs
+conformance vectors a consumer's evaluator runs). A unit target is one address with explicit layers and `units`, or a
+composition of such sets at one site with the set algebra (`@a & @b`, `@a | @b`, `(@a & @b & layers:12) - @control`),
+resolved over `(layer, unit)` pairs when the recipe is read; an empty, mixed-site or feature-set composition is refused
+by name. Ops are declared specs
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, `replace_with_error`, and any
 registered in code or read from a published `op_specs` document); venngram validates and composes them and never
 executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
