@@ -17,3 +17,42 @@ cases:
     op: replace_with_error
     inputs: {x: [0.5, 2.0], o: [0.5, 2.0], g: [3.0, -1.0]}
     expect: {value: [0.5, 2.0], grad_o: [3.0, -1.0], grad_x: [0.0, 0.0]}
+  # Parameter forms (a recipe's `weights` section). A tensor `w` is row-major in its stored `shape`; `dim` is the
+  # dimension its units run along (venngram.maps.structure.MapStructure.unit_dim), so a case holds for any layout.
+  # Where a weight edit has an exact activation counterpart, at token scope `all`, a case expects both forms of the
+  # output `y` (`y_weight` from the edited weight, `y_activation` from the activation op on the unedited one).
+  - name: param-units-scale-scales-the-units-slices
+    op: scale
+    target: param_units
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], dim: [1], units: [1], dose: [2.0]}
+    expect: {w: [1, 4, 3, 4, 10, 6]}
+  - name: param-units-scale-along-the-first-dimension-of-a-transposed-weight
+    op: scale
+    target: param_units
+    inputs: {w: [1, 4, 2, 5, 3, 6], shape: [3, 2], dim: [0], units: [1], dose: [2.0]}
+    expect: {w: [1, 4, 4, 10, 3, 6]}
+  - name: param-units-scale-of-an-input-unit-equals-scaling-the-input
+    op: scale
+    target: param_units
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], dim: [1], units: [1], dose: [3.0], x: [1, 1, 1]}
+    expect: {y_weight: [10, 25], y_activation: [10, 25]}
+  - name: param-add-of-a-bias-patch-equals-adding-a-dose-to-the-input-unit
+    op: add
+    target: param
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], b: [0.5, -0.5], units: [2], dose: [2.0], x: [1, 1, 1]}
+    expect: {b: [6.5, 11.5], y_weight: [12.5, 26.5], y_activation: [12.5, 26.5]}
+  - name: param-reject-over-rejects-a-direction-on-the-output-side
+    op: reject
+    target: param
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], u: [1, 0], fraction: [6.0]}
+    expect: {w: [-5, -10, -15, 4, 5, 6]}
+  - name: param-add-of-a-low-rank-patch
+    op: add
+    target: param
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], u: [1, 2], v: [0, 1, 0]}
+    expect: {w: [1, 3, 3, 4, 7, 6]}
+  - name: param-replace-of-a-sparse-patch-sets-its-entries
+    op: replace
+    target: param
+    inputs: {w: [1, 2, 3, 4, 5, 6], shape: [2, 3], indices: [0, 5], values: [9, -1]}
+    expect: {w: [9, 2, 3, 4, 5, -1]}

@@ -101,7 +101,11 @@ a per-unit table, or a column of recorded evidence through declared transforms, 
 conformance vectors a consumer's evaluator runs). A unit target is one address with explicit layers and `units`, or a
 composition of such sets at one site with the set algebra (`@a & @b`, `@a | @b`, `(@a & @b & layers:12) - @control`),
 resolved over `(layer, unit)` pairs when the recipe is read; an empty, mixed-site or feature-set composition is refused
-by name. Ops are declared specs
+by name. A recipe's `weights` section (recipe schema 3) holds ops on parameters instead, applied to the tensors before
+any stage and kept in them: a whole tensor is a `param` target, a set with `units` a `param_units` one, along each
+tensor's unit axis (see "Maps: base and overlay"). A weight op acts on every token, and an `add` or `replace` may take a
+`delta` operand, a weight patch (`venngram.patches`: a `kind: weight_patch` document naming the tensor, its shape and
+the hash of the base it applies to, with a low-rank, sparse or dense delta in a sidecar). Ops are declared specs
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, `replace_with_error`, and any
 registered in code or read from a published `op_specs` document); venngram validates and composes them and never
 executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
@@ -354,11 +358,12 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 2 | 1, or 2 when a set uses `of` | ignored at the top level |
-| recipe | 1 to 2 | 2 | refused in `method` and in an op's parameters |
-| support record | 1 to 3 | 2, or 3 when its steering section declares `of` | refused; an unknown *section* is skipped with a warning |
+| address book | 1 to 3 | 1, 2 when a set uses `of`, 3 when a treatment has `weights` | ignored at the top level |
+| recipe | 1 to 3 | 2, or 3 when it has `weights` | refused in `method` and in an op's parameters |
+| support record | 1 to 4 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target | refused; an unknown *section* is skipped with a warning |
 | verification record | 1 | 1 | ignored |
-| op declarations (`op_specs`) | 1 | 1 | refused |
+| op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |
+| weight patch | 1 | 1 | refused |
 | manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
 | registry index header | 1 | 1 | |
 

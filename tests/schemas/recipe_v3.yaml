@@ -1,0 +1,32 @@
+# Golden fixture: a recipe at schema 3, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 3
+kind: recipe
+name: neurons-off
+model:
+  id: Qwen/Qwen3.5-4B
+  revision: abc123
+  revision_source: pinned
+book:
+  schema_version: 1
+  name: book
+  portability: checkpoint
+  applies_to:
+    models:
+    - id: Qwen/Qwen3.5-4B
+      revision: abc123
+  sets:
+    neurons:
+      component: mlp.out
+      layers:
+      - 13
+      leaf: weight
+      units:
+      - 7956
+      - 8949
+weights:
+- op: scale
+  target:
+    set: neurons
+  value:
+    dose: 0.0

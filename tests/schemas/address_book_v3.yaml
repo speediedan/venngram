@@ -1,0 +1,22 @@
+# Golden fixture: an address book at schema 3, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 3
+name: golden
+portability: checkpoint
+applies_to:
+  models:
+  - id: Qwen/Qwen3.5-4B
+    revision: abc123
+sets:
+  neurons: 'component:mlp.out & layers:[13] & leaf:weight & units:[7956]'
+treatments:
+  zeroed:
+    model:
+      id: Qwen/Qwen3.5-4B
+      revision: abc123
+    weights:
+    - op: scale
+      target:
+        set: neurons
+      value:
+        dose: 0.0

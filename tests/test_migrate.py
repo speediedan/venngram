@@ -21,8 +21,8 @@ from venngram.migrate import kind_of, main, migrate
 
 SCHEMAS = Path(__file__).parent / "schemas"
 FIXTURES = sorted(SCHEMAS.glob("*.yaml"))
-CURRENT = {"component_map": 5, "overlay_map": 5, "recipe": 2, "support_record": None, "address_book": None,
-           "rules": 2, "op_specs": 1}
+CURRENT = {"component_map": 5, "overlay_map": 5, "recipe": None, "support_record": None, "address_book": None,
+           "rules": 2, "op_specs": None, "weight_patch": 1}
 
 
 def load(path):
@@ -32,9 +32,11 @@ def load(path):
 def test_every_published_schema_has_a_fixture():
     names = {p.stem for p in FIXTURES}
     assert {f"component_map_v{v}" for v in (1, 2, 3, 4, 5)} | {"overlay_map_v4", "overlay_map_v5", "recipe_v1",
-                                                            "recipe_v2", "support_record_v1", "support_record_v2",
-                                                            "support_record_v3", "address_book_v1",
-                                                            "address_book_v2", "rules_v2", "op_specs_v1"} == names
+                                                            "recipe_v2", "recipe_v3", "support_record_v1",
+                                                            "support_record_v2", "support_record_v3",
+                                                            "support_record_v4", "address_book_v1",
+                                                            "address_book_v2", "address_book_v3", "rules_v2",
+                                                            "op_specs_v1", "op_specs_v2", "weight_patch_v1"} == names
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

@@ -47,7 +47,7 @@ def test_replace_with_error_is_a_core_op_with_a_stated_numeric_meaning():
     spec = OPS["replace_with_error"]
     assert "replace_with_error" in CORE_OPS and spec.operand == ("none", "vector") and spec.of == ("value",)
     assert spec.composition == "ordered" and len(op_cases("replace_with_error")) == 3
-    assert check_ops(straight_through) == []
+    assert check_ops(straight_through, op="replace_with_error") == []
 
 
 def test_an_implementation_that_lets_the_gradient_reach_the_activation_fails_by_name():
@@ -59,8 +59,9 @@ def test_an_implementation_that_lets_the_gradient_reach_the_activation_fails_by_
         zeros = [0.0] * len(case.inputs["g"])
         return {"value": list(case.inputs["x"]), "grad_o": zeros, "grad_x": list(case.inputs["g"])}
 
-    assert {f.split(":")[0] for f in check_ops(plain_replace)} == {"replace-with-error-keeps-the-forward-value"}
-    failing = check_ops(identity)
+    plain = check_ops(plain_replace, op="replace_with_error")
+    assert {f.split(":")[0] for f in plain} == {"replace-with-error-keeps-the-forward-value"}
+    failing = check_ops(identity, op="replace_with_error")
     assert {f.split(":")[0] for f in failing} == {"replace-with-error-routes-the-gradient-to-the-operand",
                                                   "replace-with-error-when-the-operand-equals-the-activation"}
 
@@ -112,7 +113,7 @@ def test_declarations_round_trip_through_the_writer():
 
 
 @pytest.mark.parametrize("change, error, match", [
-    (lambda d: d.update(schema_version=2), NewerSchemaError, "op_specs schema 2 is newer"),
+    (lambda d: d.update(schema_version=3), NewerSchemaError, "op_specs schema 3 is newer"),
     (lambda d: d.update(kind="ops"), ValueError, "is `kind: op_specs`"),
     (lambda d: d.update(ops=[]), ValueError, "non-empty list"),
     (lambda d: d.update(extra=1), ValueError, r"unknown keys \['extra'\]"),

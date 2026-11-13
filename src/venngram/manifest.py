@@ -64,9 +64,10 @@ MANIFEST_WINDOW = (1, 1)
 #: registry index; ``rules`` holds an architecture family's verification and drafting rules
 #: (:mod:`venngram.maps.rules`); ``support_record`` is what a consumer honours, or a format adapter offers
 #: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's recipe ops
-#: (:func:`venngram.ops.read_op_specs`).
+#: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a recipe's weight patch (:mod:`venngram.patches`), and
+#: ``weight_delta`` its sidecar, read through the patch.
 KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "support_record",
-         "op_specs")
+         "op_specs", "weight_patch", "weight_delta")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
@@ -299,7 +300,24 @@ def _book_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
             path = base / target
             out.append(("address_book", path))
             out += _book_needs(_read_yaml(path), path.parent)
+    for body in (doc.get("treatments") or {}).values():
+        out += _operand_needs(body, base)
     return out
+
+
+def _operand_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
+    """The weight patches a recipe's (or a treatment's) operands name, with their sidecars."""
+    out: list[tuple[str, Path]] = []
+    for operand in ((doc.get("operands") or {}).values() if isinstance(doc, Mapping) else ()):
+        if isinstance(operand, Mapping) and isinstance(operand.get("patch"), str):
+            path = base / operand["patch"]
+            out += [("weight_patch", path), *_patch_needs(_read_yaml(path), path.parent)]
+    return out
+
+
+def _patch_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
+    return [("weight_delta", base / doc["file"])] if isinstance(doc, Mapping) and isinstance(doc.get("file"), str) \
+        else []
 
 
 def _recipe_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
@@ -314,8 +332,8 @@ def _recipe_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
     book = doc.get("book")
     if isinstance(book, str):
         path = base / book
-        return [("address_book", path), *_book_needs(_read_yaml(path), path.parent)]
-    return _book_needs(book, base)
+        return [("address_book", path), *_book_needs(_read_yaml(path), path.parent), *_operand_needs(doc, base)]
+    return [*_book_needs(book, base), *_operand_needs(doc, base)]
 
 
 def _read_yaml(path: Path) -> Any:
@@ -325,7 +343,7 @@ def _read_yaml(path: Path) -> Any:
         return yaml.safe_load(fh)
 
 
-_NEEDS = {"address_book": _book_needs, "recipe": _recipe_needs}
+_NEEDS = {"address_book": _book_needs, "recipe": _recipe_needs, "weight_patch": _patch_needs}
 
 
 def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, requires: Mapping[str, str] | None = None,

@@ -1,0 +1,14 @@
+# Golden fixture: a support record at schema 4, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 4
+kind: support_record
+name: golden-patcher
+sections:
+  steering:
+    ops:
+    - add
+    - scale
+    targets:
+    - param
+    - param_units
+    - units
