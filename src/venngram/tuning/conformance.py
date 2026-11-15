@@ -17,7 +17,7 @@ Conformance cases for :class:`~venngram.tuning.views.TunableView` implementation
 hold for any consumer of the protocol.
 
 :class:`ViewConformance` takes a factory returning a fresh view and checks it against the protocol: its logical names
-map to the root's parameters and back, its checkpoint state leaves out ``instrument`` tensors and restores everything
+map to the root's parameters and back, its checkpoint state leaves out ``artifact`` tensors and restores everything
 else exactly through a strict load, its roles are valid and declared, and a promotion keeps names. Which cases apply is
 decided by the view's own support record, and a run in which no case applied fails, so a suite cannot pass vacuously.
 A consumer extends the suite with the cases its own use of a view needs (Fine-Tuning Scheduler's
@@ -43,7 +43,7 @@ import torch
 
 from venngram.roles import declared_kinds, role_kind, select, validate_roles
 from .errors import TunableViewError
-from .views import as_view, BoundView, instrument_state_keys, TunableSupport
+from .views import artifact_state_keys, as_view, BoundView, TunableSupport
 
 
 class ConformanceError(AssertionError):
@@ -98,9 +98,9 @@ def _unassigned(view: BoundView) -> list[str]:
     return [n for n, _ in view.root.named_parameters() if n not in assigned]
 
 
-def _instrument_parameters(view: BoundView) -> list[str]:
+def _artifact_parameters(view: BoundView) -> list[str]:
     params = {n for n, _ in view.root.named_parameters()}
-    return sorted(n for n, r in view.roles().items() if n in params and role_kind(r) == "instrument")
+    return sorted(n for n, r in view.roles().items() if n in params and role_kind(r) == "artifact")
 
 
 class ViewConformance:
@@ -127,7 +127,7 @@ class ViewConformance:
             ConformanceCase("roles_valid", "roles", lambda s, v: s.trainable and (s.declared_roles != {"base"}
                                                                                   or bool(v.roles())),
                             self._roles_valid),
-            ConformanceCase("promotion", "promotion", lambda s, v: s.trainable and bool(_instrument_parameters(v)),
+            ConformanceCase("promotion", "promotion", lambda s, v: s.trainable and bool(_artifact_parameters(v)),
                             self._promotion),
             ConformanceCase("cooperative_roles_merge", "roles", lambda s, v: s.trainable and bool(_unassigned(v)),
                             self._cooperative_roles_merge),
@@ -219,19 +219,19 @@ class ViewConformance:
         _check(not lost, f"These physical names do not survive a round trip through their logical names: {lost}.")
 
     def _checkpoint_round_trip(self) -> None:
-        """The view's checkpoint state leaves out ``instrument`` tensors (under any alias), keeps ``fitted`` ones,
+        """The view's checkpoint state leaves out ``artifact`` tensors (under any alias), keeps ``fitted`` ones,
         and restores every checkpointed parameter and buffer exactly through a strict load."""
         view = self._fresh()
         roles = view.roles()
         state = copy.deepcopy(view.checkpoint_state_dict())
         own = view.root.state_dict(keep_vars=True)
-        instrument = instrument_state_keys(view.root, roles, own.keys())
-        saved_instrument = sorted(instrument & set(state))
-        _check(not saved_instrument, f"The checkpoint state includes `instrument` tensors: {saved_instrument}.")
+        artifact = artifact_state_keys(view.root, roles, own.keys())
+        saved_artifact = sorted(artifact & set(state))
+        _check(not saved_artifact, f"The checkpoint state includes `artifact` tensors: {saved_artifact}.")
         fitted = {k for k, r in roles.items() if r == "fitted" and k in own}
         unsaved_fitted = sorted(fitted - set(state))
         _check(not unsaved_fitted, f"The checkpoint state leaves out `fitted` tensors: {unsaved_fitted}.")
-        reference = {k: t.detach().clone() for k, t in own.items() if k not in instrument}
+        reference = {k: t.detach().clone() for k, t in own.items() if k not in artifact}
         with torch.no_grad():
             for t in own.values():
                 if t.is_floating_point():
@@ -283,10 +283,10 @@ class ViewConformance:
         _check(view.roles().get(name) == own and not view.declared, "A refused declaration changed the roles.")
 
     def _promotion(self) -> None:
-        """Promoting the ``instrument`` parameters to a ``latent`` role keeps their names, reports the new role,
+        """Promoting the ``artifact`` parameters to a ``latent`` role keeps their names, reports the new role,
         leaves each with storage no other tensor shares, and checkpoints them from then on."""
         view = self._fresh()
-        names = _instrument_parameters(view)
+        names = _artifact_parameters(view)
         role = "latent:conformance"
         renamed = {old: new for old, new in view.promote(names, role).items() if old != new}
         _check(not renamed, f"Promotion renamed tensors: {renamed}.")

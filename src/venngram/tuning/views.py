@@ -27,7 +27,7 @@ Views are discovered, in order, from an explicit ``view`` argument, then a view 
 ``tunable_view`` attribute, then :class:`CanonicalView` (see :func:`resolve_view`).
 
 **Cooperative roles.** A view may assign roles itself (a view over a model with spliced transcoders reports them as
-``instrument``, say), and a consumer that attaches modules of its own (a trainable intervention, a latent model) may
+``artifact``, say), and a consumer that attaches modules of its own (a trainable intervention, a latent model) may
 declare roles for their tensors through :meth:`BoundView.declare_roles` (or ``resolve_view(..., roles=...)``). The rule
 holds for every view, because the bound view applies it: a declared role on a tensor the view does not assign is
 merged and reported like the view's own, selectable by ``role:``, and its kind joins the support record's declared
@@ -48,7 +48,9 @@ from torch import nn, Tensor
 from .errors import TunableViewError, Unresolvable
 from venngram.physical import PhysicalStructure
 from venngram.resolve import StructureProvider
-from venngram.roles import declared_kinds, parse_role, role_kind, UNCHECKPOINTED_ROLE_KINDS, validate_roles
+from venngram.deprecation import deprecated
+from venngram.roles import (canonical_kind, declared_kinds, parse_role, role_kind, UNCHECKPOINTED_ROLE_KINDS,
+                            validate_roles)
 
 # the module attribute a view is attached under for discovery
 VIEW_ATTR = "tunable_view"
@@ -79,6 +81,9 @@ class TunableSupport:
     declared_roles: frozenset[str] = field(default_factory=lambda: frozenset({"base"}))
 
     def __post_init__(self) -> None:
+        canonical = frozenset(canonical_kind(k) for k in self.declared_roles)  # `instrument` is `artifact`
+        if canonical != self.declared_roles:
+            object.__setattr__(self, "declared_roles", canonical)
         if not self.trainable and not self.reason:
             raise TunableViewError("A `TunableSupport` with `trainable=False` must give a `reason`.")
 
@@ -160,7 +165,7 @@ class TunableViewExtras(Protocol):
 
 
 def uncheckpointed_keys(roles: Mapping[str, str]) -> set[str]:
-    """The tensor names whose role is never checkpointed (``instrument``)."""
+    """The tensor names whose role is never checkpointed (``artifact``)."""
     return {k for k, r in roles.items() if role_kind(r) in UNCHECKPOINTED_ROLE_KINDS}
 
 
@@ -179,22 +184,28 @@ def canonical_fqn(name: str) -> str:
     return name
 
 
-def instrument_state_keys(root: nn.Module, roles: Mapping[str, str], keys: Collection[str]) -> set[str]:
-    """The state-dict ``keys`` that hold ``instrument`` tensors, matched by tensor identity (so every alias of a
+def artifact_state_keys(root: nn.Module, roles: Mapping[str, str], keys: Collection[str]) -> set[str]:
+    """The state-dict ``keys`` that hold ``artifact`` tensors, matched by tensor identity (so every alias of a
     tied tensor counts) and by wrapper-free name (so keys from modules wrapped by ``torch.compile`` or by
     activation checkpointing match)."""
-    instrument = uncheckpointed_keys(roles)
-    if not instrument:
+    artifact = uncheckpointed_keys(roles)
+    if not artifact:
         return set()
     named = list(itertools.chain(root.named_parameters(remove_duplicate=False),
                                  root.named_buffers(remove_duplicate=False)))
     aliases: dict[int, list[str]] = {}
     for n, t in named:
         aliases.setdefault(id(t), []).append(n)
-    ids = {id(t) for n, t in named if n in instrument}
-    names = set(instrument) | {a for i in ids for a in aliases[i]}
+    ids = {id(t) for n, t in named if n in artifact}
+    names = set(artifact) | {a for i in ids for a in aliases[i]}
     canonical = {canonical_fqn(n) for n in names}
     return {k for k in keys if canonical_fqn(k) in canonical}
+
+
+def instrument_state_keys(root: nn.Module, roles: Mapping[str, str], keys: Collection[str]) -> set[str]:
+    """Deprecated: :func:`artifact_state_keys` (the ``instrument`` role kind is now ``artifact``)."""
+    deprecated("function", "instrument_state_keys", since="0.1", removed_in="0.2", replacement="`artifact_state_keys`")
+    return artifact_state_keys(root, roles, keys)
 
 
 def pair_groups(names: Sequence[str]) -> list[list[str]]:
@@ -251,25 +262,25 @@ class ViewDefaults:
         return {}
 
     def checkpoint_state_dict(self) -> dict[str, Any]:
-        """The root's ``state_dict()``, without ``instrument`` tensors (which are never checkpointed)."""
+        """The root's ``state_dict()``, without ``artifact`` tensors (which are never checkpointed)."""
         state = self.root.state_dict()
-        instrument = instrument_state_keys(self.root, self.roles(), state.keys())
-        return {k: v for k, v in state.items() if k not in instrument}
+        artifact = artifact_state_keys(self.root, self.roles(), state.keys())
+        return {k: v for k, v in state.items() if k not in artifact}
 
     def load_checkpoint_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True) -> None:
         """Load into the root. A strict load is strict by role: the keys missing from ``state_dict`` must be
-        exactly the ``instrument`` keys, and it may hold no key the root lacks. It is checked before anything is
+        exactly the ``artifact`` keys, and it may hold no key the root lacks. It is checked before anything is
         loaded.
 
         Raises:
             RuntimeError: If a strict load's keys do not match, naming the keys (as ``load_state_dict`` does).
         """
         expected = set(self.root.state_dict())
-        instrument = instrument_state_keys(self.root, self.roles(), expected)
-        if not strict or not instrument:
+        artifact = artifact_state_keys(self.root, self.roles(), expected)
+        if not strict or not artifact:
             self.root.load_state_dict(state_dict, strict=strict)
             return
-        missing = sorted(expected - set(state_dict) - instrument)
+        missing = sorted(expected - set(state_dict) - artifact)
         unexpected = sorted(set(state_dict) - expected)
         if missing or unexpected:
             raise RuntimeError(f"Error(s) in loading state_dict for {type(self.root).__name__}: missing keys"
@@ -535,6 +546,7 @@ __all__ = [
     "BoundView",
     "canonical_fqn",
     "CanonicalView",
+    "artifact_state_keys",
     "instrument_state_keys",
     "OPTIONAL_MEMBERS",
     "pair_groups",

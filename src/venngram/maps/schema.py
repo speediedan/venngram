@@ -33,7 +33,7 @@ component's *kind*. Block-relative rows are keyed ``blocks.{i}.<component>``; a 
 address (``component:mlp.out``) selects the same part on every architecture that has it. Use a vocabulary name when a
 component plays that part, and a name of your own otherwise.
 
-Schema 4 adds a second shape, the **overlay map** (:mod:`~venngram.maps.overlay`): what an adapter or instrument
+Schema 4 adds a second shape, the **overlay map** (:mod:`~venngram.maps.overlay`): what an adapter or artifact
 library adds to a module tree and the roles its tensors take. :func:`map_from_document` and :func:`load_map` read
 either shape; :func:`from_document` and :func:`load_component_map` read base maps only.
 
