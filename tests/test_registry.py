@@ -1,4 +1,5 @@
 """The registry: an index over published documents, federated across locations, with lookup, ranking and offline use."""
+import json
 import shutil
 from pathlib import Path
 
@@ -171,3 +172,23 @@ def test_configuration_and_the_command(tmp_path, monkeypatch, capsys):
     assert registry.main(["lookup", "TinyDecoder"]) == 0
     assert "unverified" in capsys.readouterr().out
     shutil.rmtree(tmp_path / "pub")
+
+
+def test_inspect_and_rebuild_read_the_index_through_its_header(tmp_path, capsys):
+    src = directory(tmp_path / "s", {"tiny.yaml": TINY})
+    pub = f"local:{tmp_path / 'pub'}"
+    assert registry.main(["rebuild", "--source", src, "--out", str(tmp_path / "built"), "--name", "seed"]) == 0
+    assert not (tmp_path / "pub").exists()  # no --publish, no write
+    built = capsys.readouterr().out
+    assert '"name": "seed"' in built and '"TinyDecoder"' in built
+    assert registry.main(["rebuild", "--source", src, "--out", str(tmp_path / "again"), "--name", "seed",
+                          "--publish", pub]) == 0
+    capsys.readouterr()
+    registry.clear_cache()
+    assert registry.main(["inspect", pub, "--manifest", src]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["name"] == "seed" and report["current"].startswith("generations/")
+    assert report["kinds"]["component_map"]["subjects"] == ["TinyDecoder"]
+    assert report["kinds"]["component_map"]["schema_versions"] and report["mined_rules"]["kind"] == "rules"
+    assert report["manifest"]["documents"]["component_map"] == ["tiny.yaml"]
+    assert registry.main(["inspect", f"local:{tmp_path / 'never'}"]) == 1

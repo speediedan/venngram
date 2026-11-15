@@ -25,3 +25,36 @@ against the fresh export. Network failures fail that scheduled check without aff
 
 This initial contract covers base and overlay maps. Address books, recipes and other documents keep their existing
 schema, support and published-document conformance tests; they can gain model-level contracts when needed.
+
+## Inspecting and rebuilding the seed index
+
+The seed index lives at `hub-dataset:speediedan/venngram-registry/index`; its header is `index/index.yaml`, read by
+the same code a lookup uses. To see what it holds (header, subjects and document schemas per kind, mined rules) and
+the documents the registry's own manifest lists:
+
+```bash
+python -m venngram.registry inspect --manifest hub-dataset:speediedan/venngram-registry
+```
+
+A `null` in a kind's `schema_versions` means the index was built before rows recorded their document's schema.
+
+To rebuild, crawl the registry and every Hub repository tagged `venngram` into a **new** local directory, keeping the
+seed index's name, and read the printed inspection before publishing anything:
+
+```bash
+python -m venngram.registry rebuild --source hub-dataset:speediedan/venngram-registry --discover-hub \
+    --name venngram-seed --out /tmp/venngram-index
+python -m venngram.registry inspect local:/tmp/venngram-index
+```
+
+Publishing writes a new generation and then the header to the Hub, so every venngram reading the default registry
+serves it at once. **It needs the maintainer's go**, and a venngram old enough to fail on a document schema the new
+index lists would break for its users, so check what consumers pin first. With that go, either rerun `rebuild` with
+`--publish hub-dataset:speediedan/venngram-registry/index` or push the reviewed directory:
+
+```bash
+python -m venngram.registry publish /tmp/venngram-index hub-dataset:speediedan/venngram-registry/index
+```
+
+Credentials come from the environment (`HF_TOKEN`, with write access to the registry for a publish); no command takes
+a token or a credential path. After a publish, refresh `snapshot/` as described above.
