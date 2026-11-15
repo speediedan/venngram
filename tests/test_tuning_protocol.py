@@ -89,7 +89,7 @@ def test_the_tunable_view_protocol_conforms():
     with pytest.raises(tv.Unresolvable) as excinfo:
         bound.to_physical(["nope"])
     assert isinstance(excinfo.value, VenngramError) and excinfo.value.names == ["nope"]
-    report = tv.ViewConformance(lambda: tv.CanonicalView(torch.nn.Linear(2, 2), roles={"bias": "instrument"})).run()
+    report = tv.ViewConformance(lambda: tv.CanonicalView(torch.nn.Linear(2, 2), roles={"bias": "artifact"})).run()
     assert report.ok and "promotion" in report.ran, report
 
 
@@ -111,14 +111,14 @@ def test_a_views_structure_defaults_to_the_physical_structure_of_its_root():
 
 class SplicedView:
     """A view that assigns roles itself, as a view over a model with spliced transcoders does: every transcoder
-    tensor is ``instrument``, and it says nothing about any other tensor."""
+    tensor is ``artifact``, and it says nothing about any other tensor."""
 
     def __init__(self) -> None:
         self.root = torch.nn.ModuleDict({"block": torch.nn.Linear(4, 4), "transcoder": torch.nn.Linear(4, 8),
                                          "steer": torch.nn.Linear(4, 4)})
 
     def support(self):
-        return tv.TunableSupport(trainable=True, declared_roles=frozenset({"base", "instrument"}))
+        return tv.TunableSupport(trainable=True, declared_roles=frozenset({"base", "artifact"}))
 
     def to_physical(self, logical):
         return {n: (n,) for n in logical}
@@ -127,17 +127,17 @@ class SplicedView:
         return list(physical)
 
     def roles(self):
-        return {n: "instrument" for n, _ in self.root.named_parameters() if n.startswith("transcoder.")}
+        return {n: "artifact" for n, _ in self.root.named_parameters() if n.startswith("transcoder.")}
 
 
 def test_a_self_assigning_view_merges_cooperative_roles():
     view = tv.as_view(SplicedView())
     view.declare_roles({"steer.weight": "intervention:steer", "steer.bias": "intervention:steer",
-                        "transcoder.weight": "instrument"})  # equal to the view's own: accepted
+                        "transcoder.weight": "artifact"})  # equal to the view's own: accepted
     roles = view.roles()
-    assert roles["steer.weight"] == "intervention:steer" and roles["transcoder.weight"] == "instrument"
+    assert roles["steer.weight"] == "intervention:steer" and roles["transcoder.weight"] == "artifact"
     assert view.declared == {"steer.weight": "intervention:steer", "steer.bias": "intervention:steer"}
-    assert view.support().declared_roles == {"base", "instrument", "intervention"}
+    assert view.support().declared_roles == {"base", "artifact", "intervention"}
     from venngram.roles import select
 
     assert select("role:intervention:steer", list(roles), roles) == ["steer.weight", "steer.bias"]
@@ -147,7 +147,7 @@ def test_a_self_assigning_view_merges_cooperative_roles():
 
 def test_a_conflicting_declaration_is_refused_by_name_and_changes_nothing():
     view = tv.as_view(SplicedView())
-    with pytest.raises(tv.TunableViewError, match=r"'transcoder.bias': the view assigns 'instrument', declared "
+    with pytest.raises(tv.TunableViewError, match=r"'transcoder.bias': the view assigns 'artifact', declared "
                                                   r"'latent:tc'"):
         view.declare_roles({"steer.weight": "intervention", "transcoder.bias": "latent:tc"})
     assert view.declared == {} and "steer.weight" not in view.roles()
@@ -162,7 +162,30 @@ def test_promoted_roles_count_as_assigned_and_resolve_view_declares():
     view = tv.as_view(SplicedView())
     view.promote(["transcoder.weight"], "latent:tc")
     with pytest.raises(tv.TunableViewError, match="the view assigns 'latent:tc'"):
-        view.declare_roles({"transcoder.weight": "instrument"})
+        view.declare_roles({"transcoder.weight": "artifact"})
     model = torch.nn.Linear(2, 2)
     bound = tv.resolve_view(model, roles={"bias": "adapter"})
     assert bound.roles() == {"bias": "adapter"} and "adapter" in bound.support().declared_roles
+
+
+def test_the_retired_instrument_role_reads_as_artifact_with_one_warning_and_strict_mode_refuses_it():
+    import warnings
+
+    from venngram.deprecation import strict, VenngramDeprecationWarning
+    from venngram.roles import canonical_role, parse_role, selector_matches, validate_roles
+    from venngram.tuning.views import instrument_state_keys
+
+    with pytest.warns(VenngramDeprecationWarning, match="role kind `instrument` is deprecated.*use `artifact`"):
+        assert parse_role("instrument") == ("artifact", None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # warned once per process: later reads are quiet
+        assert canonical_role("instrument") == "artifact" and selector_matches("role:instrument", "artifact")
+        assert validate_roles({"bias": "instrument"}, ["weight", "bias"], []) == {"bias": "artifact"}
+        assert tv.TunableSupport(trainable=True, declared_roles=frozenset({"base", "instrument"})).declared_roles == {
+            "base", "artifact"}
+    view = tv.CanonicalView(torch.nn.Linear(2, 2), roles={"bias": "artifact"})
+    assert "bias" not in tv.as_view(view).checkpoint_state_dict()  # an artifact is never checkpointed
+    with pytest.warns(VenngramDeprecationWarning, match="instrument_state_keys"):
+        assert instrument_state_keys(view.root, {"bias": "artifact"}, ["weight", "bias"]) == {"bias"}
+    with strict(), pytest.raises(VenngramDeprecationWarning):
+        parse_role("instrument")

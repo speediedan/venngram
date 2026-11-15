@@ -25,7 +25,7 @@ source) and registered in process, or published and indexed.
 - :mod:`~venngram.maps.rules`: what verification expects of an architecture, as layered data documents;
 - :mod:`~venngram.maps.verification`: verifying a map against an architecture without weights (partition, widths
   from the configuration, forward order), and its verification record;
-- :mod:`~venngram.maps.overlay`: overlay maps, what an adapter or instrument library adds to a module tree and the roles
+- :mod:`~venngram.maps.overlay`: overlay maps, what an adapter or artifact library adds to a module tree and the roles
   its tensors take, detected from a model;
 - :mod:`~venngram.maps.view`: :class:`~venngram.maps.view.MappedView`, the view composed from a base map and its
   overlays (:func:`venngram.view` builds it);

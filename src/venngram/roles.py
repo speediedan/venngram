@@ -25,25 +25,48 @@ A role is one of:
 - ``intervention`` or ``intervention:<name>``: modules that intervene in the forward pass (steering, ReFT);
 - ``latent:<name>``: learned latent dictionaries (for example spliced transcoders);
 - ``fitted``: run-fitted, non-gradient state, never thawed or optimized but checkpointed;
-- ``instrument``: published, re-loadable artifacts, never thawed, optimized or checkpointed.
+- ``artifact``: published, re-loadable artifacts (a frozen steering vector, a loaded weight patch, a spliced
+  dictionary), applied in the forward pass but never thawed, optimized or checkpointed, since their source of truth
+  is outside the run and they are reloaded rather than saved. A schedule may promote one to ``latent:<name>``.
 
 A selector is ``role:<kind>`` (every role of that kind, named or not) or ``role:<kind>:<name>`` (exactly that role).
+
+``instrument``, the earlier name of ``artifact``, is read as ``artifact`` with a deprecation warning
+(:mod:`venngram.deprecation`) through venngram 0.1 and refused from 0.2.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
 import re
 from collections.abc import Iterable, Mapping
 
+from venngram.deprecation import deprecated
 from venngram.errors import RoleError
 
 # every role kind, in documentation order
-ROLE_KINDS = ("base", "adapter", "intervention", "latent", "fitted", "instrument")
+ROLE_KINDS = ("base", "adapter", "intervention", "latent", "fitted", "artifact")
 NAMED_OPTIONAL = frozenset({"adapter", "intervention"})
 NAMED_REQUIRED = frozenset({"latent"})
 # role kinds that are never thawed or placed in an optimizer
-FROZEN_ROLE_KINDS = frozenset({"fitted", "instrument"})
+FROZEN_ROLE_KINDS = frozenset({"fitted", "artifact"})
 # role kinds that are never checkpointed
-UNCHECKPOINTED_ROLE_KINDS = frozenset({"instrument"})
+UNCHECKPOINTED_ROLE_KINDS = frozenset({"artifact"})
+#: Retired role kind names, read as their replacement with a deprecation warning.
+ROLE_KIND_ALIASES = {"instrument": "artifact"}
+
+
+def canonical_kind(kind: str) -> str:
+    """``kind``, or the kind a retired name stands for (warning once that the name is deprecated)."""
+    if kind in ROLE_KIND_ALIASES:
+        deprecated("role kind", kind, since="0.1", removed_in="0.2", replacement=f"`{ROLE_KIND_ALIASES[kind]}`",
+                   stacklevel=4)
+        return ROLE_KIND_ALIASES[kind]
+    return kind
+
+
+def canonical_role(role: str) -> str:
+    """``role`` with a retired kind name replaced (``instrument`` is ``artifact``); validated."""
+    kind, name = parse_role(role)
+    return kind if name is None else f"{kind}:{name}"
 SELECTOR_PREFIX = "role:"
 _NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -64,6 +87,7 @@ def parse_role(role: str) -> tuple[str, str | None]:
     if not isinstance(role, str):
         raise RoleError(f"A role must be a string, got {type(role).__name__} ({role!r}).")
     kind, sep, name = role.partition(":")
+    kind = canonical_kind(kind)
     if kind not in ROLE_KINDS:
         raise RoleError(f"Unknown role {role!r}: the role kinds are {', '.join(ROLE_KINDS)}.")
     if not sep:
@@ -84,7 +108,7 @@ def role_kind(role: str) -> str:
 
 
 def is_frozen_role(role: str) -> bool:
-    """Whether tensors with ``role`` are never thawed or placed in an optimizer (``fitted`` and ``instrument``)."""
+    """Whether tensors with ``role`` are never thawed or placed in an optimizer (``fitted`` and ``artifact``)."""
     return role_kind(role) in FROZEN_ROLE_KINDS
 
 
@@ -103,6 +127,7 @@ def parse_selector(selector: str) -> tuple[str, str | None]:
         raise RoleError(f"{selector!r} is not a role selector (`role:<kind>` or `role:<kind>:<name>`).")
     body = selector[len(SELECTOR_PREFIX):]
     kind, sep, name = body.partition(":")
+    kind = canonical_kind(kind)
     if kind not in ROLE_KINDS:
         raise RoleError(f"Selector {selector!r} names an unknown role kind: the role kinds are "
                                     f"{', '.join(ROLE_KINDS)}.")
@@ -141,7 +166,7 @@ def validate_roles(roles: Mapping[str, str], parameters: Iterable[str], buffers:
         buffers: The module's buffer names.
 
     Returns:
-        A copy of ``roles``.
+        A copy of ``roles``, with any retired kind name replaced (:func:`canonical_role`).
 
     Raises:
         RoleError: If a role is invalid or a key names neither a parameter nor a buffer (every offending
@@ -151,9 +176,7 @@ def validate_roles(roles: Mapping[str, str], parameters: Iterable[str], buffers:
     unknown = [k for k in roles if k not in known]
     if unknown:
         raise RoleError(f"These role keys name neither a parameter nor a buffer of the module: {unknown}.")
-    for role in roles.values():
-        parse_role(role)
-    return dict(roles)
+    return {k: canonical_role(r) for k, r in roles.items()}
 
 
 def declared_kinds(roles: Mapping[str, str]) -> frozenset[str]:

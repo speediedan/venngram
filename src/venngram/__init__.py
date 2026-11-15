@@ -33,7 +33,7 @@ specification of the neural traces it targets.
 - :mod:`venngram.conformance`: a published directory of documents checked from the outside (loads, support records);
 - :mod:`venngram.resolve`: resolution over a model's tensors, and the provider interfaces;
 - :mod:`venngram.physical`: the structure provider every PyTorch model gets;
-- :mod:`venngram.maps`: base maps (architectures) and overlay maps (what adapter and instrument libraries add), the
+- :mod:`venngram.maps`: base maps (architectures) and overlay maps (what adapter and artifact libraries add), the
   structure provider, and the view composed from them (:func:`view`);
 - :mod:`venngram.roles`: the role vocabulary (what a tensor *is*, where an address says *which*);
 - :mod:`venngram.tuning`: the tunable view protocol, through which a fine-tuning consumer sees a model.

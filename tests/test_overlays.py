@@ -24,7 +24,7 @@ PEFT_LORA = {name: "adapter:{key}" for name in ("lora_A", "lora_B", "lora_E", "l
 
 
 class Scaler(nn.Module):
-    """An instrument library's module, recognized by its class rather than by its tensors' names."""
+    """An artifact library's module, recognized by its class rather than by its tensors' names."""
 
     def __init__(self, d: int) -> None:
         super().__init__()

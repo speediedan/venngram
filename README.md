@@ -315,7 +315,7 @@ matched module is not a keyed container, the qualifier is dropped (`adapter`). O
 as base maps, found the same way (registered in process, then the registries, as subject `overlay:<name>`); the seed
 overlays cover each PEFT tuner family (`peft.lora`, `peft.ia3`, `peft.loha`, `peft.lokr`, `peft.oft`,
 `peft.boft`, `peft.vera`, `peft.fourierft`). A spliced SAE or transcoder
-(`latent:<name>`, or `instrument` when frozen), a block-sparse featurizer or a steering module (`intervention:<kind>`)
+(`latent:<name>`, or `artifact` when frozen), a block-sparse featurizer or a steering module (`intervention:<kind>`)
 is an overlay in the same way: a new library is a published document, not a venngram release.
 
 **The view.** `view(model)` (a `venngram.maps.MappedView`) applies **every map that applies**: the model's base map and
@@ -342,7 +342,7 @@ and a model's physical parameters, with a role for each tensor.
 [Fine-Tuning Scheduler](https://github.com/speediedan/finetuning-scheduler) consumes it, and its schedules accept
 addresses.
 
-A view may assign roles itself (a view over spliced transcoders reports them as `instrument`, say), and a consumer
+A view may assign roles itself (a view over spliced transcoders reports them as `artifact`, say), and a consumer
 attaching modules of its own declares their roles cooperatively, with `BoundView.declare_roles` or
 `resolve_view(model, roles=...)`. A declared role on a tensor the view does not assign is merged and selectable by
 `role:`; one that differs from the view's own is a conflict, refused with the tensor and both roles, never resolved by
