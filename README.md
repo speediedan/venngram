@@ -41,7 +41,7 @@ An address is a record whose fields intersect:
 | `point` | an activation site | `resid_post` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, and maps a site is read through | `sae`, `jlens` |
 | `units` | indices along a target's unit axis | `[431, 1007]` |
-| `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis | `grad` |
+| `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates, and each disjunct gives its own mask) | `grad` |
 
 The string form writes each field as `<field>:<value>`:
 
@@ -165,7 +165,10 @@ sections:
 
 The core sections are `steering` (a book's treatments), `tuning` (address books whose sets select tensors to tune),
 `circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
-a package reads, with where to install it from). A section a record omits is a contract its
+a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
+gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
+of a value part and a gradient part, and `union-masks`, a union of gradient conjunctions with unit sets. A section a
+record omits is a contract its
 consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
 defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
 and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
@@ -360,7 +363,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | rules | 2 | 2 | refused |
 | address book | 1 to 3 | 1, 2 when a set uses `of`, 3 when a treatment has `weights` | ignored at the top level |
 | recipe | 1 to 3 | 2, or 3 when it has `weights` | refused in `method` and in an op's parameters |
-| support record | 1 to 4 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target | refused; an unknown *section* is skipped with a warning |
+| support record | 1 to 5 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` | refused; an unknown *section* is skipped with a warning |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |
 | weight patch | 1 | 1 | refused |

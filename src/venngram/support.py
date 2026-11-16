@@ -69,13 +69,16 @@ from venngram.address import FIELDS, references, TARGETS, terms
 from venngram.book import AddressBook, PORTABILITY, STRUCTURE_LEVELS
 from venngram.errors import NewerSchemaError
 from venngram.ops import check_support, PARAM_TARGETS, Support
+from venngram.resolve import GRADIENT_FORMS, gradient_forms
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 4)
+SCHEMA_WINDOW = (1, 5)
 #: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
 OF_SCHEMA = 3
 #: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
 PARAM_SCHEMA = 4
+#: The first schema whose ``tuning`` section may declare ``gradients`` (the gradient readings it honours).
+GRADIENTS_SCHEMA = 5
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -118,6 +121,10 @@ class TuningSupport:
             are per-unit values, so the units are tuned through that module's tensors).
         naming_schemes: The naming schemes its views provide; a book whose ``requires.naming_scheme`` is another is
             refused.
+        gradients: The gradient readings it honours beyond one ``of`` per set and one mask per conjunction
+            (:data:`venngram.resolve.GRADIENT_FORMS`): ``mixed-sets`` (a union of a value part and a gradient part,
+            which it splits with :func:`venngram.resolve.split_of`) and ``union-masks`` (a union of gradient
+            conjunctions with unit sets). None by default.
         structure: The ``requires.structure`` levels it provides.
         portability: The book portabilities it accepts.
     """
@@ -128,6 +135,7 @@ class TuningSupport:
     naming_schemes: frozenset[str] | None = None
     structure: frozenset[str] = frozenset(STRUCTURE_LEVELS)
     portability: frozenset[str] = frozenset(PORTABILITY)
+    gradients: frozenset[str] = frozenset()
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "TuningSupport":
@@ -138,7 +146,8 @@ class TuningSupport:
                 portability venngram does not define.
         """
         spec: dict[str, tuple[str, ...] | None] = {"fields": FIELDS, "targets": TARGETS, "naming_schemes": None,
-                                                   "structure": STRUCTURE_LEVELS, "portability": PORTABILITY}
+                                                   "structure": STRUCTURE_LEVELS, "portability": PORTABILITY,
+                                                   "gradients": GRADIENT_FORMS}
         units = doc.get("units", "none") if isinstance(doc, Mapping) else None
         if units not in UNIT_PATTERNS:
             raise ValueError(f"{source}: `units` is one of {list(UNIT_PATTERNS)}, got {units!r}.")
@@ -152,6 +161,8 @@ class TuningSupport:
             out["naming_schemes"] = sorted(self.naming_schemes)
         out["structure"] = [s for s in STRUCTURE_LEVELS if s in self.structure]
         out["portability"] = [p for p in PORTABILITY if p in self.portability]
+        if self.gradients:
+            out["gradients"] = [g for g in GRADIENT_FORMS if g in self.gradients]
         return out
 
     def check_book(self, book: AddressBook, *, sets: Collection[str] | None = None) -> list[str]:
@@ -177,10 +188,15 @@ class TuningSupport:
             out.append(f"{where}: it requires `{structure}` structure, which this consumer does not provide")
         if book.portability not in self.portability:
             out.append(f"{where}: `{book.portability}` books are not accepted")
+        every = book.sets()
         for set_name, expr in book.own_sets.items():
             if sets is not None and set_name not in sets:
                 continue
             at = f"{where}: set `{set_name}`"
+            needed = sorted(gradient_forms(expr, every) - self.gradients)
+            if needed:
+                out.append(f"{at}: it needs the gradient readings {needed}, which this consumer does not honour "
+                           f"(`gradients`: {[g for g in GRADIENT_FORMS if g in self.gradients]})")
             for term in terms(expr):
                 used = term.set_fields()
                 bad = [f for f in used if f not in self.fields]
@@ -421,6 +437,11 @@ class SupportRecord:
                 if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
                     raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
                                      "venngram would refuse the record by name rather than pass over it.")
+                if kind == "tuning" and isinstance(body, Mapping) and "gradients" in body \
+                        and version < GRADIENTS_SCHEMA:
+                    raise ValueError(f"{where}: `gradients` needs support record schema {GRADIENTS_SCHEMA}, not "
+                                     f"{version}: an older venngram would refuse the record by name rather than pass "
+                                     "over it.")
                 if kind == "steering" and _param_targets(body) and version < PARAM_SCHEMA:
                     raise ValueError(f"{where}: the parameter targets {_param_targets(body)} need support record "
                                      f"schema {PARAM_SCHEMA}, not {version}: an older venngram would refuse the record "
@@ -459,7 +480,8 @@ class SupportRecord:
             return cls.from_mapping(yaml.safe_load(fh), source=str(path))
 
     def to_mapping(self) -> dict[str, Any]:
-        """The record as a schema 2 document, or 3 when its steering section declares ``of`` (skipped sections are
+        """The record as a schema 2 document, or the first schema its declarations need: 3 when its steering section
+        declares ``of``, 4 a parameter target, 5 when its tuning section declares ``gradients`` (skipped sections are
         written back as they were read)."""
         sections: dict[str, Any] = {}
         for kind, contract in self.sections.items():
@@ -472,7 +494,9 @@ class SupportRecord:
         sections.update(self.skipped)
         steering = [c for c in self.sections.values() if isinstance(c, Support)]
         needs_of = any(c.of != Support.of for c in steering)
-        version = PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
+        version = GRADIENTS_SCHEMA if any(isinstance(c, TuningSupport) and c.gradients
+                                          for c in self.sections.values()) else \
+            PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
             OF_SCHEMA if needs_of else SCHEMA_VERSION
         out: dict[str, Any] = {"schema_version": version, "kind": "support_record"}
         if self.name is not None:

@@ -34,7 +34,8 @@ def test_every_published_schema_has_a_fixture():
     assert {f"component_map_v{v}" for v in (1, 2, 3, 4, 5)} | {"overlay_map_v4", "overlay_map_v5", "recipe_v1",
                                                             "recipe_v2", "recipe_v3", "support_record_v1",
                                                             "support_record_v2", "support_record_v3",
-                                                            "support_record_v4", "address_book_v1",
+                                                            "support_record_v4", "support_record_v5",
+                                                            "address_book_v1",
                                                             "address_book_v2", "address_book_v3", "rules_v2",
                                                             "op_specs_v1", "op_specs_v2", "weight_patch_v1"} == names
 

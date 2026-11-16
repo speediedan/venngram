@@ -21,7 +21,7 @@ from venngram.address import to_mapping, to_string
 from venngram.errors import AddressError
 from venngram.recipe import Recipe
 from venngram.ops import check_support, Support
-from venngram.resolve import gradient_masks, gradient_of
+from venngram.resolve import gradient_masks, gradient_of, split_of
 from venngram.support import SupportRecord, TuningSupport
 
 
@@ -83,7 +83,7 @@ def test_a_mask_follows_references_into_a_book(model):
 
 
 @pytest.mark.parametrize("address, match", [
-    (f"({Q} & units:[0]) | role:adapter & of:grad", "sits under a union or a difference"),
+    (f"(({Q} & units:[0]) | role:adapter) & layers:-1: & of:grad", "sits under a union or a difference"),
     (f"role:base & of:grad - ({Q} & units:[0])", "sits under a union or a difference"),
     (f"{Q} & units:[0] & units:[1] & of:grad", "intersects `units:"),
     (f"{Q} & units:[0]", "needs an `of: grad` address"),
@@ -91,6 +91,52 @@ def test_a_mask_follows_references_into_a_book(model):
 def test_unit_sets_that_cannot_form_one_mask_are_refused(model, address, match):
     with pytest.raises(AddressUnresolvable, match=match):
         gradient_masks(address, space_of(model), widths=widths(model))
+
+
+K = "role:base & module:k_proj & leaf:weight & layers:-1:"
+
+
+def test_a_union_takes_each_disjuncts_mask_and_unites_them_per_tensor(model):
+    space, w = space_of(model), widths(model)
+    rows = f"({Q} & units:[0, 2] & of:grad) | ({K} & units:[1] & of:grad)"
+    assert gradient_masks(rows, space, widths=w) == {"layers.4.attn.q_proj.weight": (0, 2),
+                                                    "layers.5.attn.q_proj.weight": (0, 2),
+                                                    "layers.5.attn.k_proj.weight": (1,)}
+    overlap = f"({Q} & units:[0] & of:grad) | ({Q} & layers:-1: & units:[3] & of:grad)"
+    assert gradient_masks(overlap, space, widths=w) == {"layers.4.attn.q_proj.weight": (0,),
+                                                       "layers.5.attn.q_proj.weight": (0, 3)}
+    whole = f"({Q} & units:[1] & of:grad) | {Q} & layers:-1: & of:grad"  # a disjunct without units keeps every index
+    assert gradient_masks(whole, space, widths=w)["layers.5.attn.q_proj.weight"] == (0, 1, 2, 3)
+    sets = {"q_rows": f"{Q} & units:[0] & of:grad", "k_rows": f"{K} & units:[1] & of:grad", "rows": "@q_rows | @k_rows"}
+    assert gradient_masks("@rows", space, sets, widths=w) == (  # a union opened through a reference
+        gradient_masks(f"({Q} & units:[0] & of:grad) | ({K} & units:[1] & of:grad)", space, widths=w))
+
+
+def test_a_union_may_unite_a_value_part_and_a_gradient_part(model):
+    space = space_of(model)
+    mixed = f"({K} & of:value) | ({Q} & units:[1] & of:grad)"
+    value, grad = split_of(mixed)
+    assert (value, grad) == (parse(f"{K} & of:value"), parse(f"{Q} & units:[1] & of:grad"))
+    assert select(mixed, space) == select(f"{K} | {Q}", space)  # units in the gradient part mask, they do not filter
+    with pytest.raises(AddressUnresolvable, match="disagree on `of`.*unites a value part and a gradient part"):
+        gradient_of(mixed)
+    assert split_of(f"{K} | {Q} & of:grad") == (None, parse(f"{K} | {Q} & of:grad"))  # unstated `of` follows the set
+    assert split_of(K) == (parse(K), None)
+    sets = {"v": f"{K} & of:value", "g": f"{Q} & of:grad", "both": "@v | @g", "plain": f"{K} | {Q}"}
+    value, grad = split_of("@both", sets)
+    assert (value, grad) == (parse("@v"), parse("@g"))
+    assert split_of("@plain & of:grad", sets) == (None, parse("@plain & of:grad"))  # an agreeing set stays whole
+
+
+@pytest.mark.parametrize("address, match", [
+    (f"({K} & of:value) | {Q} | ({Q} & of:grad)", "`role:base & module:q_proj & layers:-2: & leaf:weight` states no "
+                                                  "`of` beside disjuncts that differ on it"),
+    (f"({K} & of:value) & ({Q} & of:grad)", "mixes them in an intersection or a difference"),
+    (f"({K} & of:value & units:[0]) | ({Q} & of:grad)", "tuned through a unit adapter"),
+])
+def test_a_mixed_set_that_cannot_be_split_is_refused_by_name(model, address, match):
+    with pytest.raises(AddressUnresolvable, match=match):
+        select(address, space_of(model))
 
 
 def test_units_on_tensors_without_of_grad_keep_their_refusal(model):

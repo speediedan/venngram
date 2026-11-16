@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from venngram.address import And, Expr, Guarded, Minus, parse, Ref, references, Term, terms, to_string
+from venngram.address import And, Expr, Guarded, Minus, Or, parse, Ref, references, Term, terms, to_string
 from venngram.errors import AddressUnresolvable, Refusal
 from venngram.roles import selector_matches
 
@@ -154,6 +154,11 @@ class ParamSpace:
         """``name`` and its aliases."""
         return (name, *self.aliases.get(name, ()))
 
+
+#: The gradient readings a consumer may honour beyond one ``of`` per set and one mask per conjunction: a union uniting
+#: a value part and a gradient part (:func:`split_of`), and a union of gradient conjunctions with unit sets
+#: (:func:`gradient_masks`).
+GRADIENT_FORMS = ("mixed-sets", "union-masks")
 
 _TARGET_PROVIDER = {"site": "a site resolver", "feature": "a latent resolver", "subspace": "a latent resolver"}
 
@@ -282,18 +287,47 @@ def gradient_of(address: Any, sets: Mapping[str, Any] | None = None) -> str:
 
     Raises:
         AddressUnresolvable: If its terms disagree on ``of`` (a set mixing values and gradients has no one thing to act
-            on), or a referenced set is missing.
+            on; :func:`split_of` separates a union's value and gradient parts), or a referenced set is missing.
     """
     expr = parse(address)
-    seen, refusals = _of_values(expr, sets or {})
+    sets = sets or {}
+    seen, refusals = _of_values(expr, sets)
+    if len(seen) > 1:
+        _, _, split = _split(expr, sets)
+        refusals.append(_disagreement(seen, "" if split else " (it unites a value part and a gradient part, which "
+                                                                  "`split_of` separates)"))
     if refusals:
         raise AddressUnresolvable(to_string(expr), refusals)
     return next(iter(seen), "value")
 
 
+def split_of(address: Any, sets: Mapping[str, Any] | None = None) -> tuple[Expr | None, Expr | None]:
+    """``address`` as its value part and its gradient part, either ``None`` when it has none.
+
+    A set's terms usually agree on ``of``, and terms that do not state it follow those that do, so the whole set is one
+    part. A union's disjuncts may differ: then every disjunct states its ``of`` (following references), and each part
+    is the union of the disjuncts that say it. An intersection or a difference of values and gradients has no meaning
+    and stays refused.
+
+    >>> value, grad = split_of("module:k_proj | module:q_proj & units:[1] & of:grad")
+    >>> value, to_string(grad)
+    (None, 'module:k_proj | module:q_proj & units:[1] & of:grad')
+    >>> [to_string(p) for p in split_of("module:k_proj & of:value | module:q_proj & units:[1] & of:grad")]
+    ['module:k_proj & of:value', 'module:q_proj & units:[1] & of:grad']
+
+    Raises:
+        AddressUnresolvable: If a referenced set is missing, a disjunct mixes values and gradients, or a disjunct
+            beside disjuncts that differ on ``of`` states none.
+    """
+    expr = parse(address)
+    value, grad, refusals = _split(expr, sets or {})
+    if refusals:
+        raise AddressUnresolvable(to_string(expr), refusals)
+    return _union(value), _union(grad)
+
+
 def _of_values(expr: Expr, sets: Mapping[str, Any]) -> tuple[dict[str, list[str]], list[Refusal]]:
-    """The ``of`` values ``expr``'s terms set (each with where it came from), and the refusals: a missing set, or terms
-    that disagree."""
+    """The ``of`` values ``expr``'s terms set (each with where it came from), and a refusal for each missing set."""
     seen: dict[str, list[str]] = {}
     refusals: list[Refusal] = []
 
@@ -310,11 +344,52 @@ def _of_values(expr: Expr, sets: Mapping[str, Any]) -> tuple[dict[str, list[str]
             walk(parse(sets[name]), f"@{name}", (*stack, name))
 
     walk(expr, "", ())
-    if len(seen) > 1:
-        refusals.append(Refusal("its terms disagree on `of` (" + "; ".join(
-            f"`{v}` in {', '.join(dict.fromkeys(w))}" for v, w in seen.items()) + "): a set is either values or "
-            "gradients"))
     return seen, refusals
+
+
+def _disagreement(seen: Mapping[str, list[str]], note: str = "") -> Refusal:
+    return Refusal("its terms disagree on `of` (" + "; ".join(
+        f"`{v}` in {', '.join(dict.fromkeys(w))}" for v, w in seen.items()) + "): a set is either values or gradients"
+        + note)
+
+
+def _disjuncts(expr: Expr, sets: Mapping[str, Any], opens: Callable[[Expr], bool],
+               stack: tuple[str, ...] = ()) -> list[Expr]:
+    """``expr``'s union disjuncts, flattening nested unions and opening each reference (or ``optional`` mapping) for
+    which ``opens`` holds; ``expect`` counts the whole set, so a mapping that carries it stays one disjunct."""
+    if isinstance(expr, Or):
+        return [d for i in expr.items for d in _disjuncts(i, sets, opens, stack)]
+    if isinstance(expr, Ref) and expr.name in sets and expr.name not in stack and opens(expr):
+        inner = _disjuncts(parse(sets[expr.name]), sets, opens, (*stack, expr.name))
+        return inner if len(inner) > 1 else [expr]
+    if isinstance(expr, Guarded) and expr.expect is None and opens(expr):
+        inner = _disjuncts(expr.expr, sets, opens, stack)
+        if len(inner) > 1:
+            return [Guarded(d, optional=True) for d in inner] if expr.optional else inner
+    return [expr]
+
+
+def _split(expr: Expr, sets: Mapping[str, Any]) -> tuple[list[Expr], list[Expr], list[Refusal]]:
+    """The value and gradient disjuncts of ``expr`` (see :func:`split_of`), and why it cannot be split."""
+    seen, refusals = _of_values(expr, sets)
+    if refusals or len(seen) < 2:
+        return ([], [expr], refusals) if list(seen) == ["grad"] else ([expr], [], refusals)
+    parts: dict[str, list[Expr]] = {"value": [], "grad": []}
+    for d in _disjuncts(expr, sets, lambda e: len(_of_values(e, sets)[0]) > 1):
+        own = _of_values(d, sets)[0]
+        if len(own) > 1:
+            refusals.append(_disagreement(own, f", and `{to_string(d)}` mixes them in an intersection or a difference,"
+                                               " where only a union's disjuncts may differ"))
+        elif not own:
+            refusals.append(Refusal(f"`{to_string(d)}` states no `of` beside disjuncts that differ on it: say "
+                                    "`of:value` or `of:grad`"))
+        else:
+            parts[next(iter(own))].append(d)
+    return parts["value"], parts["grad"], refusals
+
+
+def _union(parts: Sequence[Expr]) -> Expr | None:
+    return None if not parts else parts[0] if len(parts) == 1 else Or(tuple(parts))
 
 
 def _mask_terms(expr: Expr, sets: Mapping[str, Any]) -> tuple[list[Term], list[str]]:
@@ -354,37 +429,72 @@ def gradient_masks(address: Any, space: ParamSpace, sets: Mapping[str, Any] | No
                    widths: Mapping[str, int]) -> dict[str, tuple[int, ...]]:
     """The gradient mask of each tensor an ``of: grad`` address selects: the indices along its first axis (a weight's
     output rows, a vector's entries) whose gradients are kept. A tensor the address selects without a unit set keeps
-    all of them; a per-layer unit set gives a tensor at a layer it does not name an empty mask.
+    all of them; a per-layer unit set gives a tensor at a layer it does not name an empty mask. Each disjunct of a
+    union gives its own mask, and a tensor keeps the union of the masks of the disjuncts that select it.
 
     Args:
-        address: An address whose terms say ``of: grad``.
+        address: An address whose terms say ``of: grad`` (the gradient part of a mixed set, from :func:`split_of`).
         space: The tensors to select from.
         sets: Named sets that references resolve against.
         widths: Each tensor's first-axis length, by name.
 
     Raises:
-        AddressUnresolvable: As :func:`select`, if the address is not ``of: grad``, or its unit sets cannot form one
-            mask (a unit set under a union or a difference, or two unit sets intersected).
+        AddressUnresolvable: As :func:`select`, if the address is not ``of: grad``, or a disjunct's unit sets cannot
+            form one mask (a unit set under a difference or a union nested in an intersection, or two unit sets
+            intersected).
     """
     sets = sets or {}
     expr = parse(address)
     if gradient_of(expr, sets) != "grad":
         raise AddressUnresolvable(to_string(expr), [Refusal("a gradient mask needs an `of: grad` address")])
-    found, problems = _mask_terms(expr, sets)
+    disjuncts = _disjuncts(expr, sets, lambda e: True)
+    found: list[Term | None] = []
+    problems: list[str] = []
+    for d in disjuncts:
+        units, why = _mask_terms(d, sets)
+        found.append(units[0] if units else None)
+        problems += why
     if problems:
-        raise AddressUnresolvable(to_string(expr), [Refusal(f"{p}: a gradient mask is taken from one conjunction")
-                                                    for p in problems])
+        raise AddressUnresolvable(to_string(expr), [Refusal(f"{p}: a gradient mask is taken from one conjunction per "
+                                                            "disjunct of a union") for p in dict.fromkeys(problems)])
     names = select(expr, space, sets)
-    units = found[0].units if found else None
+    ev = _Evaluator(space, sets, masks=True)  # select has reported every refusal
+    selected = [set(ev.run(d)) for d in disjuncts]
     structure = space.structure
     out: dict[str, tuple[int, ...]] = {}
     for n in names:
-        if units is None:
-            out[n] = tuple(range(widths[n]))
-        else:
-            layer = structure.locate(n).layer if structure is not None and units.per_layer is not None else None
-            out[n] = units.for_layer(layer, widths[n])
+        kept: set[int] = set()
+        for term, chosen in zip(found, selected):
+            if n not in chosen:
+                continue
+            if term is None or term.units is None:
+                kept.update(range(widths[n]))
+                break
+            layer = structure.locate(n).layer if structure is not None and term.units.per_layer is not None else None
+            kept.update(term.units.for_layer(layer, widths[n]))
+        out[n] = tuple(sorted(kept))
     return out
+
+
+def gradient_forms(address: Any, sets: Mapping[str, Any] | None = None) -> frozenset[str]:
+    """The gradient readings ``address`` needs beyond one ``of`` and one mask (:data:`GRADIENT_FORMS`): ``mixed-sets``
+    when a union unites a value part and a gradient part, ``union-masks`` when its gradient part unites disjuncts and
+    one of them sets ``units``. An address that cannot be split needs nothing here; resolving it reports why.
+
+    >>> sorted(gradient_forms("module:k_proj & of:value | module:q_proj & units:[1] & of:grad"))
+    ['mixed-sets']
+    >>> sorted(gradient_forms("module:k_proj & units:[0] & of:grad | module:q_proj & units:[1] & of:grad"))
+    ['union-masks']
+    """
+    sets = sets or {}
+    value, grad, refusals = _split(parse(address), sets)
+    if refusals:
+        return frozenset()
+    out = {"mixed-sets"} if value and grad else set()
+    disjuncts = _disjuncts(_union(grad), sets, lambda e: True) if grad else []  # type: ignore[arg-type]
+    if len(disjuncts) > 1 and any(_mask_terms(d, sets)[0] for d in disjuncts):
+        out.add("union-masks")
+    return frozenset(out)
 
 
 def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = None) -> list[str]:
@@ -398,25 +508,33 @@ def select(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = Non
     Raises:
         AddressUnresolvable: With every refusal, if any field does not resolve, a referenced set is missing or matches
             nothing, references form a cycle, the address matches nothing (and is not ``optional``), or its terms
-            disagree on ``of``. ``units`` on tensors is refused unless the address is ``of: grad``, where it is a
-            gradient mask (:func:`gradient_masks`) and does not filter.
+            disagree on ``of`` other than across a union's disjuncts (:func:`split_of`). ``units`` on tensors is
+            refused unless it is in the address's gradient part, where it is a gradient mask (:func:`gradient_masks`)
+            and does not filter.
     """
     expr = parse(address)
-    seen, of_refusals = _of_values(expr, sets or {})
-    ev = _Evaluator(space, sets or {}, masks=list(seen) == ["grad"])
-    out = ev.run(expr)
-    for refusal in of_refusals:  # a missing set is the evaluator's to report as well, once
-        if refusal not in ev.refusals:
-            ev.refusals.append(refusal)
-    if not out and not ev.refusals and not (isinstance(expr, Guarded) and expr.optional):
-        ev.refuse("it matches no tensor")
-    if ev.refusals:
-        raise AddressUnresolvable(to_string(expr), ev.refusals)
+    sets = sets or {}
+    value, grad, of_refusals = _split(expr, sets)
+    keep: set[str] = set()
+    refusals: list[Refusal] = []
+    for parts, masks in ((value, False), (grad, True)):
+        if parts:
+            ev = _Evaluator(space, sets, masks=masks)
+            keep.update(ev.run(_union(parts)))  # type: ignore[arg-type]
+            refusals += [r for r in ev.refusals if r not in refusals]
+    refusals += [r for r in of_refusals if r not in refusals]  # a missing set is the evaluator's to report as well
+    out = [n for n in space.names if n in keep]
+    if not out and not refusals and not (isinstance(expr, Guarded) and expr.optional):
+        refusals.append(Refusal("it matches no tensor"))
+    if refusals:
+        raise AddressUnresolvable(to_string(expr), refusals)
     return out
 
 
 __all__ = [
     "component_matches",
+    "GRADIENT_FORMS",
+    "gradient_forms",
     "gradient_masks",
     "gradient_of",
     "leaf_matches",
@@ -425,6 +543,7 @@ __all__ = [
     "ParamSpace",
     "segment_after",
     "select",
+    "split_of",
     "strip_wrappers",
     "StructureProvider",
 ]
