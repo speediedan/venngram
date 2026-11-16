@@ -1,0 +1,61 @@
+# Qwen2ForCausalLM: the seed map at component map schema 5, with each row's measured weight layout recorded by
+# venngram.maps.verification.with_layouts against Qwen/Qwen2.5-1.5B-Instruct's configuration. Generated; do not edit.
+schema_version: 5
+architecture: Qwen2ForCausalLM
+properties:
+  sandwich_norms: false
+components:
+  embed:
+    module: model.embed_tokens
+    kind: embed
+    layout: in_out
+  blocks.{i}:
+    module: model.layers.{i}
+    kind: block
+  blocks.{i}.ln1:
+    module: model.layers.{i}.input_layernorm
+    kind: norm
+  blocks.{i}.attn:
+    module: model.layers.{i}.self_attn
+    kind: attn
+  blocks.{i}.attn.q:
+    module: model.layers.{i}.self_attn.q_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.attn.k:
+    module: model.layers.{i}.self_attn.k_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.attn.v:
+    module: model.layers.{i}.self_attn.v_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.attn.o:
+    module: model.layers.{i}.self_attn.o_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.ln2:
+    module: model.layers.{i}.post_attention_layernorm
+    kind: norm
+  blocks.{i}.mlp:
+    module: model.layers.{i}.mlp
+    kind: mlp
+  blocks.{i}.mlp.gate:
+    module: model.layers.{i}.mlp.gate_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.mlp.in:
+    module: model.layers.{i}.mlp.up_proj
+    kind: linear
+    layout: out_in
+  blocks.{i}.mlp.out:
+    module: model.layers.{i}.mlp.down_proj
+    kind: linear
+    layout: out_in
+  ln_final:
+    module: model.norm
+    kind: norm
+  unembed:
+    module: lm_head
+    kind: unembed
+    layout: out_in

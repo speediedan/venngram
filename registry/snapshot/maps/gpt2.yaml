@@ -1,23 +1,58 @@
-# GPT-2 (transformers `GPT2LMHeadModel`). Pre-norm blocks, no post-sublayer norms.
-schema_version: 1
+# GPT2LMHeadModel: the seed map at component map schema 5, with each row's measured weight layout recorded by
+# venngram.maps.verification.with_layouts against openai-community/gpt2's configuration. Generated; do not edit.
+schema_version: 5
 architecture: GPT2LMHeadModel
-facts:
-  sandwich_norms: false
 components:
-  embed:              {module: "transformer.wte",                kind: embed}
-  pos_embed:          {module: "transformer.wpe",                kind: embed}
-  blocks.{i}:         {module: "transformer.h.{i}",              kind: block}
-  blocks.{i}.ln1:     {module: "transformer.h.{i}.ln_1",         kind: norm}
-  blocks.{i}.attn:    {module: "transformer.h.{i}.attn",         kind: attn}
-  blocks.{i}.attn.qkv: {module: "transformer.h.{i}.attn.c_attn",  kind: linear}
-  blocks.{i}.attn.o:  {module: "transformer.h.{i}.attn.c_proj",  kind: linear}
-  blocks.{i}.ln2:     {module: "transformer.h.{i}.ln_2",         kind: norm}
-  blocks.{i}.mlp:     {module: "transformer.h.{i}.mlp",          kind: mlp}
-  blocks.{i}.mlp.in:  {module: "transformer.h.{i}.mlp.c_fc",     kind: linear}
-  blocks.{i}.mlp.out: {module: "transformer.h.{i}.mlp.c_proj",   kind: linear}
-  ln_final:           {module: "transformer.ln_f",               kind: norm}
-  unembed:            {module: "lm_head",                        kind: unembed}
-# GPT-2's configuration leaves `n_inner` null, meaning four times the hidden width.
+  embed:
+    module: transformer.wte
+    kind: embed
+    layout: in_out
+  pos_embed:
+    module: transformer.wpe
+    kind: embed
+    layout: in_out
+  blocks.{i}:
+    module: transformer.h.{i}
+    kind: block
+  blocks.{i}.ln1:
+    module: transformer.h.{i}.ln_1
+    kind: norm
+  blocks.{i}.attn:
+    module: transformer.h.{i}.attn
+    kind: attn
+  blocks.{i}.attn.qkv:
+    module: transformer.h.{i}.attn.c_attn
+    kind: linear
+    layout: in_out
+  blocks.{i}.attn.o:
+    module: transformer.h.{i}.attn.c_proj
+    kind: linear
+    layout: in_out
+  blocks.{i}.ln2:
+    module: transformer.h.{i}.ln_2
+    kind: norm
+  blocks.{i}.mlp:
+    module: transformer.h.{i}.mlp
+    kind: mlp
+  blocks.{i}.mlp.in:
+    module: transformer.h.{i}.mlp.c_fc
+    kind: linear
+    layout: in_out
+  blocks.{i}.mlp.out:
+    module: transformer.h.{i}.mlp.c_proj
+    kind: linear
+    layout: in_out
+  ln_final:
+    module: transformer.ln_f
+    kind: norm
+  unembed:
+    module: lm_head
+    kind: unembed
+    layout: out_in
 verification:
   config:
-    intermediate: [n_inner, "4 * hidden"]
+    intermediate:
+    - n_inner
+    - 4 * hidden
+properties:
+  sandwich_norms: false
