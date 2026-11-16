@@ -60,7 +60,11 @@ Uses ``pyarrow`` and, for the Hub stores, ``huggingface_hub`` (both venngram dep
 
     python -m venngram.registry build --source hub-dataset:<owner>/<repo>/maps --discover-hub --out ./index
     python -m venngram.registry publish ./index hub-dataset:<owner>/<repo>/index
+    python -m venngram.registry inspect hub-dataset:<owner>/<repo>/index --manifest hub-dataset:<owner>/<repo>
     python -m venngram.registry lookup Qwen3ForCausalLM
+
+``rebuild`` runs ``build``, prints ``inspect`` of the built index, and publishes it only when given ``--publish
+<location>``. Credentials for a Hub store come from the environment (``HF_TOKEN``), never from an argument.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -538,6 +542,39 @@ def publish_index(root: str | Path, location: str, *,
     return get_store(store).push(ref, files, message, None)
 
 
+def inspect_index(location: str, *, manifest: str | None = None) -> dict[str, Any]:
+    """What an index at ``location`` holds: its header, the subjects and document schemas of each kind in its current
+    generation, and the shape of its mined rules. With ``manifest`` (a manifest location, such as the registry's own
+    documents), also the documents that manifest lists, by kind. Reads the header by :data:`HEADER_NAME`, like a
+    lookup."""
+    revision, header = _state(location)
+    current = header["current"]
+    kinds: dict[str, Any] = {}
+    for kind in sorted(header.get("counts") or {}):
+        found = subjects(kind, locations=[location])
+        versions = {r.schema_version for s in found for r in rows(kind, s, locations=[location])}
+        kinds[kind] = {"documents": header["counts"][kind], "subjects": found,
+                       "schema_versions": sorted(versions, key=lambda v: (v is None, v or 0))}
+    mined = _fetch(location, revision, f"{current}/mined_rules.yaml")
+    if mined is not None:
+        with open(mined, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh) or {}
+        mined_shape = {k: doc.get(k) for k in ("kind", "schema_version", "name")}
+    else:
+        mined_shape = None
+    out: dict[str, Any] = {"location": location, "revision": revision,
+                           **{k: header.get(k) for k in ("name", "current", "built", "sources")},
+                           "kinds": kinds, "mined_rules": mined_shape}
+    if manifest is not None:
+        store, ref, pinned = _split(manifest)
+        found_manifest, _, resolved = fetch_manifest(store, ref, pinned)
+        by_kind: dict[str, list[str]] = {}
+        for entry in found_manifest.documents:
+            by_kind.setdefault(entry.kind, []).append(entry.path)
+        out["manifest"] = {"location": manifest, "revision": resolved, "documents": by_kind}
+    return out
+
+
 # ----- command line ------------------------------------------------------------------------------------------------
 
 
@@ -546,25 +583,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      description="Build, publish and query venngram registry indexes.")
     sub = parser.add_subparsers(dest="command", required=True)
     b = sub.add_parser("build", help="crawl manifest locations into a new index generation")
-    b.add_argument("--source", action="append", default=[],
-                   help="<store>:<ref>[@<revision>] (repeatable, in rank order)")
-    b.add_argument("--discover-hub", action="store_true", help="also crawl every Hub repository tagged venngram")
-    b.add_argument("--out", required=True, type=Path)
-    b.add_argument("--name", default="venngram")
+    r = sub.add_parser("rebuild", help="build a new index generation, inspect it, and publish it only with --publish")
+    for a in (b, r):
+        a.add_argument("--source", action="append", default=[],
+                       help="<store>:<ref>[@<revision>] (repeatable, in rank order)")
+        a.add_argument("--discover-hub", action="store_true", help="also crawl every Hub repository tagged venngram")
+        a.add_argument("--out", required=True, type=Path)
+        a.add_argument("--name", default="venngram")
+    r.add_argument("--publish", metavar="LOCATION", help="push the built index here (a registry write)")
     p = sub.add_parser("publish", help="push a built index to a location")
     p.add_argument("root", type=Path)
     p.add_argument("location")
+    i = sub.add_parser("inspect", help="an index's header, subjects, document schemas and mined rules, as JSON")
+    i.add_argument("location", nargs="?", default=DEFAULT_REGISTRIES[0],
+                   help="an index location (default: the seed index); local:<dir> reads a built index")
+    i.add_argument("--manifest", help="also list the documents of this manifest location, by kind")
     q = sub.add_parser("lookup", help="the map lookup would serve for an architecture, and every candidate")
     q.add_argument("architecture")
     args = parser.parse_args(argv)
     try:
-        if args.command == "build":
+        if args.command in ("build", "rebuild"):
             locations = list(dict.fromkeys(list(args.source) + (discover_hub() if args.discover_hub else [])))
             found = crawl(locations)
             print(write_index(found, args.out, name=args.name, sources=locations))
             print(json.dumps({k: sum(r.kind == k for r in found) for k in sorted({r.kind for r in found})}))
+            if args.command == "rebuild":
+                print(json.dumps(inspect_index(f"local:{args.out.resolve()}"), indent=2))
+                if args.publish:
+                    print(publish_index(args.out, args.publish))
         elif args.command == "publish":
             print(publish_index(args.root, args.location))
+        elif args.command == "inspect":
+            print(json.dumps(inspect_index(args.location, manifest=args.manifest), indent=2))
         else:
             for r in rows("component_map", args.architecture):
                 print(f"{r.status:<11} {r.source or '-':<24} {r.reference}")
@@ -580,6 +630,7 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ["clear_cache", "crawl", "DEFAULT_REGISTRIES", "discover_hub", "lookup_map", "lookup_overlay", "main",
-           "mined_rules", "newest_readable", "NewerSchemaWarning", "publish_index", "readable", "RegistryError",
-           "RegistryOfflineWarning", "registries", "Row", "rows", "set_registries", "subjects", "write_index"]
+__all__ = ["clear_cache", "crawl", "DEFAULT_REGISTRIES", "discover_hub", "inspect_index", "lookup_map",
+           "lookup_overlay", "main", "mined_rules", "newest_readable", "NewerSchemaWarning", "publish_index",
+           "readable", "RegistryError", "RegistryOfflineWarning", "registries", "Row", "rows", "set_registries",
+           "subjects", "write_index"]
