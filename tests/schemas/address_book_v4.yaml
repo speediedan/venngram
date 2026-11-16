@@ -1,0 +1,22 @@
+# Golden fixture: an address book at schema 4, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 4
+name: golden
+portability: checkpoint
+applies_to:
+  models:
+  - id: Qwen/Qwen3.5-4B
+    revision: abc123
+sets:
+  neuron_grads: 'component:mlp.out & layers:[13] & leaf:weight & units:[7956] & of:grad'
+treatments:
+  damped:
+    model:
+      id: Qwen/Qwen3.5-4B
+      revision: abc123
+    gradients:
+    - op: scale
+      target:
+        set: neuron_grads
+      value:
+        dose: 0.5

@@ -54,10 +54,13 @@ In the mapping form, the fields of one mapping intersect, ``any: [...]`` unites,
 
 ``of`` does not filter: an address selects the same tensors or sites with it as without, and ``of: grad`` says that
 the consumer acts on their gradients (a tensor's gradient, or the gradient with respect to the activation at a site).
-It composes like any field (``(@top - @top_q) & of:grad``), and an expression whose terms disagree on it is refused
-when it is resolved (:func:`venngram.resolve.gradient_of`), since a set mixing values and gradients has no one thing
-to act on. ``units`` on tensors under ``of: grad`` is a gradient mask over each tensor's first axis
-(:func:`venngram.resolve.gradient_masks`). A book that uses ``of`` is address book schema 2.
+It composes like any field (``(@top - @top_q) & of:grad``), and terms that do not state it follow those that do. A
+union's disjuncts may differ on it, each stating its own: the set then has a value part and a gradient part, which
+:func:`venngram.resolve.split_of` separates (``(@whole & of:value) | (@rows & of:grad)``). An intersection or a
+difference whose terms disagree on it is refused when it is resolved, since it has no one thing to act on.
+``units`` on tensors under ``of: grad`` is a gradient mask over each tensor's first axis
+(:func:`venngram.resolve.gradient_masks`), taken from each disjunct of a union and united per tensor. A book that uses
+``of`` is address book schema 2.
 
 >>> parse("role:adapter & layers:-4:")
 Term(role='adapter', layers=LayerSet('-4:'))

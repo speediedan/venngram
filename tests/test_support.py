@@ -48,6 +48,31 @@ def test_a_tuning_section_refuses_what_its_consumer_cannot_tune():
         "b: set `neurons`: it selects units, and this consumer tunes no unit sets (`units: none`)"]
 
 
+def test_a_tuning_section_declares_the_gradient_readings_it_honours():
+    fields = ["role", "module", "layers", "units", "of"]
+    sets = {"mixed": "(module:k_proj & of:value) | (module:q_proj & units:[1] & of:grad)",
+            "rows": "(module:k_proj & units:[0] & of:grad) | (module:q_proj & units:[1] & of:grad)",
+            "one": "module:q_proj & units:[1] & of:grad"}
+    b = AddressBook.from_mapping({"schema_version": 2, "name": "b", "sets": sets}, source="b")
+    plain = TuningSupport(fields=frozenset(fields), units="unit-adapter")
+    assert plain.check_book(b) == [
+        "b: set `mixed`: it needs the gradient readings ['mixed-sets'], which this consumer does not honour "
+        "(`gradients`: [])",
+        "b: set `rows`: it needs the gradient readings ['union-masks'], which this consumer does not honour "
+        "(`gradients`: [])"]
+    doc = {"schema_version": 5, "kind": "support_record", "name": "tuner", "sections": {
+        "tuning": {"fields": fields, "units": "unit-adapter", "gradients": ["mixed-sets", "union-masks"]}}}
+    record = SupportRecord.from_mapping(doc)
+    assert record.tuning.gradients == {"mixed-sets", "union-masks"} and record.check_book(b) == []
+    assert record.to_mapping()["schema_version"] == 5 and SupportRecord.from_mapping(record.to_mapping()) == record
+    assert SupportRecord.from_mapping({**doc, "sections": {"tuning": {"fields": fields}}}).to_mapping()[
+        "schema_version"] == 2  # no `gradients`, no new schema
+    with pytest.raises(ValueError, match="`gradients` needs support record schema 5, not 4"):
+        SupportRecord.from_mapping({**doc, "schema_version": 4})
+    with pytest.raises(ValueError, match=r"`gradients` names \['paths'\], which venngram does not define"):
+        SupportRecord.from_mapping({**doc, "sections": {"tuning": {"gradients": ["paths"]}}})
+
+
 def test_a_shared_book_is_judged_by_the_sets_a_consumer_uses(tmp_path):
     (tmp_path / "probes.yaml").write_text(yaml.safe_dump({"schema_version": 1, "name": "probes", "sets": {
         "probe": {"point": "resid_post"}, "top": {"role": "adapter", "layers": "-2:"}}}))
@@ -136,7 +161,7 @@ def test_a_circuits_section_names_graphs_nodes_features_and_evidence():
 
 
 @pytest.mark.parametrize("doc, match", [
-    ({**TUNER, "schema_version": 5}, "support record schema 5 is newer than this venngram reads"),
+    ({**TUNER, "schema_version": 6}, "support record schema 6 is newer than this venngram reads"),
     ({**TUNER, "ops": ["add"]}, "contracts go under `sections`"),
     ({**TUNER, "sections": {}}, "maps each contract"),
     ({**TUNER, "sections": {"tuning": {"units": "lora"}}}, "`units` is one of"),

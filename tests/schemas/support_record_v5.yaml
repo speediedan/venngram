@@ -1,0 +1,19 @@
+# Golden fixture: a support record at schema 5, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 5
+kind: support_record
+name: golden-masker
+sections:
+  tuning:
+    fields:
+    - role
+    - module
+    - layers
+    - units
+    - of
+    targets:
+    - param
+    units: unit-adapter
+    gradients:
+    - mixed-sets
+    - union-masks
