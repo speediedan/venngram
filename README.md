@@ -105,7 +105,10 @@ by name. A recipe's `weights` section (recipe schema 3) holds ops on parameters 
 any stage and kept in them: a whole tensor is a `param` target, a set with `units` a `param_units` one, along each
 tensor's unit axis (see "Maps: base and overlay"). A weight op acts on every token, and an `add` or `replace` may take a
 `delta` operand, a weight patch (`venngram.patches`: a `kind: weight_patch` document naming the tensor, its shape and
-the hash of the base it applies to, with a low-rank, sparse or dense delta in a sidecar). Ops are declared specs
+the hash of the base it applies to, with a low-rank, sparse or dense delta in a sidecar). A `gradients` section (recipe
+schema 4) holds ops on parameter gradients: its target sets say `of: grad`, and each op acts on a step's accumulated
+gradient of the tensors it targets, never materialized into them (`scale`, `replace` with a zero value as the declared
+form of a mask, `add`, and `project` and `reject` on a whole tensor). Ops are declared specs
 (`venngram.ops`: `replace`, `add`, `scale`, `project`, `reject`, `patch`, `clamp`, `replace_with_error`, and any
 registered in code or read from a published `op_specs` document); venngram validates and composes them and never
 executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
@@ -167,8 +170,9 @@ The core sections are `steering` (a book's treatments), `tuning` (address books 
 `circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
 a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
 gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
-of a value part and a gradient part, and `union-masks`, a union of gradient conjunctions with unit sets. A section a
-record omits is a contract its
+of a value part and a gradient part, and `union-masks`, a union of gradient conjunctions with unit sets. A `steering`
+section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
+section). A section a record omits is a contract its
 consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
 defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
 and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
@@ -361,9 +365,9 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 3 | 1, 2 when a set uses `of`, 3 when a treatment has `weights` | ignored at the top level |
-| recipe | 1 to 3 | 2, or 3 when it has `weights` | refused in `method` and in an op's parameters |
-| support record | 1 to 5 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` | refused; an unknown *section* is skipped with a warning |
+| address book | 1 to 4 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` | ignored at the top level |
+| recipe | 1 to 4 | 2, 3 when it has `weights`, 4 when it has `gradients` | refused in `method` and in an op's parameters |
+| support record | 1 to 5 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` | refused; an unknown *section* is skipped with a warning |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |
 | weight patch | 1 | 1 | refused |

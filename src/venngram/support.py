@@ -77,7 +77,8 @@ SCHEMA_WINDOW = (1, 5)
 OF_SCHEMA = 3
 #: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
 PARAM_SCHEMA = 4
-#: The first schema whose ``tuning`` section may declare ``gradients`` (the gradient readings it honours).
+#: The first schema whose ``tuning`` section may declare ``gradients`` (the gradient readings it honours) and whose
+#: ``steering`` section may declare ``gradient_ops`` (the ops it applies to parameter gradients).
 GRADIENTS_SCHEMA = 5
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
@@ -420,6 +421,9 @@ class SupportRecord:
             if _param_targets(doc):
                 raise ValueError(f"{source}: a parameter target is declared in the `steering` section of a schema "
                                  f"{PARAM_SCHEMA} record, not at the top level of a schema 1 one.")
+            if "gradient_ops" in doc:
+                raise ValueError(f"{source}: `gradient_ops` is declared in the `steering` section of a schema "
+                                 f"{GRADIENTS_SCHEMA} record, not at the top level of a schema 1 one.")
             return cls(name=name, sections={"steering": Support.from_mapping(doc, source=source)})
         unknown = sorted(set(doc) - set(_TOP_KEYS))
         if unknown:
@@ -437,9 +441,9 @@ class SupportRecord:
                 if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
                     raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
                                      "venngram would refuse the record by name rather than pass over it.")
-                if kind == "tuning" and isinstance(body, Mapping) and "gradients" in body \
-                        and version < GRADIENTS_SCHEMA:
-                    raise ValueError(f"{where}: `gradients` needs support record schema {GRADIENTS_SCHEMA}, not "
+                key = {"tuning": "gradients", "steering": "gradient_ops"}.get(kind)
+                if key is not None and isinstance(body, Mapping) and key in body and version < GRADIENTS_SCHEMA:
+                    raise ValueError(f"{where}: `{key}` needs support record schema {GRADIENTS_SCHEMA}, not "
                                      f"{version}: an older venngram would refuse the record by name rather than pass "
                                      "over it.")
                 if kind == "steering" and _param_targets(body) and version < PARAM_SCHEMA:
@@ -481,8 +485,8 @@ class SupportRecord:
 
     def to_mapping(self) -> dict[str, Any]:
         """The record as a schema 2 document, or the first schema its declarations need: 3 when its steering section
-        declares ``of``, 4 a parameter target, 5 when its tuning section declares ``gradients`` (skipped sections are
-        written back as they were read)."""
+        declares ``of``, 4 a parameter target, 5 when its tuning section declares ``gradients`` or its steering
+        section ``gradient_ops`` (skipped sections are written back as they were read)."""
         sections: dict[str, Any] = {}
         for kind, contract in self.sections.items():
             if isinstance(contract, Support):
@@ -495,7 +499,8 @@ class SupportRecord:
         steering = [c for c in self.sections.values() if isinstance(c, Support)]
         needs_of = any(c.of != Support.of for c in steering)
         version = GRADIENTS_SCHEMA if any(isinstance(c, TuningSupport) and c.gradients
-                                          for c in self.sections.values()) else \
+                                          for c in self.sections.values()) or any(c.gradient_ops for c in steering) \
+            else \
             PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
             OF_SCHEMA if needs_of else SCHEMA_VERSION
         out: dict[str, Any] = {"schema_version": version, "kind": "support_record"}
@@ -550,6 +555,8 @@ def _steering_mapping(s: Support) -> dict[str, Any]:
         out["sites"] = sorted(s.sites)
     if s.of != Support.of:
         out["of"] = sorted(s.of)
+    if s.gradient_ops:
+        out["gradient_ops"] = sorted(s.gradient_ops)
     return out
 
 

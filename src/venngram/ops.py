@@ -32,7 +32,10 @@ materialized into the tensor, so it has no token scope but ``all``. ``add``, ``s
 parameter targets; ``project`` and ``reject`` declare ``param`` (for a matrix ``W`` and a direction ``u`` on its ``out``
 side, ``reject`` with fraction ``a`` gives ``(I - a u u^T) W``: the activation ``reject`` at its output, folded in);
 ``patch`` and ``clamp`` declare none. A weight ``add`` or ``replace`` may take a ``delta`` operand: a weight patch
-(:mod:`venngram.patches`). ``fraction`` may exceed 1 (over-rejection) on every target.
+(:mod:`venngram.patches`). ``fraction`` may exceed 1 (over-rejection) on every target. An op whose spec declares a
+parameter target and ``grad`` in its ``of`` may also act on parameter gradients, in a recipe's ``gradients`` section,
+where a ``delta`` operand is refused; the parameter conformance vectors state its meaning there too, read with the
+gradient as the tensor.
 :func:`register_op` adds an op in code; :func:`read_op_specs` reads declarations published as an ``op_specs``
 document, so a recipe naming a published op validates without its publisher's code. :func:`op_cases` and
 :func:`check_ops` are conformance vectors for ops whose meaning is numeric, as :func:`transform_cases` and
@@ -539,7 +542,8 @@ class Support:
     ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
     ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
     A parameter target (``param``, ``param_units``: a recipe's ``weights`` section) is declared in ``targets`` of a
-    schema 4 record's ``steering`` section.
+    schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a recipe's
+    ``gradients`` section, on targets it declares), in a schema 5 record; none by default.
     """
 
     ops: frozenset[str]
@@ -551,6 +555,7 @@ class Support:
     bases: frozenset[str] | None = None
     name: str | None = None
     of: frozenset[str] = frozenset({"value"})
+    gradient_ops: frozenset[str] = frozenset()
 
     def site_ok(self, site: str) -> bool:
         if self.sites is None:
@@ -600,7 +605,7 @@ class Support:
 #: Support record fields beyond ``ops``, with the names each may take (``None``: any name).
 _SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "tokens": TOKEN_SCOPES,
                                                       "values": VALUE_SOURCES, "transforms": None, "sites": None,
-                                                      "bases": None, "of": OF}
+                                                      "bases": None, "of": OF, "gradient_ops": None}
 _GLOB = re.compile(r"[*?\[]")
 
 
@@ -611,6 +616,14 @@ def check_support(recipe: Any, support: Support) -> list[str]:
         at = f"weights op {j} (`{op.op}`)"
         if op.op not in support.ops:
             out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
+        if op.target_kind(recipe.book) not in support.targets:
+            out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
+        out += _value_and_operand(op, recipe, support, at)
+    for j, op in enumerate(getattr(recipe, "gradients", ())):
+        at = f"gradients op {j} (`{op.op}`)"
+        if op.op not in support.gradient_ops:
+            out.append(f"{at}: the op is not applied to parameter gradients (`gradient_ops`: "
+                       f"{sorted(support.gradient_ops)})")
         if op.target_kind(recipe.book) not in support.targets:
             out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
         out += _value_and_operand(op, recipe, support, at)
