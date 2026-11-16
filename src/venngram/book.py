@@ -46,8 +46,8 @@ kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it int
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
 version; a key that changes what a set selects does. Schema 2 adds the ``of`` address field (a set's gradients), so a
 book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
-``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients), each of
-which an older reader would pass over silently.
+``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
+``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -85,7 +85,8 @@ SCHEMA_WINDOW = (1, 4)
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
 WEIGHTS_SCHEMA = 3
-#: The first schema whose treatments may carry a ``gradients`` section (ops on parameter gradients).
+#: The first schema whose treatments may carry a ``gradients`` section (ops on parameter gradients) or a ``readout``
+#: (what a stage's gradients are taken of).
 GRADIENTS_SCHEMA = 4
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
@@ -217,14 +218,14 @@ class AddressBook:
                               if isinstance(body, Mapping) and "weights" in body) \
             if isinstance(raw_treatments, Mapping) else []
         with_gradients = sorted(n for n, body in raw_treatments.items()
-                                if isinstance(body, Mapping) and "gradients" in body) \
+                                if isinstance(body, Mapping) and ("gradients" in body or _states_readout(body))) \
             if isinstance(raw_treatments, Mapping) else []
         if with_weights and inline and "schema_version" not in doc:
             version = WEIGHTS_SCHEMA
         if with_gradients and inline and "schema_version" not in doc:
             version = GRADIENTS_SCHEMA
         for names, key, needed in ((with_weights, "weights", WEIGHTS_SCHEMA),
-                                   (with_gradients, "gradients", GRADIENTS_SCHEMA)):
+                                   (with_gradients, "gradients` or a `readout", GRADIENTS_SCHEMA)):
             if names and version < needed:
                 raise AddressError(f"{source}: the treatments {names} have `{key}`, which need address book schema "
                                    f"{needed}, not {version}: an older venngram would pass over them silently.")
@@ -356,6 +357,13 @@ class AddressBook:
                 return
         pins = ", ".join(f"{m['id']}@{m['revision']}" for m in self.applies_to["models"])
         raise AddressError(f"{self.source}: a checkpoint book applies only to {pins}, not {model_id}@{revision}.")
+
+
+def _states_readout(body: Mapping[str, Any]) -> bool:
+    """Whether a treatment states a readout, for itself or for a stage."""
+    stages = body.get("stages")
+    return "readout" in body or (isinstance(stages, list) and any(isinstance(st, Mapping) and "readout" in st
+                                                                  for st in stages))
 
 
 _KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets",

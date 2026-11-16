@@ -543,7 +543,8 @@ class Support:
     ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
     A parameter target (``param``, ``param_units``: a recipe's ``weights`` section) is declared in ``targets`` of a
     schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a recipe's
-    ``gradients`` section, on targets it declares), in a schema 5 record; none by default.
+    ``gradients`` section, on targets it declares), and ``readouts`` the reductions it computes a readout with
+    (:mod:`venngram.readouts`), in a schema 5 record; none of either by default.
     """
 
     ops: frozenset[str]
@@ -556,6 +557,7 @@ class Support:
     name: str | None = None
     of: frozenset[str] = frozenset({"value"})
     gradient_ops: frozenset[str] = frozenset()
+    readouts: frozenset[str] = frozenset()
 
     def site_ok(self, site: str) -> bool:
         if self.sites is None:
@@ -605,7 +607,8 @@ class Support:
 #: Support record fields beyond ``ops``, with the names each may take (``None``: any name).
 _SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "tokens": TOKEN_SCOPES,
                                                       "values": VALUE_SOURCES, "transforms": None, "sites": None,
-                                                      "bases": None, "of": OF, "gradient_ops": None}
+                                                      "bases": None, "of": OF, "gradient_ops": None,
+                                                      "readouts": None}
 _GLOB = re.compile(r"[*?\[]")
 
 
@@ -627,6 +630,12 @@ def check_support(recipe: Any, support: Support) -> list[str]:
         if op.target_kind(recipe.book) not in support.targets:
             out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
         out += _value_and_operand(op, recipe, support, at)
+    for where, readout in [("readout", getattr(recipe, "readout", None))] + [
+            (f"stage {i} ({s.site}) readout", s.readout) for i, s in enumerate(recipe.stages)]:
+        for k, term in enumerate(readout.terms if readout is not None else ()):
+            if term.reduce not in support.readouts:
+                out.append(f"{where} term {k}: reduction `{term.reduce}` is not computed (`readouts`: "
+                           f"{sorted(support.readouts)})")
     for i, stage in enumerate(recipe.stages):
         where = f"stage {i} ({stage.site})"
         if not support.site_ok(stage.site):

@@ -88,8 +88,8 @@ def test_gradients_need_recipe_schema_4_and_a_book_treatment_with_them_book_sche
         Recipe.from_mapping(doc)
     book = {**gradients_doc([])["book"], "schema_version": 3,
             "treatments": {"damped": {"model": MODEL, "gradients": [scale("neuron_grads", 0.5)]}}}
-    with pytest.raises(AddressError, match="treatments \\[.damped.\\] have `gradients`, which need address book "
-                                           "schema 4"):
+    with pytest.raises(AddressError, match="treatments \\[.damped.\\] have `gradients` or a `readout`, which "
+                                           "need address book schema 4"):
         AddressBook.from_mapping(book)
     read = AddressBook.from_mapping({**book, "schema_version": 4})
     assert read.treatments["damped"].gradients[0].target_kind(read) == "param_units"

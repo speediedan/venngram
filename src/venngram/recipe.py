@@ -86,17 +86,33 @@ sharding, and any state it keeps, are the consumer's.
       - {op: replace, target: {set: neuron_grads}, value: {dose: 0.0}}     # keep these rows' gradients out of a step
       - {op: reject, target: {set: down_grad}, operand: concept}            # train orthogonally to a direction
 
+**Readouts**: a stage op on an ``of: grad`` target acts on the gradient of a scalar, and the treatment says which with a
+``readout`` (:mod:`venngram.readouts`): the weighted sum of terms, each a registered reduction (``sum``, ``project``
+with a vector operand, ``norm``) of the activations a book set addresses at a token scope. A stage may state its own,
+replacing the treatment's for its ops. From recipe schema 4 a stage with an ``of: grad`` op needs one of the two, and a
+readout where no stage acts on a gradient is refused; an earlier document without one leaves the scalar to the
+consumer. Parameter gradients (the ``gradients`` section) are the training objective's, which is the tuning tool's.
+
+.. code-block:: yaml
+
+    readout:                                                              # a logit difference at the last token
+      terms:
+        - {reduce: sum, set: answer_logit, tokens: last, weight: 1.0}
+        - {reduce: sum, set: foil_logit, tokens: last, weight: -1.0}
+
 **Composition** (:func:`compose`): recipes on one model revision compose stage by stage. Without an order, ops from
 different recipes at one site must commute (the same summing or multiplying op, or disjoint unit sets); otherwise the
 composition must state ``order: listed``. ``weights`` and ``gradients`` ops compose the same way, section by section
 (:func:`compose_weights`).
 
-**Versions**: schema 2 is written, schema 3 when the recipe has ``weights``, or schema 4 when it has ``gradients``;
+**Versions**: schema 2 is written, schema 3 when the recipe has ``weights``, or schema 4 when it has ``gradients``
+or a ``readout``;
 schema 1 (one ``method`` and its
 ``treatments``) is read through :func:`migrate` with a deprecation warning.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
+import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -106,11 +122,12 @@ from typing import Any
 import yaml
 
 from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
-from venngram.book import AddressBook
+from venngram.book import _states_readout, AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
+from venngram.readouts import READOUTS
 from venngram.resolve import gradient_of
 from venngram.units import _sha256 as _sha256_file
 
@@ -122,7 +139,8 @@ RECIPE_WINDOW = (1, 4)
 
 #: The first recipe schema with a ``weights`` section (a key an older reader would pass over silently).
 WEIGHTS_SCHEMA = 3
-#: The first recipe schema with a ``gradients`` section (ops on parameter gradients; likewise passed over silently).
+#: The first recipe schema with a ``gradients`` section (ops on parameter gradients) or a ``readout`` (what a stage's
+#: gradients are taken of); an older reader would pass over either silently.
 GRADIENTS_SCHEMA = 4
 
 #: Token scopes written as a bare string.
@@ -303,15 +321,52 @@ class Op:
 
 
 @dataclass(frozen=True)
+class ReadoutTerm:
+    """One term of a readout: a registered reduction (:data:`~venngram.readouts.READOUTS`) of the activations a book
+    set addresses, at a token scope, with a weight and, for a reduction that takes one, an operand."""
+
+    reduce: str
+    set: str
+    tokens: Tokens = Tokens()
+    weight: float = 1.0
+    operand: str | None = None
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_mapping(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"reduce": self.reduce, "set": self.set, "tokens": self.tokens.to_doc(),
+                               "weight": self.weight}
+        if self.operand is not None:
+            out["operand"] = self.operand
+        if self.params:
+            out["params"] = dict(self.params)
+        return out
+
+
+@dataclass(frozen=True)
+class Readout:
+    """What a stage's gradients are taken of: the weighted sum of its terms (:mod:`venngram.readouts`)."""
+
+    terms: tuple[ReadoutTerm, ...]
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"terms": [t.to_mapping() for t in self.terms]}
+
+
+@dataclass(frozen=True)
 class Stage:
     """Ops applied in order at one site, under one token scope."""
 
     site: str
     ops: tuple[Op, ...]
     tokens: Tokens = Tokens()
+    readout: Readout | None = None
+    """What this stage's ``of: grad`` ops act on the gradients of, replacing the treatment's readout."""
 
     def to_mapping(self) -> dict[str, Any]:
-        return {"site": self.site, "tokens": self.tokens.to_doc(), "ops": [o.to_mapping() for o in self.ops]}
+        out = {"site": self.site, "tokens": self.tokens.to_doc(), "ops": [o.to_mapping() for o in self.ops]}
+        if self.readout is not None:
+            out["readout"] = self.readout.to_mapping()
+        return out
 
 
 @dataclass(frozen=True)
@@ -328,6 +383,8 @@ class Recipe:
     """The ``weights`` section: ops on parameters, in order, applied before any stage."""
     gradients: tuple[Op, ...] = ()
     """The ``gradients`` section: ops on parameter gradients, in order, applied to each step's accumulated gradient."""
+    readout: Readout | None = None
+    """What its stages' ``of: grad`` ops act on the gradients of, unless a stage states its own."""
     book_ref: Any = None
     """What the document says for ``book`` (a path, or the inline mapping), kept so it round-trips."""
     revision_source: str = "pinned"
@@ -394,9 +451,17 @@ class Recipe:
         if not isinstance(raw_stages, list) or not (raw_stages or weights or gradients):
             raise AddressError(f"{source}: `stages` lists at least one {{site, ops}} (or the recipe has `weights` or "
                                "`gradients`).")
-        stages = tuple(_stage(raw, i, book, operands, source) for i, raw in enumerate(raw_stages))
+        stages = tuple(_stage(raw, i, book, operands, source, version) for i, raw in enumerate(raw_stages))
+        readout = None
+        if doc.get("readout") is not None:
+            if version < GRADIENTS_SCHEMA:
+                raise AddressError(f"{source}: `readout` needs recipe schema {GRADIENTS_SCHEMA}, not {version}: an "
+                                   "older venngram would pass over it silently.")
+            readout = _readout(doc["readout"], f"{source}: readout", book, operands)
+        _check_readouts(stages, readout, book, source, version)
         return cls(name=str(doc.get("name") or source), model_id=model["id"], revision=model["revision"], book=book,
-                   stages=stages, operands=operands, weights=weights, gradients=gradients, book_ref=raw_book,
+                   stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
+                   book_ref=raw_book,
                    revision_source=model.get("revision_source", "pinned"), sampling=dict(doc.get("sampling") or {}),
                    evidence=dict(doc.get("evidence") or {}), metadata=dict(doc.get("metadata") or {}), source=source,
                    base_dir=str(base_dir) if base_dir is not None else None)
@@ -415,7 +480,7 @@ class Recipe:
         header = sorted({"schema_version", "kind", "name", "book"} & set(body))
         if header:
             raise AddressError(f"{source}: a treatment is written in the book it treats, so it has no {header}.")
-        version = _schema(weights="weights" in body, gradients="gradients" in body)
+        version = _schema(weights="weights" in body, gradients="gradients" in body, readout=_states_readout(body))
         return cls.from_mapping({"schema_version": version, "kind": "recipe", "name": name, **body, "book": book},
                                 source=source, base_dir=base_dir)
 
@@ -440,7 +505,9 @@ class Recipe:
     def to_mapping(self) -> dict[str, Any]:
         """The recipe as a schema 2 document (3 when it has ``weights``, 4 when it has ``gradients``)."""
         doc: dict[str, Any] = {
-            "schema_version": _schema(weights=bool(self.weights), gradients=bool(self.gradients)), "kind": "recipe",
+            "schema_version": _schema(weights=bool(self.weights), gradients=bool(self.gradients),
+                                      readout=self.readout is not None or any(s.readout for s in self.stages)),
+            "kind": "recipe",
             "name": self.name,
             "model": {"id": self.model_id, "revision": self.revision, "revision_source": self.revision_source},
             "book": self.book_ref}
@@ -450,6 +517,8 @@ class Recipe:
             doc["weights"] = [o.to_mapping() for o in self.weights]
         if self.gradients:
             doc["gradients"] = [o.to_mapping() for o in self.gradients]
+        if self.readout is not None:
+            doc["readout"] = self.readout.to_mapping()
         if self.stages or not (self.weights or self.gradients):
             doc["stages"] = [s.to_mapping() for s in self.stages]
         for key in ("sampling", "evidence", "metadata"):
@@ -458,9 +527,9 @@ class Recipe:
         return doc
 
 
-def _schema(*, weights: bool, gradients: bool) -> int:
+def _schema(*, weights: bool, gradients: bool, readout: bool = False) -> int:
     """The recipe schema a document's sections need."""
-    return GRADIENTS_SCHEMA if gradients else WEIGHTS_SCHEMA if weights else RECIPE_SCHEMA_VERSION
+    return GRADIENTS_SCHEMA if gradients or readout else WEIGHTS_SCHEMA if weights else RECIPE_SCHEMA_VERSION
 
 
 def _check_header(doc: Any, source: str) -> int:
@@ -735,16 +804,84 @@ def _check_param_set(sets: Mapping[str, Expr], name: str, where: str, section: s
     return of
 
 
-def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand], source: str) -> Stage:
+def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand], source: str,
+           version: int = RECIPE_SCHEMA_VERSION) -> Stage:
     where = f"{source}: stage {i}"
     if not isinstance(raw, Mapping) or not isinstance(raw.get("site"), str) or not isinstance(raw.get("ops"), list) \
             or not raw["ops"]:
         raise AddressError(f"{where}: a stage is {{site, tokens, ops: [...]}} with at least one op.")
-    unknown = set(raw) - {"site", "tokens", "ops"}
+    unknown = set(raw) - {"site", "tokens", "ops", "readout"}
     if unknown:
         raise AddressError(f"{where}: unknown keys {sorted(unknown)}.")
     ops = tuple(_op(o, f"{where} op {j}", book, operands) for j, o in enumerate(raw["ops"]))
-    return Stage(raw["site"], ops, _tokens(raw.get("tokens"), where))
+    readout = None
+    if raw.get("readout") is not None:
+        if version < GRADIENTS_SCHEMA:
+            raise AddressError(f"{where}: `readout` needs recipe schema {GRADIENTS_SCHEMA}, not {version}.")
+        readout = _readout(raw["readout"], f"{where} readout", book, operands)
+    return Stage(raw["site"], ops, _tokens(raw.get("tokens"), where), readout)
+
+
+def _readout(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]) -> Readout:
+    """Read a readout: a weighted sum of terms, each a registered reduction of a book set's activations."""
+    if not isinstance(raw, Mapping) or set(raw) != {"terms"} or not isinstance(raw["terms"], list) or not raw["terms"]:
+        raise AddressError(f"{where}: a readout is {{terms: [...]}} with at least one {{reduce, set, ...}} term; it is "
+                           "the weighted sum of its terms, so it carries no expression.")
+    sets = book.sets()
+    terms_out = []
+    for k, t in enumerate(raw["terms"]):
+        at = f"{where} term {k}"
+        if not isinstance(t, Mapping) or not isinstance(t.get("reduce"), str) or not isinstance(t.get("set"), str):
+            raise AddressError(f"{at}: a term is {{reduce, set, tokens, weight, operand, params}}, got {t!r}.")
+        unknown = set(t) - {"reduce", "set", "tokens", "weight", "operand", "params"}
+        if unknown:
+            raise AddressError(f"{at}: unknown keys {sorted(unknown)}.")
+        spec = READOUTS.get(t["reduce"])
+        if spec is None:
+            raise AddressError(f"{at}: unknown reduction {t['reduce']!r}; known: {sorted(READOUTS)} (register one with "
+                               "`venngram.readouts.register_readout`).")
+        if t["set"] not in sets:
+            raise AddressError(f"{at}: `set` names a set of the book ({sorted(sets)}), got {t['set']!r}.")
+        for leaf in _leaf_terms(sets, t["set"]):
+            if leaf.target == "param":
+                raise AddressError(f"{at}: set `{t['set']}` addresses tensors (`{to_string(leaf)}`); a readout reads "
+                                   "activations: a site's units or a latent space's features.")
+            if leaf.of == "grad":
+                raise AddressError(f"{at}: set `{t['set']}` addresses `of: grad`; a readout reads values, and is what "
+                                   "the gradients are taken of.")
+        weight = t.get("weight", 1.0)
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight):
+            raise AddressError(f"{at}: `weight` is a finite number, got {weight!r}.")
+        operand = t.get("operand")
+        if spec.operand:
+            if not isinstance(operand, str) or operand not in operands:
+                raise AddressError(f"{at}: `{spec.name}` takes an operand declared under `operands` "
+                                   f"({sorted(operands)}), got {operand!r}.")
+            o = operands[operand]
+            if o.kind != "vector" or not o.basis:
+                raise AddressError(f"{at}: operand `{operand}` must be a vector with a declared `basis`.")
+        elif operand is not None:
+            raise AddressError(f"{at}: `{spec.name}` takes no operand.")
+        params = _params(t.get("params") or {}, spec.params, at)
+        terms_out.append(ReadoutTerm(spec.name, t["set"], _tokens(t.get("tokens"), at), float(weight), operand, params))
+    return Readout(tuple(terms_out))
+
+
+def _check_readouts(stages: Sequence[Stage], readout: Readout | None, book: AddressBook, source: str,
+                    version: int) -> None:
+    """A treatment's readout, or a stage's, is stated exactly where a stage acts on gradients: refused where no stage
+    (or not that stage) has an ``of: grad`` op, and required (from recipe schema 4) where one has and none applies."""
+    grads = [any(o.target_of(book) == "grad" for o in s.ops) for s in stages]
+    for i, (stage, has) in enumerate(zip(stages, grads)):
+        if stage.readout is not None and not has:
+            raise AddressError(f"{source}: stage {i} states a readout, but none of its ops acts on a gradient "
+                               "(`of: grad`), so it takes no gradient of it.")
+        if has and stage.readout is None and readout is None and version >= GRADIENTS_SCHEMA:
+            raise AddressError(f"{source}: stage {i} acts on gradients (`of: grad`), so the treatment or the stage "
+                               "states the `readout` they are gradients of.")
+    if readout is not None and not any(has and s.readout is None for s, has in zip(stages, grads)):
+        raise AddressError(f"{source}: the treatment states a readout, but no stage takes its gradients from it (no "
+                           "stage acts on `of: grad` without a readout of its own).")
 
 
 def _term_units(expr: Term, name: str, source: str) -> list[tuple[int, int]]:
@@ -1037,6 +1174,8 @@ __all__ = [
     "Recipe",
     "RECIPE_SCHEMA_VERSION",
     "RECIPE_WINDOW",
+    "Readout",
+    "ReadoutTerm",
     "RecipeSchemaWarning",
     "GRADIENTS_SCHEMA",
     "WEIGHTS_SCHEMA",

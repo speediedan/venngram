@@ -1,0 +1,35 @@
+# Readout conformance vectors (venngram.readouts.check_readouts). Each case gives each term's addressed values,
+# already gathered at the term's tokens (one row per token, one column per addressed unit), its operand when the
+# reduction takes one, and its weight; `expect` is the readout: the weighted sum of the terms' reductions.
+schema_version: 1
+cases:
+  - name: sum_one_token_one_unit
+    terms:
+      - {reduce: sum, values: [[2.5]]}
+    expect: 2.5
+  - name: sum_over_units_and_tokens
+    terms:
+      - {reduce: sum, values: [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+    expect: 21.0
+  - name: logit_difference
+    terms:
+      - {reduce: sum, values: [[3.0]], weight: 1.0}
+      - {reduce: sum, values: [[1.25]], weight: -1.0}
+    expect: 1.75
+  - name: project_onto_a_direction_at_each_token
+    terms:
+      - {reduce: project, values: [[1.0, 0.0], [0.0, 2.0]], operand: [0.5, 0.5]}
+    expect: 1.5
+  - name: project_weighted
+    terms:
+      - {reduce: project, values: [[2.0, -1.0, 4.0]], operand: [1.0, 2.0, 0.5], weight: 3.0}
+    expect: 6.0
+  - name: norm_at_each_token_summed
+    terms:
+      - {reduce: norm, values: [[3.0, 4.0], [0.0, 0.0], [6.0, 8.0]]}
+    expect: 15.0
+  - name: norm_minus_sum
+    terms:
+      - {reduce: norm, values: [[3.0, 4.0]], weight: 2.0}
+      - {reduce: sum, values: [[1.0, 1.0]], weight: -0.5}
+    expect: 9.0
