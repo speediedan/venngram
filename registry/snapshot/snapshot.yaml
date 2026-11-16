@@ -1,67 +1,71 @@
-registry: hub-dataset:speediedan/venngram-registry/index@aaa1c0a47949a553a6e95471e0bad5ece9efc86e
-generation: generations/20261103T171537Z-e08e166d
+registry: hub-dataset:speediedan/venngram-registry/index@9adb204a81e8c5fd16b754c4357b4b268b463f18
+generation: generations/20261116T003634Z-55fd5ca9
 documents:
 - subject: GPT2LMHeadModel
   path: maps/gpt2.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/gpt2.yaml#25eb30eb65f78ab6da47b36ff060260d2f9a82e6b2db9cc72f70f2dc6513afd4
-  sha256: 25eb30eb65f78ab6da47b36ff060260d2f9a82e6b2db9cc72f70f2dc6513afd4
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/gpt2.yaml#1983f248d5fa20d5a97609c8fd350ca06460c272c2bbb477c6b88560d29052d9
+  sha256: 1983f248d5fa20d5a97609c8fd350ca06460c272c2bbb477c6b88560d29052d9
 - subject: Gemma2ForCausalLM
   path: maps/gemma2.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/gemma2.yaml#52dd692d08ef076ef44aa13ad8ebc964b45bb9c50014114ff4bc5c58ea752e6c
-  sha256: 52dd692d08ef076ef44aa13ad8ebc964b45bb9c50014114ff4bc5c58ea752e6c
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/gemma2.yaml#b123f6d666af8478b25a94b6ec3ceb00d779657771f23c60021da7fd859b9166
+  sha256: b123f6d666af8478b25a94b6ec3ceb00d779657771f23c60021da7fd859b9166
 - subject: Gemma3ForCausalLM
   path: maps/gemma3.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/gemma3.yaml#d73af4553775a49357c1cfd5abfd3ad48cab55c29c450fc1cdf6569ca9164f7d
-  sha256: d73af4553775a49357c1cfd5abfd3ad48cab55c29c450fc1cdf6569ca9164f7d
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/gemma3.yaml#73a3a6a988c7580fec1d5d100fb4fda21907f8db409b18201c6c36a1cfc88b0d
+  sha256: 73a3a6a988c7580fec1d5d100fb4fda21907f8db409b18201c6c36a1cfc88b0d
 - subject: Gemma3ForConditionalGeneration
   path: maps/gemma3_multimodal.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/gemma3_multimodal.yaml#9f1e9a58c9a79349ca518e3cb3335428b26bc9e18191a59acc495d2785e20132
-  sha256: 9f1e9a58c9a79349ca518e3cb3335428b26bc9e18191a59acc495d2785e20132
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/gemma3_multimodal.yaml#50d850b56e23e0850531c94d430df344f379475a668e2cc2c66f8234bf9a1634
+  sha256: 50d850b56e23e0850531c94d430df344f379475a668e2cc2c66f8234bf9a1634
 - subject: LlamaForCausalLM
   path: maps/llama.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/llama.yaml#1ead82a6ccf6ae52590d2948e9bdada5c2a4e07710e1d3aae4140ed5d44a00dc
-  sha256: 1ead82a6ccf6ae52590d2948e9bdada5c2a4e07710e1d3aae4140ed5d44a00dc
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/llama.yaml#f32e34e80d5971b52cec77e792186ff9556e357ffbc72053fd0e25fb2adb01eb
+  sha256: f32e34e80d5971b52cec77e792186ff9556e357ffbc72053fd0e25fb2adb01eb
 - subject: OPTForCausalLM
   path: maps/opt.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/opt.yaml#c1bbe0066d38d527948ad2d2f7c414d075623db7dfa61cc5fbb6de33b98e5d71
-  sha256: c1bbe0066d38d527948ad2d2f7c414d075623db7dfa61cc5fbb6de33b98e5d71
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/opt.yaml#b1634d802ccb2e78ac162b5b4fc2a33a4e533e0193366b43092bb8982ea75df5
+  sha256: b1634d802ccb2e78ac162b5b4fc2a33a4e533e0193366b43092bb8982ea75df5
+- subject: Qwen2ForCausalLM
+  path: maps/qwen2.yaml
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/qwen2.yaml#9045e5c13562c539eaa7300d92fc83398b9bf7f44d6404f065ce2372d16525ca
+  sha256: 9045e5c13562c539eaa7300d92fc83398b9bf7f44d6404f065ce2372d16525ca
 - subject: Qwen3ForCausalLM
   path: maps/qwen3.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/qwen3.yaml#835dd09c63b4210ff2c587df70a2c90d83a5c37106708d67e5b530813e816633
-  sha256: 835dd09c63b4210ff2c587df70a2c90d83a5c37106708d67e5b530813e816633
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/qwen3.yaml#ea91b8daeee55463d30fa3af088ac2f90eeb804426e595dd24241fe1510d5cdc
+  sha256: ea91b8daeee55463d30fa3af088ac2f90eeb804426e595dd24241fe1510d5cdc
 - subject: Qwen3_5ForConditionalGeneration
   path: maps/qwen3_5.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:maps/qwen3_5.yaml#f0980ce2defd8d59b0f1370c51e5832edb23900d26eb202fc07951a2834eca4e
-  sha256: f0980ce2defd8d59b0f1370c51e5832edb23900d26eb202fc07951a2834eca4e
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:maps/v5/qwen3_5.yaml#80a38bb53f83b0b29379780577fecbb74e024d94fc6a3e8a7b9d8e3c97129869
+  sha256: 80a38bb53f83b0b29379780577fecbb74e024d94fc6a3e8a7b9d8e3c97129869
 - subject: overlay:peft.boft
   path: overlays/peft_boft.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_boft.yaml#8a6bfff183b936eee281a83492b4ddc2d59b48149dfe386a7b38a79e98d2846d
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_boft.yaml#8a6bfff183b936eee281a83492b4ddc2d59b48149dfe386a7b38a79e98d2846d
   sha256: 8a6bfff183b936eee281a83492b4ddc2d59b48149dfe386a7b38a79e98d2846d
 - subject: overlay:peft.fourierft
   path: overlays/peft_fourierft.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_fourierft.yaml#410ca3b332d9b087977106f58a0c24170e5051d332e0bbe82ef20e233a5da06a
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_fourierft.yaml#410ca3b332d9b087977106f58a0c24170e5051d332e0bbe82ef20e233a5da06a
   sha256: 410ca3b332d9b087977106f58a0c24170e5051d332e0bbe82ef20e233a5da06a
 - subject: overlay:peft.ia3
   path: overlays/peft_ia3.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_ia3.yaml#dd36b42605987a28ad719a248a9707c32e8a9f29a5dd3f1a78a277cd96670140
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_ia3.yaml#dd36b42605987a28ad719a248a9707c32e8a9f29a5dd3f1a78a277cd96670140
   sha256: dd36b42605987a28ad719a248a9707c32e8a9f29a5dd3f1a78a277cd96670140
 - subject: overlay:peft.loha
   path: overlays/peft_loha.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_loha.yaml#b1fc6d0c726b4a2bed093ea5ddc9d49fa7849ed5066743821fd60c54a2fc2ac4
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_loha.yaml#b1fc6d0c726b4a2bed093ea5ddc9d49fa7849ed5066743821fd60c54a2fc2ac4
   sha256: b1fc6d0c726b4a2bed093ea5ddc9d49fa7849ed5066743821fd60c54a2fc2ac4
 - subject: overlay:peft.lokr
   path: overlays/peft_lokr.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_lokr.yaml#7068457eb5f933858950fd2113a036c0994df42f0b4acd0b2086e075631cffb9
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_lokr.yaml#7068457eb5f933858950fd2113a036c0994df42f0b4acd0b2086e075631cffb9
   sha256: 7068457eb5f933858950fd2113a036c0994df42f0b4acd0b2086e075631cffb9
 - subject: overlay:peft.lora
   path: overlays/peft_lora.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_lora.yaml#6abf0ff00c1af038d3855fb4045f6f78aa98c2ddd2bce14b78999c90903f8c7e
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_lora.yaml#6abf0ff00c1af038d3855fb4045f6f78aa98c2ddd2bce14b78999c90903f8c7e
   sha256: 6abf0ff00c1af038d3855fb4045f6f78aa98c2ddd2bce14b78999c90903f8c7e
 - subject: overlay:peft.oft
   path: overlays/peft_oft.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_oft.yaml#70b6c53568f51fc79609598d59b4e9f8c38fb2647f116a707363db4367448122
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_oft.yaml#70b6c53568f51fc79609598d59b4e9f8c38fb2647f116a707363db4367448122
   sha256: 70b6c53568f51fc79609598d59b4e9f8c38fb2647f116a707363db4367448122
 - subject: overlay:peft.vera
   path: overlays/peft_vera.yaml
-  reference: hub-dataset:speediedan/venngram-registry@223e411ac8b125ece7f406264d6d65480fb18fc3:overlays/peft_vera.yaml#b2a5cc2df72363ba230afcbd590fa0a651d645573f7f8dae561ca2a80ac2e092
+  reference: hub-dataset:speediedan/venngram-registry@237246c5af30a9a36ba23c20eec40731e3e18dad:overlays/peft_vera.yaml#b2a5cc2df72363ba230afcbd590fa0a651d645573f7f8dae561ca2a80ac2e092
   sha256: b2a5cc2df72363ba230afcbd590fa0a651d645573f7f8dae561ca2a80ac2e092

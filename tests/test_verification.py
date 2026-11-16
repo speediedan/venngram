@@ -171,7 +171,10 @@ def test_the_builder_records_measured_layouts_and_a_tensor_names_its_unit_dimens
 
 def test_a_unit_dimension_is_refused_by_name_where_it_is_not_defined():
     model = tiny("LlamaForCausalLM")
-    unrecorded = MapStructure(model, component_map_for("LlamaForCausalLM"))  # the published map records no layout
+    doc = seed_document("LlamaForCausalLM")
+    for row in doc["components"].values():  # a map that records no layout (the published one now does)
+        row.pop("layout", None)
+    unrecorded = MapStructure(model, from_document(doc))
     assert "records no `layout` for `mlp.out`" in str(unrecorded.unit_dim("model.layers.0.mlp.down_proj.weight", 2))
     structure = MapStructure(model, from_document(with_layouts(seed_document("LlamaForCausalLM"), model)))
     assert "only a row's own weight and bias" in str(
