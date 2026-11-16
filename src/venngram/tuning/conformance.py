@@ -252,16 +252,21 @@ class ViewConformance:
 
     def _cooperative_roles_merge(self) -> None:
         """A role declared on a tensor the view does not assign is reported, selectable by ``role:``, and declared in
-        the support record, while the view's own roles are unchanged."""
+        the support record, while the view's own roles are unchanged. The view may assign roles of the same kind:
+        declaring adds exactly the declared tensor to that kind's selection."""
         view = self._fresh()
         own = view.view_roles()
         name = _unassigned(view)[0]
         role = "intervention:conformance"
+        before = view.roles()
+        before_kind = set(select("role:intervention", list(before), before))
         view.declare_roles({name: role})
         roles = view.roles()
         _check(roles.get(name) == role, f"A declared role was not reported: {name!r} has {roles.get(name)!r}.")
-        _check(select("role:intervention", list(roles), roles) == [name],
-               f"`role:intervention` does not select the tensor declared {role!r}.")
+        _check(select(f"role:{role}", list(roles), roles) == [name],
+               f"`role:{role}` does not select exactly the tensor declared {role!r}.")
+        added = set(select("role:intervention", list(roles), roles)) - before_kind
+        _check(added == {name}, f"Declaring {role!r} on {name!r} added {sorted(added)} to `role:intervention`.")
         _check(all(roles.get(n) == r for n, r in own.items()), "Declaring a role changed a role the view assigns.")
         _check("intervention" in view.support().declared_roles,
                "The support record does not declare the kind of a cooperatively declared role.")

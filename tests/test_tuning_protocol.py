@@ -145,6 +145,21 @@ def test_a_self_assigning_view_merges_cooperative_roles():
     assert report.ok and {"cooperative_roles_merge", "cooperative_roles_conflict"} <= set(report.ran), report
 
 
+class InterveningView(SplicedView):
+    """A self-assigning view that already assigns a role of the kind the merge case declares."""
+
+    def support(self):
+        return tv.TunableSupport(trainable=True, declared_roles=frozenset({"base", "artifact", "intervention"}))
+
+    def roles(self):
+        return {**super().roles(), "steer.bias": "intervention:steer"}
+
+
+def test_cooperative_merge_conformance_holds_for_a_view_with_its_own_role_of_that_kind():
+    report = tv.ViewConformance(InterveningView).run()
+    assert report.ok and "cooperative_roles_merge" in report.ran, report
+
+
 def test_a_conflicting_declaration_is_refused_by_name_and_changes_nothing():
     view = tv.as_view(SplicedView())
     with pytest.raises(tv.TunableViewError, match=r"'transcoder.bias': the view assigns 'artifact', declared "
