@@ -338,6 +338,15 @@ framework's own (a wrapper carrying it under `model.`, with steering vectors or 
 described at that submodule: `view(wrapper)` finds the one mapped descendant, or `view(wrapper, mount="model")` names
 it. Names stay the wrapper's, and the wrapper's own tensors keep their roles with no layer or component.
 
+A module the framework registers beside the model and splices into it with a hook (a latent model at
+`latent_models.sae3`, a trainable intervention) nests under no module of the model, so no overlay can place it. Name
+where each is attached: `view(wrapper, roles=..., attached={"latent_models.sae3": "model.transformer.h.3"})`. Its
+tensors then take that module's stack, layer and component, exactly as if nested under it, and
+`role:latent & layers:2:` selects the latent models spliced at layers 2 and above. The splice site is a fact of the run
+rather than of the library defining the module, so the consumer supplies it and no published map carries it. An attached module has
+no unit axis, and a key that is (or holds) part of the mapped model, or a target the base map does not place, is
+refused. A placement says where a module is attached, not on which side (input or output) of it.
+
 ```python
 from venngram import view
 from venngram.maps import load_map, register

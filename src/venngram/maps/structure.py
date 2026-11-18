@@ -29,11 +29,15 @@ rows outside that root (``lm_head``) then locate nothing.
 A root may also *add* leading path: a wrapper module carrying the mapped model as a submodule (a framework's module
 holding a Hugging Face model under ``model.``, with steering vectors or spliced dictionaries registered beside it). The
 map is then **mounted** at that submodule, named with ``mount`` or found as the one outermost descendant the map
-describes (:func:`find_mounts`). The wrapper's own tensors stay outside every structure field.
+describes (:func:`find_mounts`). The wrapper's own tensors stay outside every structure field, unless they are
+**attached**: a module registered beside the mapped model and spliced into it by a hook (a latent model, a trainable
+intervention) is placed with ``attached={"latent_models.sae3": "model.transformer.h.3"}`` at the module it is attached
+to, exactly as if it were nested under that module. Only the caller knows where a hook splices a module, so the
+placement is an argument of the structure rather than a row of a published map.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from torch import nn
@@ -42,6 +46,7 @@ from venngram.errors import Refusal
 from venngram.maps.check import stack_length, submodule
 from venngram.maps.schema import component_map_for, ComponentMap, PRIMARY_STACK, UNIT_SIDES
 from venngram.resolve import Location, strip_wrappers
+from venngram.tuning.errors import TunableViewError
 
 
 def architecture_of(model: nn.Module) -> list[str]:
@@ -157,16 +162,24 @@ class MapStructure:
             (``"model"``). ``None`` places the map at ``root`` when it describes ``root``, and otherwise at the one
             outermost descendant it describes (:func:`find_mounts`); ``""`` places it at ``root`` only. Names stay
             relative to ``root``, and ``root``'s tensors outside the mount are located nowhere.
+        attached: Modules of ``root`` outside the mapped model, each placed at the module of ``root`` it is attached
+            to (``{"latent_models.sae3": "model.transformer.h.3"}``): a tensor under a key's module takes the location
+            of the value module, as if it were nested under it, and has no unit axis.
+
+    Raises:
+        TunableViewError: If an attached key is not a module of ``root``, is or holds part of the mapped model, or lies
+            inside the mount; or if its value is not a module of ``root`` the map places.
     """
 
     vocabulary = True
 
     def __init__(self, root: nn.Module, cmap: ComponentMap, prefix: str | None = None,
-                 mount: str | None = None) -> None:
+                 mount: str | None = None, attached: Mapping[str, str] | None = None) -> None:
         self.cmap = cmap
         self.refusal: Refusal | None = None
         self._depths: dict[str, int] = {}
         self._table: dict[str, Location] = {}
+        self._attached: dict[str, Location] = {}
         self.mount = mount
         target = root if not mount else submodule(root, mount)
         if target is None:
@@ -194,6 +207,36 @@ class MapStructure:
             lead = strip_wrappers(f"{self.mount}.")
             if lead:
                 self._table = {f"{lead}{path}" if path else lead[:-1]: loc for path, loc in self._table.items()}
+        for key, at in (attached or {}).items():
+            self._attach(root, key, at)
+
+    def _attach(self, root: nn.Module, key: str, at: str) -> None:
+        if not key or submodule(root, key) is None:
+            raise TunableViewError(f"{type(root).__name__} has no module {key!r} to attach.")
+        path = strip_wrappers(key)
+        mapped = list(self._table)
+        if self.mount and strip_wrappers(f"{self.mount}."):
+            mapped.append(strip_wrappers(f"{self.mount}.")[:-1])
+        overlap = next((p for p in mapped if p == path or p.startswith(f"{path}.") or path.startswith(f"{p}.")), None)
+        if overlap is not None:
+            raise TunableViewError(f"{key!r} is or holds part of the mapped model ({overlap!r}); only a module outside "
+                                   "it is attached, since the map places the ones inside it already.")
+        if submodule(root, at) is None:
+            raise TunableViewError(f"{type(root).__name__} has no module {at!r} to attach {key!r} to.")
+        loc = self._row_location(strip_wrappers(at))
+        if loc is None:
+            raise TunableViewError(f"the {self.cmap.architecture} component map places no module at or above {at!r}, "
+                                   f"so {key!r} cannot be attached there.")
+        self._attached[path] = loc
+
+    def _row_location(self, owner: str) -> Location | None:
+        """The location of the deepest map row at or above the module path ``owner``, if any."""
+        while True:
+            if owner in self._table:
+                return self._table[owner]
+            if not owner:
+                return None
+            owner = owner.rpartition(".")[0]
 
     def _build(self, root: nn.Module, cmap: ComponentMap) -> None:
         for stack in cmap.stack_names():
@@ -223,7 +266,7 @@ class MapStructure:
         """The location of the deepest map row owning the tensor ``name`` (an empty one when no row does)."""
         owner = strip_wrappers(name).rpartition(".")[0]
         while True:
-            found = self._table.get(owner)
+            found = self._table.get(owner, self._attached.get(owner))
             if found is not None:
                 return found
             if not owner:
@@ -240,6 +283,9 @@ class MapStructure:
         loc = self._table.get(owner)
         if loc is None:
             found = self.locate(name)
+            if any(owner == p or owner.startswith(f"{p}.") for p in self._attached):
+                return Refusal(f"`{name}` belongs to a module attached at `{found.component or 'blocks'}`, not to the "
+                               "row's own module: only a row's own weight and bias have a unit axis")
             if found.component is not None:
                 return Refusal(f"`{name}` lies under the `{found.component}` row's module, not on it: only a row's own "
                                "weight and bias have a unit axis")
@@ -273,8 +319,12 @@ class MapStructure:
         return depth
 
     def placed(self) -> dict[str, Location]:
-        """Every module path (relative to the root) this structure places, with its location."""
+        """Every module path (relative to the root) this structure places from its map's rows, with its location."""
         return dict(self._table)
+
+    def attached(self) -> dict[str, Location]:
+        """Every attached module path (relative to the root, wrapper segments stripped), with the location it takes."""
+        return dict(self._attached)
 
     def components(self) -> list[str]:
         """The components this structure can locate, in map order."""

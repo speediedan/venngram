@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from venngram import Location, ParamSpace, Refusal, select
+from venngram import view as venngram_view
 from venngram.maps import (check_map_against_model, component_map_for, ComponentMapModelMismatch, from_document,
                            map_for, MappedView, MapStructure, register,
                            validate_map_against_model)
@@ -172,6 +173,67 @@ def test_an_empty_mount_keeps_the_map_at_the_root():
     assert isinstance(MapStructure(wrapper, component_map_for("GPT2LMHeadModel"), mount="").depth(), Refusal)
     with pytest.raises(KeyError, match="no component map"):
         MappedView(wrapper, mount="")
+
+
+class _SAE(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.W_enc = nn.Parameter(torch.zeros(16, 8))
+        self.W_dec = nn.Parameter(torch.zeros(8, 16))
+
+
+def _spliced() -> nn.Module:
+    """An interpretune-shaped root: SAEs registered beside the model under `latent_models.`, spliced at layers 2 and 0
+    by hooks, so they nest under no module of the model."""
+    return _Wrapper(tiny("GPT2LMHeadModel", "cpu"), latent_models=nn.ModuleDict({"sae2": _SAE(), "sae0": _SAE()}))
+
+
+ATTACHED = {"latent_models.sae2": "model.transformer.h.2", "latent_models.sae0": "model.transformer.h.0.mlp"}
+LATENT_ROLES = {f"latent_models.{k}.{p}": f"latent:{k}" for k in ("sae2", "sae0") for p in ("W_enc", "W_dec")}
+
+
+def test_modules_beside_the_mapped_model_are_placed_where_they_are_attached():
+    root = _spliced()
+    unplaced = MappedView(root, roles=LATENT_ROLES).structure()
+    assert unplaced.locate("latent_models.sae2.W_enc") == Location()  # the gap: selectable by role, not by depth
+    view = MappedView(root, roles=LATENT_ROLES, attached=ATTACHED)
+    structure = view.structure()
+    assert structure.locate("latent_models.sae2.W_enc") == Location(layer=2)
+    assert structure.locate("latent_models.sae0.W_dec") == Location(layer=0, component="mlp")
+    assert structure.attached() == {"latent_models.sae2": Location(layer=2),
+                                    "latent_models.sae0": Location(layer=0, component="mlp")}
+    assert structure.placed() == unplaced.placed()  # the map's own rows are unchanged
+    s = space(view)
+    assert sorted(select("role:latent & layers:2:", s)) == ["latent_models.sae2.W_dec", "latent_models.sae2.W_enc"]
+    assert sorted(select("role:latent & component:mlp", s)) == ["latent_models.sae0.W_dec",
+                                                                "latent_models.sae0.W_enc"]
+    assert "latent_models.sae2.W_enc" not in select("layers:2 & role:base", s)
+    unit = structure.unit_dim("latent_models.sae0.W_enc", 2)
+    assert isinstance(unit, Refusal) and "attached" in unit.reason  # an attached module has no unit axis
+    via_view = venngram_view(root, roles=LATENT_ROLES, attached=ATTACHED).structure()
+    assert via_view.attached() == structure.attached()
+
+
+def test_a_module_registered_on_the_mapped_model_itself_is_attached_outside_its_rows():
+    model = tiny("GPT2LMHeadModel", "cpu")
+    model.add_module("sae", _SAE())  # on the mapped model, under none of its rows
+    structure = MapStructure(model, component_map_for("GPT2LMHeadModel"), attached={"sae": "transformer.h.1.attn"})
+    assert structure.locate("sae.W_enc") == Location(layer=1, component="attn")
+
+
+@pytest.mark.parametrize("attached, match", [
+    ({"latent_models.absent": "model.transformer.h.0"}, "no module 'latent_models.absent' to attach"),
+    ({"": "model.transformer.h.0"}, "no module '' to attach"),
+    ({"model": "model.transformer.h.0"}, "is or holds part of the mapped model"),
+    ({"model.transformer.h.1.attn": "model.transformer.h.0"}, "is or holds part of the mapped model"),
+    ({"model.transformer.drop": "model.transformer.h.0"}, "is or holds part of the mapped model"),  # inside the mount
+    ({"latent_models.sae2": "model.transformer.h.9"}, "no module 'model.transformer.h.9' to attach"),
+    ({"latent_models.sae2": "latent_models.sae0"}, "places no module at or above 'latent_models.sae0'"),
+    ({"latent_models.sae2": "model.transformer.drop"}, "places no module at or above"),
+])
+def test_an_invalid_attachment_is_refused_by_name(attached, match):
+    with pytest.raises(TunableViewError, match=match):
+        MappedView(_spliced(), attached=attached)
 
 
 def test_a_compiled_model_is_mounted_through_its_wrapper_segment():

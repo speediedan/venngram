@@ -49,19 +49,21 @@ from venngram.errors import AddressError, AddressUnresolvable, NewerSchemaError,
 from venngram.resolve import Location, ParamSpace, select, StructureProvider
 
 
-def view(model: Any, maps: Any = None, *, roles: dict[str, str] | None = None, mount: str | None = None) -> Any:
+def view(model: Any, maps: Any = None, *, roles: dict[str, str] | None = None, mount: str | None = None,
+         attached: dict[str, str] | None = None) -> Any:
     """The tunable view of ``model``: its base map's structure and the roles of every overlay map that applies to it.
 
     ``view(model)`` finds the base map from the model's class and the overlays (PEFT's LoRA, a spliced SAE, a steering
     module) from the modules it carries, among the maps registered in this process and those the configured
     registries index. ``maps`` names the maps to use instead, and ``roles`` sets individual tensors' roles over the
     overlays'. A ``model`` that wraps the mapped model (a framework module carrying it under ``model.``) is described
-    at that submodule, named by ``mount`` or found as the one outermost mapped descendant. Returns a
-    :class:`venngram.maps.MappedView`.
+    at that submodule, named by ``mount`` or found as the one outermost mapped descendant. ``attached`` places modules
+    registered beside the mapped model and spliced into it by a hook at the module each is attached to
+    (``{"latent_models.sae3": "model.transformer.h.3"}``). Returns a :class:`venngram.maps.MappedView`.
     """
     from venngram.maps.view import MappedView
 
-    return MappedView(model, maps, roles=roles, mount=mount)
+    return MappedView(model, maps, roles=roles, mount=mount, attached=attached)
 
 __all__ = [
     "__version__",
