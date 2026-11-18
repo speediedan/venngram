@@ -25,8 +25,9 @@ name       a regex over tensor names, matched in full (the only regex field)    
 module     a module path pattern, matched on whole segments; ``*`` is one          ``q_proj``, ``self_attn.q_proj``
            segment, ``**`` any number; a tensor matches when it is under a
            matching module
-layers     an index, a list, a half-open slice (negative indices count from the    ``-4:``, ``8:-4``, ``[3, 7]``
-           depth), ``odd`` or ``even``
+layers     an index, a list, a half-open slice (negative indices count from the    ``-4:``, ``8:-4``, ``[3, 7]``,
+           depth), ``odd`` or ``even``; an index or slice end may be a fraction    ``0.25d:0.75d``
+           of the depth (``0.25d``: the floor of a quarter of it)
 stack      a block stack name (the primary stack when unset)                       ``vision``
 component  an architecture-neutral component (needs a vocabulary provider)         ``attn.q``, ``mlp.*``
 point      an activation point: makes the target a site                            ``resid_post``
@@ -75,9 +76,11 @@ Term(role='adapter', layers=LayerSet('-4:'))
 .. warning:: This is an experimental API and may change in a future release.
 """
 import ast
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
+from fractions import Fraction
 from typing import Any, Union
 
 from venngram.errors import AddressError
@@ -98,6 +101,10 @@ _TOKEN = re.compile(
     r"|(?P<term>(?:%s):(?:\"(?:[^\"\\]|\\.)*\"|\[[^\]]*\]|\{[^{}]*\}|[^\s&|()]+)))" % "|".join(FIELDS))
 _PRECEDENCE = {"|": 1, "-": 2, "&": 3}
 _SLICE = re.compile(r"^(-?\d+)?:(-?\d+)?$")
+#: A fraction of a stack's depth: a decimal in [0, 1] with the suffix ``d`` (``0.25d``, ``1d``).
+_DEPTH = r"(?:0|1)?(?:\.\d+)?d"
+_DEPTH_ITEM = re.compile(rf"^(?:-?\d+|{_DEPTH})$")
+_DEPTH_SLICE = re.compile(rf"^(-?\d+|{_DEPTH})?:(-?\d+|{_DEPTH})?$")
 
 
 def _literal(raw: str, what: str) -> Any:
@@ -115,21 +122,62 @@ def _slice_of(text: str) -> tuple[int | None, int | None] | None:
 
 
 @dataclass(frozen=True)
+class DepthFraction:
+    """A position given as a fraction of a stack's depth (``0.25d``), resolved to ``floor(fraction * depth)``."""
+
+    fraction: Fraction
+    spec: str
+
+    @classmethod
+    def parse(cls, text: str) -> "DepthFraction":
+        body = text[:-1]
+        if not body or body == "." or not re.fullmatch(_DEPTH, text):
+            raise AddressError(f"`{text}` is not a fraction of the depth: write a decimal in [0, 1] with the suffix "
+                               "`d` (`0.25d`, `1d`).")
+        value = Fraction(body if not body.startswith(".") else f"0{body}")
+        if value > 1:
+            raise AddressError(f"`{text}` is more than the whole depth: a depth fraction lies in [0, 1].")
+        return cls(value, text)
+
+    def at(self, depth: int) -> int:
+        return math.floor(self.fraction * depth)
+
+    def __str__(self) -> str:
+        return self.spec
+
+
+def _position(text: str) -> "int | DepthFraction":
+    return DepthFraction.parse(text) if text.endswith("d") else int(text)
+
+
+@dataclass(frozen=True)
 class LayerSet:
     """A set of block indices: explicit indices, a half-open slice, or a parity.
 
-    Negative indices and slice ends count from the stack's depth, so ``-4:`` is the top four blocks of any model.
+    Negative indices and slice ends count from the stack's depth, so ``-4:`` is the top four blocks of any model. An
+    index or a slice end may instead be a fraction of the depth, ``<decimal>d``, resolved to the floor of that fraction
+    of it, so ``0.25d:0.75d`` is the same middle band on any depth (blocks 7 to 20 of 28, 4 to 11 of 16).
 
     >>> LayerSet.parse("8:-4").select(28)
     (8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23)
     >>> LayerSet.parse([3, -1]).select(12), LayerSet.parse("odd").select(6)
     ((3, 11), (1, 3, 5))
+    >>> LayerSet.parse("0.25d:0.75d").select(16), LayerSet.parse("0.5d").select(28)
+    ((4, 5, 6, 7, 8, 9, 10, 11), (14,))
     """
 
     spec: str
     indices: tuple[int, ...] | None = None
     bounds: tuple[int | None, int | None] | None = None
     parity: str | None = None
+    relative: tuple[Any, ...] | None = None
+    """A list or a slice with a depth fraction (:class:`DepthFraction`), resolved when the depth is known: a slice is
+    ``("slice", start, stop)``, a list ``("list", item, ...)``. ``indices`` and ``bounds`` are then ``None``."""
+
+    @property
+    def depth_relative(self) -> bool:
+        """Whether a position is a fraction of the depth (an address using one needs address book schema 7)."""
+        return self.relative is not None
 
     def __repr__(self) -> str:
         return f"LayerSet({self.spec!r})"
@@ -148,23 +196,38 @@ class LayerSet:
         if isinstance(raw, int):
             return cls(spec=str(raw), indices=(raw,))
         if isinstance(raw, (list, tuple)):
+            if raw and any(isinstance(i, str) for i in raw) and all(
+                    (isinstance(i, str) and _DEPTH_ITEM.match(i.strip()))
+                    or (isinstance(i, int) and not isinstance(i, bool)) for i in raw):
+                items = tuple(_position(i.strip()) if isinstance(i, str) else i for i in raw)
+                return cls(spec=f"[{', '.join(str(i) for i in items)}]", relative=("list", *items))
             if not raw or not all(isinstance(i, int) and not isinstance(i, bool) for i in raw):
-                raise AddressError(f"A layer list must be a non-empty list of integers, got {raw!r}.")
+                raise AddressError(f"A layer list must be a non-empty list of integers or depth fractions (`0.5d`), "
+                                   f"got {raw!r}.")
             return cls(spec=f"[{', '.join(str(i) for i in raw)}]", indices=tuple(raw))
         if not isinstance(raw, str):
             raise AddressError(f"A layer set is an index, a list, a slice or a parity, got {raw!r}.")
         text = raw.strip()
         if text in ("odd", "even"):
             return cls(spec=text, parity=text)
+        if text.startswith("[") and "d" in text:
+            return cls.parse([item.strip() for item in text.strip("[]").split(",")])
         if text.startswith("["):
             return cls.parse(_literal(text, "layers"))
         if re.fullmatch(r"-?\d+", text):
             return cls.parse(int(text))
+        if text.endswith("d") and ":" not in text:
+            return cls(spec=text, relative=("list", DepthFraction.parse(text)))
+        depth_slice = _DEPTH_SLICE.match(text)
+        if depth_slice and "d" in text:
+            start, stop = (_position(g) if g else None for g in depth_slice.groups())
+            return cls(spec=text, relative=("slice", start, stop))
         bounds = _slice_of(text)
         if bounds is None:
             raise AddressError(
                 f"Cannot read the layer set {raw!r}: use an index (`13`), a list (`[3, 7]`), a half-open slice (`-4:`,"
-                " `8:-4`) or a parity (`odd`, `even`). A dash range (`4-11`) is not a layer set: slices are half-open.")
+                " `8:-4`), a parity (`odd`, `even`) or a fraction of the depth (`0.5d`, `0.25d:0.75d`). A dash range "
+                "(`4-11`) is not a layer set: slices are half-open.")
         return cls(spec=text, bounds=bounds)
 
     def select(self, depth: int) -> tuple[int, ...]:
@@ -175,10 +238,14 @@ class LayerSet:
         """
         if self.parity is not None:
             return tuple(i for i in range(depth) if i % 2 == (1 if self.parity == "odd" else 0))
+        resolve = (lambda p: p.at(depth) if isinstance(p, DepthFraction) else p)
+        if self.relative is not None and self.relative[0] == "slice":
+            return tuple(range(depth)[slice(*(None if p is None else resolve(p) for p in self.relative[1:]))])
         if self.bounds is not None:
             return tuple(range(depth)[slice(*self.bounds)])
+        items = [resolve(p) for p in self.relative[1:]] if self.relative is not None else self.indices or ()
         out = set()
-        for i in self.indices or ():
+        for i in items:
             if not -depth <= i < depth:
                 raise AddressError(f"Layer {i} is outside a stack of {depth} blocks.")
             out.add(i % depth)
@@ -254,6 +321,8 @@ class UnitSet:
                                " (`0:64`).") from err
         if parsed.parity is not None:
             raise AddressError(f"A unit set takes indices or a slice, not a parity ({raw!r}).")
+        if parsed.depth_relative:
+            raise AddressError(f"A unit set takes indices or a slice, not a fraction of a depth ({raw!r}).")
         return parsed
 
     @property
