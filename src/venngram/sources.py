@@ -18,9 +18,9 @@ one shared frame:
 
 - a **map source** (:class:`MapSource`) derives a component map from something that knows an architecture's structure
   (a library's per-architecture adapters, a model's module tree);
-- a **format** (:class:`Format`) translates a document another tool writes into venngram books and recipes, for a tool
-  that does not integrate venngram itself. A package we own integrates venngram directly instead (it applies and
-  exports documents and declares what it supports), so a format is for foreign documents only.
+- a **format** (:class:`Format`) translates a document another tool writes into venngram books with treatments,
+  for a tool that does not integrate venngram itself. A package we own integrates venngram directly instead: it applies
+  and exports documents and declares what it supports. A format is for foreign documents only.
 
 Both declare a ``name`` and ``version`` (recorded as :class:`Provenance` in what they produce) and what they cannot
 express (``unexpressed``, data, so a comparison between sources counts what each covered). Both are found by entry point
@@ -36,8 +36,9 @@ explicit act.
 A format's :meth:`~Format.read` returns a :class:`Translation`: documents, not objects, so :func:`write_translation`
 puts it in a directory and :func:`venngram.manifest.build_manifest` and :func:`venngram.store.publish` take it from
 there. A translation is lossless or refused: what venngram cannot carry is refused by name, unless the
-:class:`ReadContext` is ``lenient``, when it is listed in :attr:`Translation.unexpressed` and kept under the recipe's
-``metadata``, so nothing is dropped silently.
+:class:`ReadContext` is ``lenient``, when it is listed in :attr:`Translation.unexpressed` and kept under the treatment's
+``metadata``, so nothing is dropped silently. When sidecar digests are not yet known, keep the treatment as a mapping:
+:func:`write_translation` fills the digests before a reader parses the book and its treatments.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -124,7 +125,7 @@ class Translation:
     """What a format produced from one foreign document."""
 
     documents: Mapping[str, tuple[str, Mapping[str, Any]]]
-    """Relative path -> (kind, document mapping): usually a book and a recipe."""
+    """Relative path -> (kind, document mapping): typically one book containing its treatments."""
     provenance: Provenance
     sidecars: Mapping[str, Mapping[str, tuple[Sequence[int], int]]] = field(default_factory=dict)
     """Relative sidecar path -> {key: (units, axis length)}, written with :func:`venngram.units.write_units`; the
@@ -140,7 +141,7 @@ class Format(Protocol):
     name: str
     version: str
     kinds: tuple[str, ...]
-    """The document kinds a translation holds (``("address_book", "recipe")``)."""
+    """The document kinds a translation holds, for example ``("address_book",)``."""
     unexpressed: tuple[str, ...]
 
     def detect(self, doc: Any) -> bool:
