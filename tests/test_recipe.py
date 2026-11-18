@@ -162,6 +162,39 @@ def test_misused_ops_are_refused_by_name(op, match):
         Recipe.from_mapping(doc)
 
 
+@pytest.mark.parametrize("target", [
+    {"set": "selected", "graph": "missing"},
+    {"set": "selected", "units": [2]},
+    {"set": "selected", 1: "ignored"},
+    {"set": ["selected"]},
+    {"set": {"selected": True}},
+    {"set": None},
+    {"sets": "selected"},
+    "selected",
+])
+@pytest.mark.parametrize("section", ["stages", "weights", "gradients"])
+@pytest.mark.parametrize("in_book", [False, True], ids=["recipe", "book-treatment"])
+def test_malformed_target_is_refused_in_every_op_section(target, section, in_book):
+    from venngram.book import AddressBook
+
+    address = {"layers": [1], "units": [1]}
+    if section == "stages":
+        address["point"] = "mlp.out.hook_in"
+    elif section == "gradients":
+        address["of"] = "grad"
+    doc = recipe_doc([], sets={"selected": address})
+    doc["schema_version"] = doc["book"]["schema_version"] = 4
+    op = {"op": "replace", "target": target, "value": {"dose": 0.0}}
+    doc[section] = [{"site": "mlp.out.hook_in", "ops": [op]}] if section == "stages" else [op]
+    if in_book:
+        book = {**doc["book"], "treatments": {"invalid": {"model": doc["model"], section: doc[section]}}}
+        load = lambda: AddressBook.from_mapping(book)
+    else:
+        load = lambda: Recipe.from_mapping(doc)
+    with pytest.raises(AddressError, match=r"`target` names a set of the book.*contains only `set`"):
+        load()
+
+
 @pytest.mark.parametrize("change, match", [
     (lambda r: r["model"].pop("revision"), "one revision only"),
     (lambda r: r["model"].update(revision="other"), "the book pins"),

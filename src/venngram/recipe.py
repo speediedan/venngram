@@ -702,8 +702,9 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
     if "target" in raw:
         t = raw["target"]
         sets = book.sets()
-        if not isinstance(t, Mapping) or t.get("set") not in sets:
-            raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}), got {t!r}.")
+        if not isinstance(t, Mapping) or set(t) != {"set"} or not isinstance(t["set"], str) or t["set"] not in sets:
+            raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}) and contains only `set`, "
+                               f"got {t!r}.")
         term = sets[t["set"]]
         if section is not None:
             of = _check_param_set(sets, t["set"], where, section)
