@@ -4,6 +4,7 @@ import json
 import pytest
 import yaml
 
+from venngram.book import AddressBook
 from venngram.errors import Refusal
 from venngram.manifest import build_manifest
 from venngram.maps.schema import ComponentMap
@@ -18,7 +19,7 @@ from venngram.store import load, publish
 class ToyFormat:
     """A made-up foreign format: ``{"toy": 1, "model": id, "neurons": [[layer, unit, dose], ...]}``, no revision."""
 
-    name, version, kinds, unexpressed = "toy", "0.1", ("address_book", "recipe"), ("experts",)
+    name, version, kinds, unexpressed = "toy", "0.1", ("address_book",), ("experts",)
 
     def detect(self, doc):
         return isinstance(doc, dict) and doc.get("toy") == 1
@@ -42,12 +43,15 @@ class ToyFormat:
             doses.setdefault(layer, {})[u] = d
         recipe = {"schema_version": 2, "kind": "recipe", "name": "toy",
                   "model": {"id": doc["model"], "revision": revision, "revision_source": "resolved-at-import"},
-                  "book": "toy.yaml",
+                  "book": book,
                   "stages": [{"site": "mlp.out.hook_in",
                               "ops": [{"op": "add", "target": {"set": "toy"}, "value": {"doses": doses}}]}],
                   "metadata": {"unexpressed": [str(r) for r in skipped]} if skipped else {}}
+        # Sidecar digests do not exist until write_translation; keep the body as a mapping until then.
+        book["treatments"] = {"toy": {k: v for k, v in recipe.items()
+                                      if k not in {"schema_version", "kind", "name", "book"}}}
         sha = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
-        return Translation({"toy.yaml": ("address_book", book), "toy_recipe.yaml": ("recipe", recipe)},
+        return Translation({"toy.yaml": ("address_book", book)},
                            Provenance("format", self.name, self.version, sha, "resolved-at-import"),
                            {"toy.safetensors": {f"L{k}": (v, 64) for k, v in units.items()}}, tuple(skipped))
 
@@ -82,9 +86,11 @@ def test_a_translation_is_written_listed_published_and_loaded(tmp_path):
     book = yaml.safe_load((tmp_path / "src" / "toy.yaml").read_text())
     assert all(v["sha256"] for v in book["sets"]["toy"]["units"].values())  # filled in from the written sidecar
     manifest = build_manifest(tmp_path / "src", documents)
-    assert {e.path for e in manifest.documents} == {"toy.yaml", "toy_recipe.yaml", "toy.safetensors"}
+    assert {e.path for e in manifest.documents} == {"toy.yaml", "toy.safetensors"}
     publish("local", str(tmp_path / "pub"), tmp_path / "src", documents=documents)
-    recipe = load(f"local:{tmp_path / 'pub'}:toy_recipe.yaml")
+    loaded_book = load(f"local:{tmp_path / 'pub'}:toy.yaml")
+    assert isinstance(loaded_book, AddressBook)
+    recipe = loaded_book.treatments["toy"]
     assert isinstance(recipe, Recipe)
     assert recipe.stages[0].ops[0].unit_doses(recipe.book) == {(13, 7): -1.0, (14, 9): 0.5}
     assert translation.provenance.to_mapping()["revision_source"] == "resolved-at-import"
@@ -96,7 +102,8 @@ def test_what_a_format_cannot_carry_is_refused_unless_lenient():
     with pytest.raises(SourceError, match="names an expert"):
         format_for(doc).read(doc, CTX)
     lenient = format_for(doc).read(doc, ReadContext(resolve_revision=lambda m: "abc123", lenient=True))
-    assert len(lenient.unexpressed) == 1 and lenient.documents["toy_recipe.yaml"][1]["metadata"]["unexpressed"]
+    assert len(lenient.unexpressed) == 1
+    assert lenient.documents["toy.yaml"][1]["treatments"]["toy"]["metadata"]["unexpressed"]
 
 
 def test_format_selection_refuses_none_and_several():
