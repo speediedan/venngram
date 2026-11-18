@@ -192,3 +192,153 @@ def test_inspect_and_rebuild_read_the_index_through_its_header(tmp_path, capsys)
     assert report["kinds"]["component_map"]["schema_versions"] and report["mined_rules"]["kind"] == "rules"
     assert report["manifest"]["documents"]["component_map"] == ["tiny.yaml"]
     assert registry.main(["inspect", f"local:{tmp_path / 'never'}"]) == 1
+
+
+# ----- cache-only lookup ---------------------------------------------------------------------------------------------
+
+COMMIT = "c0ffee" + "0" * 34
+HUB_INDEX = "hub-dataset:owner/vg/index"
+
+
+@pytest.fixture
+def requests(monkeypatch) -> list:
+    """Sockets that record and refuse every connection, in a process otherwise online (``HF_HUB_OFFLINE`` unset)."""
+    import socket
+
+    from huggingface_hub import constants
+
+    attempts: list = []
+
+    def refuse(*args, **kwargs):
+        attempts.append(args)
+        raise ConnectionRefusedError("a request was attempted")
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setattr(constants, "HF_HUB_OFFLINE", False)
+    for name in ("create_connection", "getaddrinfo"):
+        monkeypatch.setattr(socket, name, refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    return attempts
+
+
+@pytest.fixture
+def hub(tmp_path, monkeypatch, requests) -> Path:
+    """A Hub dataset ``owner/vg`` in the Hub's cache at ``COMMIT``: a maps directory and the index crawled from it, as a
+    lookup with network access would have left them. Returns the snapshot directory."""
+    from huggingface_hub import constants
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hf"))
+    repo = tmp_path / "hf" / "datasets--owner--vg"
+    snapshot = repo / "snapshots" / COMMIT
+    maps = directory(tmp_path / "maps", {"tiny.yaml": TINY, "llama.yaml": seed_doc("llama.yaml")})
+    shutil.copytree(maps.removeprefix("local:"), snapshot / "maps")
+    index = registry.crawl([f"hub-dataset:owner/vg/maps@{COMMIT}"])  # a pinned crawl reads the cache, no request
+    registry.write_index(index, tmp_path / "idx", name="hub", sources=["hub-dataset:owner/vg/maps"])
+    shutil.copytree(tmp_path / "idx", snapshot / "index")
+    (repo / "refs").mkdir()
+    (repo / "refs" / "main").write_text(COMMIT)
+    remember(HUB_INDEX)
+    registry.set_registries([HUB_INDEX])
+    assert not requests
+    return snapshot
+
+
+def remember(location: str) -> None:
+    """What a lookup with network access remembers of a registry: its resolved revision, in venngram's cache."""
+    from venngram.store import _safe, cache_dir
+
+    memo = cache_dir() / "registry" / _safe(location) / "last_revision"
+    memo.parent.mkdir(parents=True, exist_ok=True)
+    memo.write_text(COMMIT)
+
+
+def partition(snapshot: Path, subject: str | None = None) -> Path:
+    current = yaml.safe_load((snapshot / "index" / "index.yaml").read_text())["current"]
+    leaf = "subjects.parquet" if subject is None else f"subject={subject}/rows.parquet"
+    return snapshot / "index" / current / "kind=component_map" / leaf
+
+
+def test_a_cache_only_lookup_serves_the_online_answer_with_no_request(hub, requests):
+    from venngram.errors import CacheMissError
+
+    cold = component_map_for("TinyDecoder", cache_only=True)  # a warm disk and a cold process
+    assert cold.architecture == "TinyDecoder" and component_map_for("LlamaForCausalLM", cache_only=True)
+    assert not requests and HUB_INDEX not in registry._STATE  # nothing remembered for an online lookup to reuse
+    with pytest.raises(KeyError, match="NoSuchForCausalLM"):  # the cached subject list proves it absent
+        component_map_for("NoSuchForCausalLM", cache_only=True)
+    assert registry.lookup_map("NoSuchForCausalLM", cache_only=True) is None and not requests
+    registry.clear_cache()
+    with pytest.warns(registry.RegistryOfflineWarning):  # an online lookup does make a request
+        assert component_map_for("TinyDecoder").source == cold.source
+    assert requests
+    requests.clear()
+    assert component_map_for("TinyDecoder", cache_only=True).source == cold.source  # a warm process
+    assert not requests
+    with pytest.raises(CacheMissError, match="pinned commit"):  # a branch cannot be resolved without a request
+        registry.rows("component_map", "TinyDecoder", locations=[f"{HUB_INDEX}@main"], cache_only=True)
+    registry.set_registries([f"{HUB_INDEX}@{COMMIT}"])  # a pinned registry needs nothing remembered
+    assert component_map_for("TinyDecoder", cache_only=True).architecture == "TinyDecoder" and not requests
+
+
+def test_a_cache_only_lookup_refuses_what_the_cache_cannot_decide(hub, tmp_path, requests):
+    from venngram.errors import CacheMissError, StoreError
+
+    (hub / "maps" / "tiny.yaml").unlink()
+    with pytest.raises(CacheMissError, match="not in the Hub's cache"):  # never another row in its place
+        component_map_for("TinyDecoder", cache_only=True)
+    partition(hub, "TinyDecoder").unlink()
+    with pytest.raises(CacheMissError, match="cannot decide"):  # listed, but its rows were never fetched
+        component_map_for("TinyDecoder", cache_only=True)
+    partition(hub).unlink()
+    with pytest.raises(CacheMissError, match="subject list"):  # an unavailable partition proves nothing
+        component_map_for("NoSuchForCausalLM", cache_only=True)
+    no_exist = hub.parents[1] / ".no_exist" / COMMIT / partition(hub, "NoSuchForCausalLM").relative_to(hub)
+    no_exist.parent.mkdir(parents=True)
+    no_exist.touch()  # the Hub's cache records that this commit has no such file: a proven absence
+    with pytest.raises(KeyError):
+        component_map_for("NoSuchForCausalLM", cache_only=True)
+    (hub / "maps" / "llama.yaml").write_text("tampered: true\n")
+    with pytest.raises(StoreError, match="sha256") as err:  # the cached copy is checked like a fetched one
+        component_map_for("LlamaForCausalLM", cache_only=True)
+    assert not isinstance(err.value, CacheMissError)
+    registry.set_registries(["hub-dataset:owner/never/index", HUB_INDEX])
+    with pytest.raises(CacheMissError, match="never fetched"):  # an undecidable registry stops the walk
+        component_map_for("LlamaForCausalLM", cache_only=True)
+    register(load_component_map(SEED_MAPS / "llama.yaml"))
+    try:
+        assert component_map_for("LlamaForCausalLM", cache_only=True)  # a registration needs no registry
+    finally:
+        unregister("LlamaForCausalLM")
+    assert not requests
+
+
+def test_cache_only_scopes_the_calling_context_and_refuses_stores_that_cannot(tmp_path):
+    import threading
+
+    from venngram.errors import CacheMissError
+    from venngram.store import cache_only, cache_only_active
+
+    class Remote:
+        name, versioned = "remote", True
+
+        def resolve_revision(self, ref, revision):
+            return COMMIT
+
+        def fetch(self, ref, paths, revision, cache):
+            return Path(ref)
+
+        def push(self, ref, files, message, revision):
+            return None
+
+    register_store("remote", Remote(), versioned=True, replace=True)
+    registry.set_registries([build(tmp_path, [directory(tmp_path / "s", {"tiny.yaml": TINY})])])
+    assert component_map_for("TinyDecoder", cache_only=True)  # a local registry reads in place
+    seen = []
+    with cache_only():
+        thread = threading.Thread(target=lambda: seen.append(cache_only_active()))
+        thread.start()
+        thread.join()
+        assert cache_only_active() and seen == [False]  # another thread stays online
+        with pytest.raises(CacheMissError, match="cannot read cache-only"):
+            registry.rows("component_map", "TinyDecoder", locations=["remote:x"])
+    assert not cache_only_active()
