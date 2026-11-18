@@ -131,7 +131,8 @@ class ViewConformance:
                             self._promotion),
             ConformanceCase("cooperative_roles_merge", "roles", lambda s, v: s.trainable and bool(_unassigned(v)),
                             self._cooperative_roles_merge),
-            ConformanceCase("cooperative_roles_conflict", "roles", lambda s, v: s.trainable and bool(v.view_roles()),
+            ConformanceCase("cooperative_roles_conflict", "roles",
+                            lambda s, v: s.trainable and bool(v.view_roles() or v.promoted),
                             self._cooperative_roles_conflict),
         )}
 
@@ -255,7 +256,7 @@ class ViewConformance:
         the support record, while the view's own roles are unchanged. The view may assign roles of the same kind:
         declaring adds exactly the declared tensor to that kind's selection."""
         view = self._fresh()
-        own = view.view_roles()
+        own = {**view.view_roles(), **view.promoted}
         name = _unassigned(view)[0]
         role = "intervention:conformance"
         before = view.roles()
@@ -275,7 +276,9 @@ class ViewConformance:
         """A declared role that differs from one the view assigns is refused, naming the tensor and both roles, and
         changes nothing."""
         view = self._fresh()
-        name, own = next(iter(view.view_roles().items()))
+        name, own = next(iter({**view.view_roles(), **view.promoted}.items()))
+        before = dict(view.roles())
+        declared = view.declared
         other = "intervention:conformance" if role_kind(own) != "intervention" else "adapter:conformance"
         try:
             view.declare_roles({name: other})
@@ -285,7 +288,7 @@ class ViewConformance:
                    f"A conflicting declaration was refused without naming the tensor and both roles: {text}")
         else:
             raise ConformanceError(f"Declaring {other!r} on {name!r}, which the view assigns {own!r}, was accepted.")
-        _check(view.roles().get(name) == own and not view.declared, "A refused declaration changed the roles.")
+        _check(view.roles() == before and view.declared == declared, "A refused declaration changed the roles.")
 
     def _promotion(self) -> None:
         """Promoting the ``artifact`` parameters to a ``latent`` role keeps their names, reports the new role,

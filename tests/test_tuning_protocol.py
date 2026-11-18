@@ -160,6 +160,51 @@ def test_cooperative_merge_conformance_holds_for_a_view_with_its_own_role_of_tha
     assert report.ok and "cooperative_roles_merge" in report.ran, report
 
 
+@pytest.mark.parametrize("promoted,declared", [(True, False), (False, True), (True, True)])
+def test_cooperative_conformance_preserves_promotions_and_earlier_declarations(promoted, declared):
+    def make_view():
+        view = tv.as_view(SplicedView())
+        if promoted:
+            view.promote(["transcoder.weight"], "latent:tc")
+        if declared:
+            view.declare_roles({"steer.weight": "intervention:steer"})
+        return view
+
+    cases = {"cooperative_roles_merge", "cooperative_roles_conflict"}
+    report = tv.ViewConformance(make_view).run(select=cases)
+    assert report.ok and set(report.ran) == cases, report
+
+
+def test_cooperative_conflict_conformance_applies_to_a_promotion_without_own_roles():
+    def make_view():
+        view = tv.as_view(tv.CanonicalView(torch.nn.Linear(2, 2)))
+        view.promote(["weight"], "latent:tc")
+        return view
+
+    report = tv.ViewConformance(make_view).run(select=["cooperative_roles_conflict"])
+    assert report.ok and report.ran == ["cooperative_roles_conflict"], report
+
+
+def test_cooperative_conflict_conformance_detects_lost_earlier_declarations(monkeypatch):
+    declare = tv.BoundView.declare_roles
+
+    def make_view():
+        view = tv.as_view(SplicedView())
+        declare(view, {"steer.weight": "intervention:steer"})
+        return view
+
+    def forget_on_refusal(view, roles):
+        try:
+            return declare(view, roles)
+        except tv.TunableViewError:
+            view._declared.clear()
+            raise
+
+    monkeypatch.setattr(tv.BoundView, "declare_roles", forget_on_refusal)
+    report = tv.ViewConformance(make_view).run(select=["cooperative_roles_conflict"])
+    assert not report.ok and "changed the roles" in report.failures["cooperative_roles_conflict"]
+
+
 def test_a_conflicting_declaration_is_refused_by_name_and_changes_nothing():
     view = tv.as_view(SplicedView())
     with pytest.raises(tv.TunableViewError, match=r"'transcoder.bias': the view assigns 'artifact', declared "
