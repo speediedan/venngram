@@ -186,17 +186,46 @@ def _check(path: Path, expected: str | None, what: str) -> None:
                          "document changed after it was cited.")
 
 
-def fetch_manifest(store: str, ref: str, revision: str | None = None) -> tuple[Manifest, Path, str | None]:
+def _cached_fetch(store: Store, ref: str, paths: Sequence[str], revision: str | None, cache: Path) -> Path:
+    if type(store) is LocalStore:
+        return store.fetch(ref, paths, revision, cache)
+    if type(store) is HubRepoStore:
+        from huggingface_hub import hf_hub_download
+
+        repo, prefix = _split_hub(ref, store.name)
+        root = None
+        for path in paths:
+            full = _in(prefix, path)
+            local = Path(hf_hub_download(repo, full, repo_type=store.repo_type, revision=revision,
+                                         local_files_only=True))
+            root = local.parents[len(Path(full).parts) - 1]
+        return root / prefix if root is not None and prefix else root or cache
+    if type(store) is HubBucketStore:
+        missing = [path for path in paths if not (cache / path).is_file()]
+        if missing:
+            raise StoreError(f"{store.name}:{ref}: cache is missing {missing}; fetch these files first.")
+        return cache
+    raise StoreError(f"{store.name}:{ref}: this store does not support cache-only lookup.")
+
+
+def fetch_manifest(store: str, ref: str, revision: str | None = None, *,
+                   cache_only: bool = False) -> tuple[Manifest, Path, str | None]:
     """The manifest at ``ref`` (one revision, resolved), the root it was fetched to, and that revision."""
     s = get_store(store)
-    revision = s.resolve_revision(ref, revision)
+    if cache_only and s.versioned:
+        if revision is None or not _COMMIT.fullmatch(revision):
+            raise StoreError(f"{store}:{ref}: cache-only lookup needs a resolved commit; fetch it first.")
+    else:
+        revision = s.resolve_revision(ref, revision)
     if revision is not None:
         cache = cache_dir() / s.name / _safe(ref) / _safe(revision)
-        root = s.fetch(ref, [MANIFEST_NAME], revision, cache)
+        root = (_cached_fetch(s, ref, [MANIFEST_NAME], revision, cache) if cache_only
+                else s.fetch(ref, [MANIFEST_NAME], revision, cache))
     else:
         # an unversioned store's cache is keyed by the manifest's own content, so a changed directory is a new root
         with tempfile.TemporaryDirectory() as tmp:
-            got = s.fetch(ref, [MANIFEST_NAME], None, Path(tmp))
+            got = (_cached_fetch(s, ref, [MANIFEST_NAME], None, Path(tmp)) if cache_only
+                   else s.fetch(ref, [MANIFEST_NAME], None, Path(tmp)))
             if not (got / MANIFEST_NAME).is_file():
                 raise StoreError(f"{store}:{ref}: no {MANIFEST_NAME}; a directory of documents lists them in one.")
             if got.resolve() != Path(tmp).resolve():
@@ -211,7 +240,7 @@ def fetch_manifest(store: str, ref: str, revision: str | None = None) -> tuple[M
     return Manifest.from_file(path), root, revision
 
 
-def fetch(reference: "str | Reference") -> tuple[Path, DocumentEntry]:
+def fetch(reference: "str | Reference", *, cache_only: bool = False) -> tuple[Path, DocumentEntry]:
     """Fetch a document and every file it needs; return its local path and its manifest entry.
 
     Raises:
@@ -221,7 +250,7 @@ def fetch(reference: "str | Reference") -> tuple[Path, DocumentEntry]:
     """
     ref = Reference.parse(reference) if isinstance(reference, str) else reference
     s = get_store(ref.store)
-    manifest, root, revision = fetch_manifest(ref.store, ref.ref, ref.revision)
+    manifest, root, revision = fetch_manifest(ref.store, ref.ref, ref.revision, cache_only=cache_only)
     entry = manifest.entry(ref.path)
     if ref.sha256 is not None and entry.sha256 is not None and ref.sha256 != entry.sha256:
         raise StoreError(f"{ref}: the manifest at this revision lists sha256 {entry.sha256} for `{ref.path}`; the "
@@ -230,7 +259,8 @@ def fetch(reference: "str | Reference") -> tuple[Path, DocumentEntry]:
     unhashed = [e.path for e in closure if e.sha256 is None]
     if not s.versioned and unhashed:
         raise StoreError(f"{ref}: on `{ref.store}` every listed file carries a sha256; {unhashed} do not.")
-    root = s.fetch(ref.ref, [e.path for e in closure], revision, root)
+    paths = [entry.path for entry in closure]
+    root = _cached_fetch(s, ref.ref, paths, revision, root) if cache_only else s.fetch(ref.ref, paths, revision, root)
     for e in closure:
         local = root / e.path
         if not local.is_file():
@@ -259,13 +289,13 @@ def pin(reference: "str | Reference") -> Reference:
     return Reference(ref.store, ref.ref, ref.path, revision, sha)
 
 
-def load(reference: "str | Reference") -> Any:
+def load(reference: "str | Reference", *, cache_only: bool = False) -> Any:
     """Fetch a document (see :func:`fetch`) and read it by its manifest kind.
 
     Raises:
         StoreError: If no loader reads the document's kind.
     """
-    path, entry = fetch(reference)
+    path, entry = fetch(reference, cache_only=cache_only)
     if entry.kind not in _LOADERS:
         raise StoreError(f"{reference}: no loader reads kind `{entry.kind}` (loaders: {sorted(_LOADERS)}; a `units` "
                          "sidecar is read through the book that names it).")

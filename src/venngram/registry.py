@@ -84,7 +84,9 @@ from typing import Any
 import yaml
 
 from venngram.errors import NewerSchemaError, VenngramError
-from venngram.store import _safe, cache_dir, fetch_manifest, get_store, load, Reference
+from venngram.store import (
+    _cached_fetch, _safe, cache_dir, fetch_manifest, get_store, HubBucketStore, load, LocalStore, Reference,
+)
 
 INDEX_SCHEMA_VERSION = 1
 HEADER_NAME = "index.yaml"
@@ -187,13 +189,24 @@ def _offline() -> bool:
     return os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes", "on")
 
 
-def _state(location: str) -> tuple[str | None, dict[str, Any]]:
+def _state(location: str, *, cache_only: bool = False) -> tuple[str | None, dict[str, Any]]:
     """The resolved revision and header of a registry, once per process; the last known one when offline."""
     if location in _STATE:
         return _STATE[location]
     store, ref, pinned = _split(location)
     s = get_store(store)
     memo = cache_dir() / "registry" / _safe(location) / "last_revision"
+    if cache_only:
+        if not s.versioned and type(s) not in (LocalStore, HubBucketStore):
+            raise RegistryError(f"{location}: this store does not support cache-only lookup.")
+        if s.versioned and pinned is None:
+            if not memo.is_file():
+                raise RegistryError(f"{location}: no cached revision; fetch the registry first.")
+            pinned = memo.read_text(encoding="utf-8").strip()
+        if s.versioned and (pinned is None or len(pinned) != 40 or any(c not in "0123456789abcdef" for c in pinned)):
+            raise RegistryError(f"{location}: cache-only lookup needs a resolved commit; fetch the registry first.")
+        revision = pinned if s.versioned else s.resolve_revision(ref, pinned)
+        return revision, _header(location, revision, cache_only=True)
     try:
         if _offline() and s.versioned and pinned is None:
             raise RegistryError("HF_HUB_OFFLINE is set")
@@ -215,14 +228,18 @@ def _state(location: str) -> tuple[str | None, dict[str, Any]]:
     return _STATE[location]
 
 
-def _fetch(location: str, revision: str | None, path: str) -> Path | None:
+def _fetch(location: str, revision: str | None, path: str, *, cache_only: bool = False) -> Path | None:
     """One file of a registry, or ``None`` when the registry has no such file."""
     store, ref, _ = _split(location)
     s = get_store(store)
     cache = cache_dir() / "registry" / _safe(location) / _safe(revision or "local")
     try:
-        root = s.fetch(ref, [path], revision, cache)
+        root = _cached_fetch(s, ref, [path], revision, cache) if cache_only else s.fetch(ref, [path], revision, cache)
     except Exception as err:
+        if cache_only:
+            raise RegistryError(
+                f"{location}: cache-only lookup cannot read {path!r}; fetch the registry first."
+            ) from err
         if type(err).__name__ in ("EntryNotFoundError", "RemoteEntryNotFoundError", "LocalEntryNotFoundError",
                                   "FileNotFoundError"):
             return None
@@ -231,8 +248,8 @@ def _fetch(location: str, revision: str | None, path: str) -> Path | None:
     return local if local.is_file() else None
 
 
-def _header(location: str, revision: str | None) -> dict[str, Any]:
-    path = _fetch(location, revision, HEADER_NAME)
+def _header(location: str, revision: str | None, *, cache_only: bool = False) -> dict[str, Any]:
+    path = _fetch(location, revision, HEADER_NAME, cache_only=cache_only)
     if path is None:
         raise RegistryError(f"{location}: no {HEADER_NAME}; build one with `python -m venngram.registry build`.")
     with open(path, encoding="utf-8") as fh:
@@ -333,7 +350,7 @@ def readable(row: Row) -> bool:
     return False
 
 
-def lookup_map(architecture: str, *, strict: bool = False) -> Any:
+def lookup_map(architecture: str, *, strict: bool = False, cache_only: bool = False) -> Any:
     """The best component map for ``architecture`` in the configured registries, or ``None`` when none has one.
 
     Rows whose schema is newer than this venngram reads are passed over with a :class:`NewerSchemaWarning`.
@@ -342,7 +359,26 @@ def lookup_map(architecture: str, *, strict: bool = False) -> Any:
         RegistryError: If a registry cannot be read (and is not in the cache).
     """
     for location in registries():
-        candidates = [r for r in rows("component_map", architecture, locations=[location]) if r.status in SERVED]
+        if cache_only:
+            revision, header = _state(location, cache_only=True)
+            counts = header.get("counts")
+            if not isinstance(counts, Mapping):
+                raise RegistryError(f"{location}: cached index has no counts; fetch a complete registry first.")
+            if not counts.get("component_map", 0):
+                continue
+            subject_path = _fetch(location, revision, f"{header['current']}/{_partition('component_map')}",
+                                  cache_only=True)
+            if subject_path is None:
+                raise RegistryError(f"{location}: cached component-map subject index is missing.")
+            if architecture not in _parquet().read_table(subject_path).column("subject").to_pylist():
+                continue
+            row_path = _fetch(location, revision, f"{header['current']}/{_partition('component_map', architecture)}",
+                              cache_only=True)
+            if row_path is None:
+                raise RegistryError(f"{location}: cached rows for {architecture!r} are missing.")
+            candidates = [r for r in sorted(_read_rows(row_path), key=_order) if r.status in SERVED]
+        else:
+            candidates = [r for r in rows("component_map", architecture, locations=[location]) if r.status in SERVED]
         if strict:
             candidates = [r for r in candidates if r.status == "verified"]
         for row in candidates:
@@ -350,7 +386,7 @@ def lookup_map(architecture: str, *, strict: bool = False) -> Any:
                 continue
             if row.reference not in _MAPS:
                 try:
-                    _MAPS[row.reference] = load(row.reference)
+                    _MAPS[row.reference] = load(row.reference, cache_only=cache_only)
                 except NewerSchemaError as err:
                     _pass_over(row.reference, f"its {err.kind} schema {err.version} is newer than this venngram "
                                               f"reads ({err.newest})")

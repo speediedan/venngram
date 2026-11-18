@@ -513,7 +513,7 @@ def unregister(name: str) -> None:
     _OVERLAYS.pop(name, None)
 
 
-def component_map_for(architecture: str, *, strict: bool = False) -> ComponentMap:
+def component_map_for(architecture: str, *, strict: bool = False, cache_only: bool = False) -> ComponentMap:
     """The map for an architecture class name (``LlamaForCausalLM``): one registered in this process, else the best one
     the configured registries index (:func:`venngram.registry.lookup_map`).
 
@@ -521,6 +521,7 @@ def component_map_for(architecture: str, *, strict: bool = False) -> ComponentMa
         architecture: The architecture class name.
         strict: Refuse a retired map (one carrying ``deprecated_since``) rather than serving it with a warning, and
             take only a ``verified`` map from a registry.
+        cache_only: Consult only cached registry files and refuse an incomplete cache without network access.
 
     Raises:
         KeyError: If no map is registered or indexed for ``architecture``.
@@ -529,7 +530,7 @@ def component_map_for(architecture: str, *, strict: bool = False) -> ComponentMa
     """
     from venngram.registry import lookup_map, registries
 
-    cmap = _REGISTRY.get(architecture) or lookup_map(architecture, strict=strict)
+    cmap = _REGISTRY.get(architecture) or lookup_map(architecture, strict=strict, cache_only=cache_only)
     if cmap is None:
         raise KeyError(f"no component map for architecture {architecture!r} registered in this process "
                        f"({registered_architectures()}) or indexed by the registries {registries()}. Register one with "

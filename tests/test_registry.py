@@ -13,7 +13,7 @@ from conftest import SEED_MAPS  # noqa: E402
 from venngram import registry  # noqa: E402
 from venngram.maps import component_map_for, known_architectures, register, unregister  # noqa: E402
 from venngram.maps.schema import load_component_map  # noqa: E402
-from venngram.store import LocalStore, publish, register_store  # noqa: E402
+from venngram.store import LocalStore, StoreError, publish, register_store  # noqa: E402
 
 TINY = {"schema_version": 1, "architecture": "TinyDecoder", "provenance": {"source": "module_tree", "version": "0.1"},
         "components": {"blocks.{i}": {"module": "layers.{i}", "kind": "block"},
@@ -60,6 +60,67 @@ def test_maps_from_any_source_are_indexed_and_found(tmp_path):
     (row,) = registry.rows("component_map", "TinyDecoder")
     assert row.source == "module_tree 0.1" and row.location == contrib and row.reference.endswith(f"#{row.sha256}")
     assert known_architectures() == ["LlamaForCausalLM", "TinyDecoder"]
+
+
+def test_cache_only_reads_a_local_index_and_checks_absence(tmp_path, monkeypatch):
+    import socket
+
+    location = build(tmp_path, [directory(tmp_path / "source", {"tiny.yaml": TINY})])
+    registry.set_registries([location])
+    monkeypatch.setattr(socket.socket, "connect", lambda *args, **kwargs: pytest.fail("network access"))
+    assert component_map_for("TinyDecoder", cache_only=True).architecture == "TinyDecoder"
+    with pytest.raises(KeyError, match="UnknownArchitecture"):
+        component_map_for("UnknownArchitecture", cache_only=True)
+
+
+def test_cache_only_hub_index_requires_every_cached_file(tmp_path, monkeypatch):
+    import socket
+    import huggingface_hub
+
+    build(tmp_path, [directory(tmp_path / "source", {"tiny.yaml": TINY})], "index")
+    location = "hub-dataset:org/repo/index@" + "a" * 40
+    registry.set_registries([location])
+    calls = []
+
+    def cached_download(repo_id, filename, *, repo_type, revision, local_files_only):
+        assert (repo_id, repo_type, revision, local_files_only) == ("org/repo", "dataset", "a" * 40, True)
+        calls.append(filename)
+        path = tmp_path / filename
+        if not path.is_file():
+            raise FileNotFoundError(filename)
+        return str(path)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", cached_download)
+    monkeypatch.setattr(socket.socket, "connect", lambda *args, **kwargs: pytest.fail("network access"))
+    with pytest.raises(KeyError, match="UnknownArchitecture"):
+        component_map_for("UnknownArchitecture", cache_only=True)
+    assert any(path.endswith("subjects.parquet") for path in calls)
+    assert component_map_for("TinyDecoder", cache_only=True).architecture == "TinyDecoder"
+    registry.clear_cache()
+    rows_path = next((tmp_path / "index").glob("generations/*/kind=component_map/subject=TinyDecoder/rows.parquet"))
+    saved_rows = rows_path.read_bytes()
+    rows_path.unlink()
+    with pytest.raises(registry.RegistryError, match="cache-only lookup cannot read"):
+        component_map_for("TinyDecoder", cache_only=True)
+    rows_path.write_bytes(saved_rows)
+    registry.clear_cache()
+    subject_index = next((tmp_path / "index").glob("generations/*/kind=component_map/subjects.parquet"))
+    subject_index.unlink()
+    with pytest.raises(registry.RegistryError, match="cache-only lookup cannot read"):
+        component_map_for("UnknownArchitecture", cache_only=True)
+    registry.set_registries(["hub-dataset:org/repo/index"])
+    previous_calls = len(calls)
+    with pytest.raises(registry.RegistryError, match="no cached revision"):
+        component_map_for("UnknownArchitecture", cache_only=True)
+    assert len(calls) == previous_calls
+
+
+def test_cache_only_checks_the_selected_document_hash(tmp_path):
+    source = directory(tmp_path / "source", {"tiny.yaml": TINY})
+    registry.set_registries([build(tmp_path, [source])])
+    (tmp_path / "source" / "tiny.yaml").write_text(yaml.safe_dump({**TINY, "architecture": "Altered"}))
+    with pytest.raises(StoreError, match="sha256"):
+        component_map_for("TinyDecoder", cache_only=True)
 
 
 def test_a_verified_map_outranks_an_unverified_one_and_failed_maps_are_never_served(tmp_path):
