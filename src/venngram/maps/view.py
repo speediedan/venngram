@@ -24,7 +24,7 @@ the modules it carries. ``MappedView(model, maps=[...])`` names the maps to use 
 
 .. warning:: This is an experimental API and may change in a future release.
 """
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from torch import nn
 
@@ -110,22 +110,29 @@ class MappedView(CanonicalView):
             module carrying a Hugging Face model under ``model.``, with its own modules beside it). ``None`` (the
             default) uses ``root`` when a map describes it, and otherwise the one outermost descendant one does; ``""``
             uses ``root`` only. The view's names stay ``root``'s, overlays and ``roles`` apply across all of ``root``,
-            and tensors outside the mount have no layer or component.
+            and tensors outside the mount have no layer or component, unless they are ``attached``.
+        attached: Modules of ``root`` outside the mapped model that a hook splices into it (a latent model or a
+            trainable intervention registered beside ``model.``), each with the module of ``root`` it is attached to:
+            ``{"latent_models.sae3": "model.transformer.h.3"}``. A tensor under a key's module takes that module's
+            stack, layer and component, as if it were nested under it, so ``role:latent & layers:2:`` selects the latent
+            models spliced at layers 2 and above. The consumer supplies the placement, since only it knows where a hook
+            splices a module.
 
     Raises:
         KeyError: If no base map is found for the model or a descendant of it.
         TunableViewError: If a role is invalid, two overlays disagree on a tensor's role, or ``maps`` names two base
-            maps, or ``root`` carries several mapped models and ``mount`` names none.
+            maps, or ``root`` carries several mapped models and ``mount`` names none, or an ``attached`` key is not a
+            module of ``root`` or is (or holds) part of the mapped model, or its value is not a module the map places.
     """
 
     def __init__(self, root: nn.Module, maps: ComponentMap | OverlayMap | Sequence[ComponentMap | OverlayMap] |
                  None = None, *, roles: dict[str, str] | None = None, prefix: str | None = None,
-                 mount: str | None = None) -> None:
+                 mount: str | None = None, attached: Mapping[str, str] | None = None) -> None:
         cmap, overlays, mount = _split(root, maps, mount)
         super().__init__(root, roles={**overlay_roles(root, overlays), **(roles or {})})
         self.cmap = cmap
         self.overlays = tuple(overlays)
-        self._structure = MapStructure(root, cmap, prefix, mount)
+        self._structure = MapStructure(root, cmap, prefix, mount, attached)
 
     def structure(self) -> MapStructure:
         return self._structure
