@@ -36,6 +36,7 @@ tighter than `|`, and parentheses group. Operators are delimited by spaces, so v
 | `features`, `subspace`, `space` | latent feature spaces, named bases, linear maps a site is read through | `features:sae` |
 | `units` | indices along a target's unit axis (neurons, features) | `units:[431, 1007]` |
 | `of` | `grad` acts on the gradient of what the rest selects (never filters; book schema 2); with `units` on tensors, a gradient mask; a union's disjuncts may differ (`split_of` gives the value and gradient parts) | `of:grad` |
+| `axis` | which dimension of a gradient the term's `units` index: `unit` (the component's unit axis, from the map's layout) or a physical dimension; unset, the first dimension (book schema 6; resolve with `gradient_selections`) | `axis:unit` |
 
 Examples, on a four-block model with a LoRA pair under each block's `q_proj`:
 

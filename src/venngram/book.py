@@ -57,7 +57,7 @@ version; a key that changes what a set selects does. Schema 2 adds the ``of`` ad
 book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
 ``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
 ``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
-adds ``graphs``, and treatments whose ops target a graph.
+adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -90,7 +90,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 5)
+SCHEMA_WINDOW = (1, 6)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -100,6 +100,8 @@ WEIGHTS_SCHEMA = 3
 GRADIENTS_SCHEMA = 4
 #: The first schema with a ``graphs`` section (graph subsets its treatments apply).
 GRAPHS_SCHEMA = 5
+#: The first schema whose sets may use the ``axis`` field (which dimension of a gradient a unit set indexes).
+AXIS_SCHEMA = 6
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -234,6 +236,13 @@ class AddressBook:
         uses_of = sorted(n for n, expr in own.items() if any(t.of is not None for t in terms(expr)))
         if uses_of and inline and "schema_version" not in doc:
             version = max(version, OF_SCHEMA)  # an inline book takes the version its sets need
+        uses_axis = sorted(n for n, expr in own.items() if any(t.axis is not None for t in terms(expr)))
+        if uses_axis and inline and "schema_version" not in doc:
+            version = max(version, AXIS_SCHEMA)
+        if uses_axis and version < AXIS_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_axis} use the `axis` field, which needs address book schema "
+                               f"{AXIS_SCHEMA}, not {version}: an older venngram would refuse it by name rather than "
+                               "pass over it.")
         raw_treatments = doc.get("treatments")
         with_weights = sorted(n for n, body in raw_treatments.items()
                               if isinstance(body, Mapping) and "weights" in body) \
@@ -454,6 +463,7 @@ def diff_lock(lock: Mapping[str, Any], selections: Mapping[str, Mapping[str, tup
 
 __all__ = [
     "AddressBook",
+    "AXIS_SCHEMA",
     "diff_lock",
     "GRAPHS_SCHEMA",
     "make_lock",

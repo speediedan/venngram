@@ -1,0 +1,22 @@
+# Golden fixture: an address book at schema 6, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 6
+name: golden
+sets:
+  neuron_grads:
+    component: mlp.out
+    leaf: weight
+    layers:
+    - 13
+    units:
+    - 7956
+    of: grad
+    axis: unit
+  columns:
+    module: down_proj
+    leaf: weight
+    units:
+    - 0
+    - 1
+    of: grad
+    axis: 1

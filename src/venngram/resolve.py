@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from venngram.address import And, Expr, Guarded, Minus, Or, parse, Ref, references, Term, terms, to_string
-from venngram.errors import AddressUnresolvable, Refusal
+from venngram.errors import AddressError, AddressUnresolvable, Refusal
 from venngram.roles import selector_matches
 
 _WRAPPER_SEGMENTS = ("_orig_mod.", "_checkpoint_wrapped_module.", "_fsdp_wrapped_module.")
@@ -158,7 +158,8 @@ class ParamSpace:
 #: The gradient readings a consumer may honour beyond one ``of`` per set and one mask per conjunction: a union uniting
 #: a value part and a gradient part (:func:`split_of`), and a union of gradient conjunctions with unit sets
 #: (:func:`gradient_masks`).
-GRADIENT_FORMS = ("mixed-sets", "union-masks")
+#: ``unit-axis`` and ``physical-axis`` are a unit set's explicit ``axis`` (:func:`gradient_selections`).
+GRADIENT_FORMS = ("mixed-sets", "union-masks", "unit-axis", "physical-axis")
 
 _TARGET_PROVIDER = {"site": "a site resolver", "feature": "a latent resolver", "subspace": "a latent resolver"}
 
@@ -443,7 +444,32 @@ def gradient_masks(address: Any, space: ParamSpace, sets: Mapping[str, Any] | No
             form one mask (a unit set under a difference or a union nested in an intersection, or two unit sets
             intersected).
     """
-    sets = sets or {}
+    expr, names, found, selected = _mask_disjuncts(address, space, sets or {})
+    axes = sorted({str(t.axis) for t in found if t is not None and t.axis is not None})
+    if axes:
+        raise AddressUnresolvable(to_string(expr), [Refusal(
+            f"`axis:{', '.join(axes)}` names the dimension a mask runs along, which a first-axis mask cannot carry: "
+            "resolve it with `venngram.resolve.gradient_selections`")])
+    structure = space.structure
+    out: dict[str, tuple[int, ...]] = {}
+    for n in names:
+        kept: set[int] = set()
+        for term, chosen in zip(found, selected):
+            if n not in chosen:
+                continue
+            if term is None or term.units is None:
+                kept.update(range(widths[n]))
+                break
+            layer = structure.locate(n).layer if structure is not None and term.units.per_layer is not None else None
+            kept.update(term.units.for_layer(layer, widths[n]))
+        out[n] = tuple(sorted(kept))
+    return out
+
+
+def _mask_disjuncts(address: Any, space: ParamSpace, sets: Mapping[str, Any]
+                    ) -> tuple[Expr, list[str], list[Term | None], list[set[str]]]:
+    """An ``of: grad`` address, the tensors it selects, each union disjunct's unit-set term (``None`` for none) and the
+    tensors each disjunct selects."""
     expr = parse(address)
     if gradient_of(expr, sets) != "grad":
         raise AddressUnresolvable(to_string(expr), [Refusal("a gradient mask needs an `of: grad` address")])
@@ -459,20 +485,89 @@ def gradient_masks(address: Any, space: ParamSpace, sets: Mapping[str, Any] | No
                                                             "disjunct of a union") for p in dict.fromkeys(problems)])
     names = select(expr, space, sets)
     ev = _Evaluator(space, sets, masks=True)  # select has reported every refusal
-    selected = [set(ev.run(d)) for d in disjuncts]
+    return expr, names, found, [set(ev.run(d)) for d in disjuncts]
+
+
+@dataclass(frozen=True)
+class GradientSelection:
+    """The part of one tensor's gradient an ``of: grad`` address keeps: ``indices`` along dimension ``axis``, or the
+    whole tensor (both ``None``)."""
+
+    axis: int | None = None
+    indices: tuple[int, ...] | None = None
+
+    @property
+    def whole(self) -> bool:
+        return self.indices is None
+
+
+def gradient_selections(address: Any, space: ParamSpace, sets: Mapping[str, Any] | None = None, *,
+                        shapes: Mapping[str, Sequence[int]]) -> dict[str, GradientSelection]:
+    """What each tensor an ``of: grad`` address selects keeps of its gradient, along the dimension its unit set names.
+
+    A unit set's ``axis`` says which dimension it indexes: ``unit`` is the component's unit axis, from the structure's
+    measured layout (:meth:`venngram.maps.structure.MapStructure.unit_dim`), so one address selects an MLP's neurons on
+    a linear and on a transposed weight alike; an integer is that physical dimension; unset is the first dimension, as
+    :func:`gradient_masks` reads it. A tensor a disjunct selects without a unit set keeps its whole gradient. Disjuncts
+    that select one tensor unite their indices only along one dimension. Every disjunct is checked before anything is
+    returned, so a whole-tensor disjunct does not hide a malformed one.
+
+    Args:
+        address: An address whose terms say ``of: grad``.
+        space: The tensors to select from.
+        sets: Named sets that references resolve against.
+        shapes: Each tensor's shape, by name.
+
+    Raises:
+        AddressUnresolvable: As :func:`gradient_masks`, or if a unit axis has no layout (the structure provides none,
+            or names why the tensor has no unit axis), a dimension lies outside a tensor's rank, or two disjuncts mask
+            one tensor along different dimensions.
+    """
+    sets = sets or {}
+    expr, names, found, selected = _mask_disjuncts(address, space, sets)
     structure = space.structure
-    out: dict[str, tuple[int, ...]] = {}
+    problems: list[str] = []
+    out: dict[str, GradientSelection] = {}
     for n in names:
-        kept: set[int] = set()
+        shape = tuple(int(d) for d in shapes[n])
+        whole = False
+        parts: dict[int, set[int]] = {}
         for term, chosen in zip(found, selected):
             if n not in chosen:
                 continue
             if term is None or term.units is None:
-                kept.update(range(widths[n]))
-                break
+                whole = True
+                continue
+            if term.axis is None:
+                dim = 0
+            elif term.axis == "unit":
+                unit_dim = getattr(structure, "unit_dim", None)
+                found_dim = unit_dim(n, len(shape)) if unit_dim is not None else Refusal(
+                    "the structure provides no unit axes (a map's structure does)")
+                if isinstance(found_dim, Refusal):
+                    problems.append(f"`{n}`: `axis:unit` has no unit axis: {found_dim.reason}")
+                    continue
+                dim = int(found_dim)
+            else:
+                dim = int(term.axis)
+            if not 0 <= dim < len(shape):
+                problems.append(f"`{n}` has {len(shape)} dimensions, so it has no dimension {dim}")
+                continue
             layer = structure.locate(n).layer if structure is not None and term.units.per_layer is not None else None
-            kept.update(term.units.for_layer(layer, widths[n]))
-        out[n] = tuple(sorted(kept))
+            try:
+                parts.setdefault(dim, set()).update(term.units.for_layer(layer, shape[dim]))
+            except AddressError as err:
+                problems.append(f"`{n}`: {err}")
+        if len(parts) > 1:
+            problems.append(f"`{n}` is masked along dimensions {sorted(parts)} by different disjuncts; one axis and "
+                            "its indices cannot carry their union")
+        if whole:
+            out[n] = GradientSelection()
+        elif parts:
+            dim, indices = next(iter(parts.items()))
+            out[n] = GradientSelection(dim, tuple(sorted(indices)))
+    if problems:
+        raise AddressUnresolvable(to_string(expr), [Refusal(p) for p in dict.fromkeys(problems)])
     return out
 
 
@@ -492,8 +587,14 @@ def gradient_forms(address: Any, sets: Mapping[str, Any] | None = None) -> froze
         return frozenset()
     out = {"mixed-sets"} if value and grad else set()
     disjuncts = _disjuncts(_union(grad), sets, lambda e: True) if grad else []  # type: ignore[arg-type]
-    if len(disjuncts) > 1 and any(_mask_terms(d, sets)[0] for d in disjuncts):
+    masks = [_mask_terms(d, sets)[0] for d in disjuncts]
+    if len(disjuncts) > 1 and any(masks):
         out.add("union-masks")
+    axes = {t.axis for found in masks for t in found if t.axis is not None}
+    if "unit" in axes:
+        out.add("unit-axis")
+    if any(isinstance(a, int) for a in axes):
+        out.add("physical-axis")
     return frozenset(out)
 
 
@@ -536,6 +637,8 @@ __all__ = [
     "GRADIENT_FORMS",
     "gradient_forms",
     "gradient_masks",
+    "gradient_selections",
+    "GradientSelection",
     "gradient_of",
     "leaf_matches",
     "Location",

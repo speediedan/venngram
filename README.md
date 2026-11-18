@@ -42,6 +42,7 @@ An address is a record whose fields intersect:
 | `features`, `subspace`, `space` | latent feature spaces, named bases, and maps a site is read through | `sae`, `jlens` |
 | `units` | indices along a target's unit axis | `[431, 1007]` |
 | `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates, and each disjunct gives its own mask) | `grad` |
+| `axis` | which dimension of a tensor's gradient its `units` index: `unit` (the component's unit axis, from the map's measured layout, so one address selects an MLP's neurons on a linear and on a transposed weight alike) or a physical dimension; resolved by `gradient_selections` (book schema 6), which `gradient_masks`, a first-axis mask, refuses rather than drop | `unit`, `1` |
 
 The string form writes each field as `<field>:<value>`:
 
@@ -211,7 +212,8 @@ The core sections are `steering` (a book's treatments), `tuning` (address books 
 `circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
 a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
 gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
-of a value part and a gradient part, and `union-masks`, a union of gradient conjunctions with unit sets. A `steering`
+of a value part and a gradient part, `union-masks`, a union of gradient conjunctions with unit sets, and `unit-axis` and
+`physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`). A `steering`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
 section), and its `readouts` the reductions it computes a readout with. A `circuits` section's `subsets` (schema 6)
 declares the treatments over graph subsets it applies: the ops, the anchors it resolves, the featurizer kinds it
@@ -422,7 +424,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 5 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs` | ignored at the top level |
+| address book | 1 to 6 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis` | ignored at the top level |
 | recipe | 1 to 5 | 2, 3 when it has `weights`, 4 when it has `gradients` or a `readout`, 5 when an op targets a graph | refused in `method` and in an op's parameters |
 | support record | 1 to 6 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
