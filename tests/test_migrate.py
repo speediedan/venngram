@@ -22,7 +22,7 @@ from venngram.migrate import kind_of, main, migrate
 SCHEMAS = Path(__file__).parent / "schemas"
 FIXTURES = sorted(SCHEMAS.glob("*.yaml"))
 CURRENT = {"component_map": 5, "overlay_map": 5, "recipe": None, "support_record": None, "address_book": None,
-           "rules": 2, "op_specs": None, "weight_patch": 1}
+           "rules": 2, "op_specs": None, "weight_patch": 1, "graph_subset": 1}
 
 
 def load(path):
@@ -32,13 +32,14 @@ def load(path):
 def test_every_published_schema_has_a_fixture():
     names = {p.stem for p in FIXTURES}
     assert {f"component_map_v{v}" for v in (1, 2, 3, 4, 5)} | {"overlay_map_v4", "overlay_map_v5", "recipe_v1",
-                                                            "recipe_v2", "recipe_v3", "recipe_v4",
+                                                            "recipe_v2", "recipe_v3", "recipe_v4", "recipe_v5",
                                                             "support_record_v1",
                                                             "support_record_v2", "support_record_v3",
                                                             "support_record_v4", "support_record_v5",
+                                                            "support_record_v6", "graph_subset_v1",
                                                             "address_book_v1",
                                                             "address_book_v2", "address_book_v3",
-                                                            "address_book_v4", "rules_v2",
+                                                            "address_book_v4", "address_book_v5", "rules_v2",
                                                             "op_specs_v1", "op_specs_v2", "weight_patch_v1"} == names
 
 
@@ -47,13 +48,13 @@ def test_a_fixture_migrates_to_a_current_document_once(path):
     doc = load(path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)  # a schema 1 recipe reads with a deprecation warning
-        migrated, steps = migrate(doc, source=path.name)
+        migrated, steps = migrate(doc, source=path.name, base_dir=path.parent)
     kind = kind_of(doc)
     assert kind == path.stem.rsplit("_v", 1)[0]
     if CURRENT[kind] is not None:
         assert migrated["schema_version"] == CURRENT[kind]
     assert bool(steps) == (migrated["schema_version"] != doc["schema_version"] or "facts" in doc)
-    again, more = migrate(migrated, source=path.name)
+    again, more = migrate(migrated, source=path.name, base_dir=path.parent)
     assert again == migrated and more == []  # a current document is left as it is
     assert load(path) == doc  # never in place
 

@@ -65,9 +65,10 @@ MANIFEST_WINDOW = (1, 1)
 #: (:mod:`venngram.maps.rules`); ``support_record`` is what a consumer honours, or a format adapter offers
 #: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's recipe ops
 #: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a recipe's weight patch (:mod:`venngram.patches`), and
-#: ``weight_delta`` its sidecar, read through the patch.
+#: ``weight_delta`` its sidecar, read through the patch; ``graph_subset`` is a graph subset a book names
+#: (:mod:`venngram.graphs`), and ``graph_table`` its table sidecar, read through the graph.
 KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "support_record",
-         "op_specs", "weight_patch", "weight_delta")
+         "op_specs", "weight_patch", "weight_delta", "graph_subset", "graph_table")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
@@ -302,7 +303,20 @@ def _book_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
             out += _book_needs(_read_yaml(path), path.parent)
     for body in (doc.get("treatments") or {}).values():
         out += _operand_needs(body, base)
+    for ref in (doc.get("graphs") or {}).values():
+        if isinstance(ref, Mapping) and isinstance(ref.get("file"), str):
+            path = base / ref["file"]
+            out += [("graph_subset", path), *_graph_needs(_read_yaml(path), path.parent)]
     return out
+
+
+def _graph_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
+    """The table sidecars a graph subset's ``nodes`` and ``edges`` name."""
+    if not isinstance(doc, Mapping):
+        return []
+    files = dict.fromkeys(ref["file"] for ref in (doc.get("nodes"), doc.get("edges"))
+                          if isinstance(ref, Mapping) and isinstance(ref.get("file"), str))
+    return [("graph_table", base / f) for f in files]
 
 
 def _operand_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
@@ -343,7 +357,8 @@ def _read_yaml(path: Path) -> Any:
         return yaml.safe_load(fh)
 
 
-_NEEDS = {"address_book": _book_needs, "recipe": _recipe_needs, "weight_patch": _patch_needs}
+_NEEDS = {"address_book": _book_needs, "recipe": _recipe_needs, "weight_patch": _patch_needs,
+          "graph_subset": _graph_needs}
 
 
 def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, requires: Mapping[str, str] | None = None,

@@ -161,7 +161,7 @@ def test_a_circuits_section_names_graphs_nodes_features_and_evidence():
 
 
 @pytest.mark.parametrize("doc, match", [
-    ({**TUNER, "schema_version": 6}, "support record schema 6 is newer than this venngram reads"),
+    ({**TUNER, "schema_version": 7}, "support record schema 7 is newer than this venngram reads"),
     ({**TUNER, "ops": ["add"]}, "contracts go under `sections`"),
     ({**TUNER, "sections": {}}, "maps each contract"),
     ({**TUNER, "sections": {"tuning": {"units": "lora"}}}, "`units` is one of"),

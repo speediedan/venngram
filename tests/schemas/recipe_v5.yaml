@@ -1,0 +1,27 @@
+# Golden fixture: a recipe at schema 5, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 5
+kind: recipe
+name: golden-transfer
+model:
+  id: Qwen/Qwen3.5-4B
+  revision: abc123
+  revision_source: pinned
+book:
+  schema_version: 5
+  name: golden
+  sets: {}
+  graphs:
+    reasoning:
+      file: graph_subset_v1.yaml
+      sha256: bbd97695d877bbf264d3e972d9b8441a0f8f583d9c62f46a1e64016cb7ad2063
+stages:
+- site: mlp.out.hook_out
+  ops:
+  - op: replace
+    target:
+      graph: reasoning
+    value:
+      from:
+        graph: reasoning
+        column: activation

@@ -37,8 +37,9 @@ document of **sections**, one per contract the consumer offers, and it opts in t
 - ``steering``: recipes, as :class:`venngram.ops.Support` (ops, targets, token scopes, value sources, transforms,
   sites, bases);
 - ``tuning``: address books whose sets select tensors to tune (:class:`TuningSupport`);
-- ``circuits``: traced or validated circuits, attribution graphs in general (:class:`CircuitSupport`). This section is
-  a prototype: its vocabulary is expected to change as circuit documents are defined;
+- ``circuits``: traced or validated circuits, attribution graphs in general (:class:`CircuitSupport`), and, under
+  ``subsets`` (schema 6), the treatments over graph subsets it applies (:class:`SubsetSupport`). This section is a
+  prototype: its vocabulary is expected to change as circuit documents are defined;
 - ``formats``: the foreign formats a package translates into venngram documents, and where to install it from
   (:class:`FormatSupport`), so a reader can say how to read a foreign document without running anything.
 
@@ -72,7 +73,7 @@ from venngram.ops import check_support, PARAM_TARGETS, Support
 from venngram.resolve import GRADIENT_FORMS, gradient_forms
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 5)
+SCHEMA_WINDOW = (1, 6)
 #: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
 OF_SCHEMA = 3
 #: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
@@ -81,6 +82,8 @@ PARAM_SCHEMA = 4
 #: ``steering`` section may declare ``gradient_ops`` (the ops it applies to parameter gradients) and ``readouts`` (the
 #: reductions it computes a readout with).
 GRADIENTS_SCHEMA = 5
+#: The first schema whose ``circuits`` section may declare ``subsets`` (the graph subset treatments it applies).
+SUBSETS_SCHEMA = 6
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -244,6 +247,115 @@ CIRCUIT_NODES = ("feature", "error", "embedding", "logit")
 CIRCUIT_EVIDENCE = ("traced", "pruned", "validated")
 
 
+SUBSET_VALUES = ("scalar", "vector")
+
+
+@dataclass(frozen=True)
+class SubsetSupport:
+    """What a consumer applies of a treatment over a graph subset (:mod:`venngram.graphs`). The defaults apply nothing:
+    a consumer lists what it honours.
+
+    .. code-block:: yaml
+
+        circuits:
+          subsets:
+            ops: [replace, add]
+            anchors: [absolute, from_end, token_match]
+            featurizers: [transcoder]        # the space kinds whose nodes it places; default any
+            values: [scalar]                 # scalar | vector (a block's intra-block state); default scalar
+            columns: [activation, baseline]  # default any
+            transforms: [scale]              # default none
+            complement: true                 # restriction (`outside:`); default false
+            sites: [mlp.out.hook_out]        # names or fnmatch patterns; default any
+
+    Attributes:
+        ops: The ops it applies to graph targets.
+        anchors: The anchor kinds it resolves (:data:`venngram.graphs.ANCHORS`).
+        featurizers: The space kinds whose nodes it places (``None``: any).
+        values: Whether it applies scalar values, vector values (``value_shape: [d]``), or both.
+        columns: The value columns it reads (``None``: any).
+        transforms: The transforms it applies to graph values.
+        complement: Whether it applies a restriction over a finite universe.
+        sites: The sites it reaches (``None``: any).
+    """
+
+    ops: frozenset[str] = frozenset()
+    anchors: frozenset[str] = frozenset()
+    featurizers: frozenset[str] | None = None
+    values: frozenset[str] = frozenset({"scalar"})
+    columns: frozenset[str] | None = None
+    transforms: frozenset[str] = frozenset()
+    complement: bool = False
+    sites: frozenset[str] | None = None
+
+    @classmethod
+    def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "SubsetSupport":
+        """Read a ``subsets`` declaration.
+
+        Raises:
+            ValueError: If it has unknown keys, names an anchor or value form venngram does not define, or
+                ``complement`` is not a boolean.
+        """
+        from venngram.graphs import ANCHORS
+
+        if not isinstance(doc, Mapping):
+            raise ValueError(f"{source}: `subsets` is a mapping.")
+        rest = {k: v for k, v in doc.items() if k != "complement"}
+        complement = doc.get("complement", False)
+        if not isinstance(complement, bool):
+            raise ValueError(f"{source}: `complement` is true or false, got {complement!r}.")
+        return cls(**_read_fields(rest, source, {"ops": None, "anchors": ANCHORS, "featurizers": None,
+                                                 "values": SUBSET_VALUES, "columns": None, "transforms": None,
+                                                 "sites": None}), complement=complement)
+
+    def to_mapping(self) -> dict[str, Any]:
+        out: dict[str, Any] = {k: sorted(v) for k in ("ops", "anchors", "featurizers", "values", "columns",
+                                                      "transforms", "sites")
+                               if (v := getattr(self, k)) is not None}
+        out["complement"] = self.complement
+        return out
+
+    def check_recipe(self, recipe: Any) -> list[str]:
+        """Every way ``recipe``'s graph ops ask for something this declaration does not honour."""
+        import fnmatch
+
+        out: list[str] = []
+        for i, stage in enumerate(recipe.stages):
+            for j, op in enumerate(stage.ops):
+                if op.graph is None:
+                    continue
+                at = f"stage {i} ({stage.site}) op {j} (`{op.op}`, graph `{op.graph}`)"
+                graph = recipe.book.graphs[op.graph]
+                if op.op not in self.ops:
+                    out.append(f"{at}: the op is not applied to graph targets (`subsets.ops`: {sorted(self.ops)})")
+                if self.sites is not None and stage.site not in self.sites and not any(
+                        fnmatch.fnmatchcase(stage.site, p) for p in self.sites):
+                    out.append(f"{at}: the site `{stage.site}` is not one this consumer reaches")
+                if op.outside is not None and not self.complement:
+                    out.append(f"{at}: a restriction (`outside`) is not applied (`subsets.complement` is false)")
+                nodes = [n for n in graph.nodes if n.kind == "feature" and n.site == stage.site]
+                for kind in sorted({n.anchor.kind for n in nodes if n.anchor is not None} - self.anchors):
+                    out.append(f"{at}: anchor `{kind}` is not resolved (`subsets.anchors`: {sorted(self.anchors)})")
+                spaces = {graph.spaces[str(n.space)] for n in nodes}
+                for space in sorted(spaces, key=lambda s: s.name):
+                    if self.featurizers is not None and space.kind not in self.featurizers:
+                        out.append(f"{at}: space `{space.name}` is a `{space.kind}` featurizer, which is not placed "
+                                   f"(`subsets.featurizers`: {sorted(self.featurizers)})")
+                    form = "vector" if space.value_shape else "scalar"
+                    if form not in self.values:
+                        out.append(f"{at}: space `{space.name}` has {form} values, which are not applied "
+                                   f"(`subsets.values`: {sorted(self.values)})")
+                value = op.value
+                if value is not None and value.source == "graph" and self.columns is not None:
+                    for c in [value.column, value.baseline]:
+                        if c is not None and c not in self.columns:
+                            out.append(f"{at}: column `{c}` is not read (`subsets.columns`: {sorted(self.columns)})")
+                for t in value.transform if value is not None else ():
+                    if t.name not in self.transforms:
+                        out.append(f"{at}: transform `{t.name}` is not applied to graph values")
+        return out
+
+
 @dataclass(frozen=True)
 class CircuitSupport:
     """What a consumer of circuits honours (prototype). ``None`` fields mean any.
@@ -257,12 +369,15 @@ class CircuitSupport:
         nodes: The node kinds it honours (see :data:`CIRCUIT_NODES`).
         features: The feature sources its feature nodes may come from (``transcoder``, ``clt``, ``sae``; any name).
         evidence: The evidence it can use or produce (see :data:`CIRCUIT_EVIDENCE`).
+        subsets: The treatments over graph subsets it applies (``None``: none; reading graphs is not permission to
+            intervene with them).
     """
 
     graphs: frozenset[str] = frozenset({"attribution"})
     nodes: frozenset[str] | None = None
     features: frozenset[str] | None = None
     evidence: frozenset[str] | None = None
+    subsets: SubsetSupport | None = None
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "CircuitSupport":
@@ -271,12 +386,26 @@ class CircuitSupport:
         Raises:
             ValueError: If the section has unknown keys or names a node kind or evidence venngram does not define.
         """
-        return cls(**_read_fields(doc, source, {"graphs": None, "nodes": CIRCUIT_NODES, "features": None,
-                                                "evidence": CIRCUIT_EVIDENCE}))
+        rest = {k: v for k, v in doc.items() if k != "subsets"} if isinstance(doc, Mapping) else doc
+        subsets = SubsetSupport.from_mapping(doc["subsets"], source=f"{source}: subsets") \
+            if isinstance(doc, Mapping) and "subsets" in doc else None
+        return cls(**_read_fields(rest, source, {"graphs": None, "nodes": CIRCUIT_NODES, "features": None,
+                                                 "evidence": CIRCUIT_EVIDENCE}), subsets=subsets)
 
     def to_mapping(self) -> dict[str, Any]:
-        return {k: sorted(v) for k, v in (("graphs", self.graphs), ("nodes", self.nodes), ("features", self.features),
-                                          ("evidence", self.evidence)) if v is not None}
+        out: dict[str, Any] = {k: sorted(v) for k, v in (("graphs", self.graphs), ("nodes", self.nodes),
+                                                         ("features", self.features), ("evidence", self.evidence))
+                               if v is not None}
+        if self.subsets is not None:
+            out["subsets"] = self.subsets.to_mapping()
+        return out
+
+    def check_recipe(self, recipe: Any) -> list[str]:
+        """Every way ``recipe``'s graph ops ask for something this section does not honour."""
+        if self.subsets is None:
+            return [f"recipe `{getattr(recipe, 'name', '?')}`: its graph targets need `circuits.subsets`, which this "
+                    "consumer does not declare (reading graphs is not applying them)"]
+        return self.subsets.check_recipe(recipe)
 
 
 @dataclass(frozen=True)
@@ -449,6 +578,9 @@ class SupportRecord:
                         raise ValueError(f"{where}: `{key}` needs support record schema {GRADIENTS_SCHEMA}, not "
                                          f"{version}: an older venngram would refuse the record by name rather than "
                                          "pass over it.")
+                if kind == "circuits" and isinstance(body, Mapping) and "subsets" in body and version < SUBSETS_SCHEMA:
+                    raise ValueError(f"{where}: `subsets` needs support record schema {SUBSETS_SCHEMA}, not {version}: "
+                                     "an older venngram would refuse the record by name rather than pass over it.")
                 if kind == "steering" and _param_targets(body) and version < PARAM_SCHEMA:
                     raise ValueError(f"{where}: the parameter targets {_param_targets(body)} need support record "
                                      f"schema {PARAM_SCHEMA}, not {version}: an older venngram would refuse the record "
@@ -503,7 +635,8 @@ class SupportRecord:
         needs_of = any(c.of != Support.of for c in steering)
         needs_gradients = any(isinstance(c, TuningSupport) and c.gradients for c in self.sections.values()) or any(
             c.gradient_ops or c.readouts for c in steering)
-        version = GRADIENTS_SCHEMA if needs_gradients else \
+        needs_subsets = any(isinstance(c, CircuitSupport) and c.subsets is not None for c in self.sections.values())
+        version = SUBSETS_SCHEMA if needs_subsets else GRADIENTS_SCHEMA if needs_gradients else \
             PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
             OF_SCHEMA if needs_of else SCHEMA_VERSION
         out: dict[str, Any] = {"schema_version": version, "kind": "support_record"}
@@ -535,10 +668,20 @@ class SupportRecord:
 
     def check_recipe(self, recipe: Any) -> list[str]:
         """Every way ``recipe`` asks for something the ``steering`` section does not honour (see
-        :func:`venngram.ops.check_support`)."""
-        if self.steering is None:
-            return self._refuse_missing("steering", f"recipe `{getattr(recipe, 'name', '?')}`")
-        return check_support(recipe, self.steering)
+        :func:`venngram.ops.check_support`), and its graph ops anything ``circuits.subsets`` does not."""
+        what = f"recipe `{getattr(recipe, 'name', '?')}`"
+        stages = getattr(recipe, "stages", ())
+        graph_ops = [o for s in stages for o in s.ops if getattr(o, "graph", None) is not None]
+        other = len(graph_ops) < sum(len(s.ops) for s in stages) or getattr(recipe, "weights", ()) \
+            or getattr(recipe, "gradients", ()) or getattr(recipe, "readout", None) is not None
+        out: list[str] = []
+        if other or not graph_ops:
+            out += self._refuse_missing("steering", what) if self.steering is None else \
+                check_support(recipe, self.steering)
+        if graph_ops:
+            out += self._refuse_missing("circuits", what) if self.circuits is None else \
+                self.circuits.check_recipe(recipe)
+        return out
 
 
 def _param_targets(body: Any) -> list[str]:
@@ -582,6 +725,9 @@ __all__ = [
     "register_support_section",
     "SCHEMA_VERSION",
     "SCHEMA_WINDOW",
+    "SUBSET_VALUES",
+    "SUBSETS_SCHEMA",
+    "SubsetSupport",
     "support_sections",
     "SupportRecord",
     "TuningSupport",

@@ -1,2 +1,5 @@
 # Registry evidence is compared to published SHA-256 digests. Preserve the exact bytes on every OS.
 registry/snapshot/** -text
+
+# Golden fixtures cited by hash from another fixture. Preserve the exact bytes on every OS.
+tests/schemas/graph_subset_v1.yaml -text

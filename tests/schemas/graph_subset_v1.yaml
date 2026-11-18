@@ -1,0 +1,73 @@
+# Golden fixture: a graph subset at schema 1, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 1
+kind: graph_subset
+name: golden-reasoning
+model:
+  id: Qwen/Qwen3.5-4B
+  revision: abc123
+spaces:
+  tc:
+    id: example/transcoders
+    revision: pinned
+    kind: transcoder
+  bsf:
+    id: example/bsf
+    revision: pinned
+    kind: block_sparse
+    index:
+    - block
+    value_shape:
+    - 2
+source:
+  tokenizer:
+    id: Qwen/Qwen3.5-4B
+    revision: abc123
+  token_ids:
+  - 11
+  - 22
+  - 33
+  pruning:
+    method: threshold
+    threshold: 0.01
+nodes:
+- id: f0
+  kind: feature
+  site: mlp.out.hook_out
+  space: tc
+  layer: 13
+  position: 2
+  index:
+    feature: 7956
+  activation: 3.0
+  baseline: 1.0
+  anchor:
+    kind: from_end
+    offset: 0
+- id: b0
+  kind: feature
+  site: mlp.out.hook_out
+  space: bsf
+  layer: 13
+  position: 1
+  index:
+    block: 4
+  activation:
+  - 0.5
+  - -1.0
+  baseline:
+  - 0.0
+  - 0.0
+  anchor:
+    kind: token_match
+    token_ids:
+    - 22
+- id: answer
+  kind: logit
+  token_id: 44
+  position: 2
+  activation: 5.0
+edges:
+- source: b0
+  target: f0
+  attribution: 0.5

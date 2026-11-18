@@ -1,0 +1,29 @@
+# Golden fixture: a support record at schema 6, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 6
+kind: support_record
+name: golden-tracer
+sections:
+  circuits:
+    graphs:
+    - attribution
+    features:
+    - transcoder
+    - block_sparse
+    subsets:
+      ops:
+      - replace
+      - add
+      anchors:
+      - from_end
+      - token_match
+      featurizers:
+      - transcoder
+      - block_sparse
+      values:
+      - scalar
+      - vector
+      columns:
+      - activation
+      - baseline
+      complement: true

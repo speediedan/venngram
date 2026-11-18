@@ -1,0 +1,46 @@
+# Golden fixture: an address book at schema 5, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 5
+name: golden
+portability: checkpoint
+applies_to:
+  models:
+  - id: Qwen/Qwen3.5-4B
+    revision: abc123
+sets:
+  universe:
+    features: tc
+    layers:
+    - 13
+    units:
+    - 7955
+    - 7956
+    - 7957
+graphs:
+  reasoning:
+    file: graph_subset_v1.yaml
+    sha256: bbd97695d877bbf264d3e972d9b8441a0f8f583d9c62f46a1e64016cb7ad2063
+treatments:
+  transfer:
+    model:
+      id: Qwen/Qwen3.5-4B
+      revision: abc123
+    stages:
+    - site: mlp.out.hook_out
+      ops:
+      - op: add
+        target:
+          graph: reasoning
+        value:
+          from:
+            graph: reasoning
+            column: activation
+            baseline: baseline
+      - op: replace
+        target:
+          graph: reasoning
+          outside:
+            set: universe
+            tokens: prompt
+        value:
+          dose: 0.0

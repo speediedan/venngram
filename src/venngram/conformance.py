@@ -132,12 +132,13 @@ def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) ->
         if entry.kind == "recipe":
             refusals = {(s.name or f"support {i}"): tuple(s.check_recipe(doc)) for i, s in enumerate(records)}
         elif entry.kind == "address_book":
-            # a consumer judges what it offers a contract for: a tuning consumer the sets, a steering consumer the
-            # book's treatments; one that offers neither does not judge the book
+            # a consumer judges what it offers a contract for: a tuning consumer the sets, a steering consumer (or a
+            # circuits consumer, for treatments over graphs) the book's treatments; one that offers none does not judge
             for i, s in enumerate(records):
+                treats = (s.steering is not None or s.circuits is not None) and bool(doc.treatments)
                 found = [*(s.check_book(doc) if s.tuning is not None else ()),
-                         *(s.check_treatments(doc) if s.steering is not None and doc.treatments else ())]
-                if s.tuning is not None or (s.steering is not None and doc.treatments):
+                         *(s.check_treatments(doc) if treats else ())]
+                if s.tuning is not None or treats:
                     refusals[s.name or f"support {i}"] = tuple(found)
         results.append(DocumentResult(entry.path, entry.kind, refusals=refusals))
     unloaded += [(e.kind, e.path) for e in manifest.skipped]

@@ -39,8 +39,9 @@ support record      1 -> 2     the top-level steering contract moves under ``sec
 ==================  =========  ==================================================================================
 
 An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a recipe at schema 2 or 3 (3 adds
-``weights``), a support record at schema 2 to 4, a rule set, an ``op_specs`` document (2 adds parameter targets) and a
-``weight_patch`` document are current already.
+``weights``), a support record at schema 2 to 4, a rule set, an ``op_specs`` document (2 adds parameter targets), a
+``weight_patch`` document and a ``graph_subset`` document are current already. A book that names graphs reads them
+relative to ``base_dir`` (the document's directory, from the command line).
 A document newer than this venngram reads is refused as :class:`~venngram.errors.NewerSchemaError`.
 
 .. warning:: This is an experimental API and may change in a future release.
@@ -49,10 +50,14 @@ import argparse
 import copy
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+#: The directory a document being migrated sits in, so a book's graphs resolve (:func:`migrate`'s ``base_dir``).
+_BASE: ContextVar[Path | None] = ContextVar("venngram_migrate_base", default=None)
 
 
 def kind_of(doc: Mapping[str, Any]) -> str:
@@ -103,7 +108,7 @@ def _recipe(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str, Any
     if doc.get("schema_version") == 1:
         doc = migrate_recipe(doc, source=source)
         steps.append(f"recipe 1 -> {RECIPE_SCHEMA_VERSION}: `method` and `treatments` became one stage of ops")
-    Recipe.from_mapping(doc, source=source)
+    Recipe.from_mapping(doc, source=source, base_dir=_BASE.get())
     return doc
 
 
@@ -131,7 +136,13 @@ def _current(read: Callable[[dict[str, Any], str], Any]) -> Callable[[dict[str, 
 def _book(doc: dict[str, Any], source: str) -> Any:
     from venngram.book import AddressBook
 
-    return AddressBook.from_mapping(doc, source=source)
+    return AddressBook.from_mapping(doc, source=source, base_dir=_BASE.get())
+
+
+def _graph(doc: dict[str, Any], source: str) -> Any:
+    from venngram.graphs import GraphSubset
+
+    return GraphSubset.from_mapping(doc, source=source, base_dir=_BASE.get())
 
 
 def _op_specs(doc: dict[str, Any], source: str) -> Any:
@@ -155,11 +166,13 @@ def _rules(doc: dict[str, Any], source: str) -> Any:
 _STEPS: dict[str, Callable[[dict[str, Any], str, list[str]], dict[str, Any]]] = {
     "component_map": _component_map, "overlay_map": _overlay_map, "recipe": _recipe,
     "support_record": _support_record, "address_book": _current(_book), "rules": _current(_rules),
-    "op_specs": _current(_op_specs), "weight_patch": _current(_weight_patch)}
+    "op_specs": _current(_op_specs), "weight_patch": _current(_weight_patch), "graph_subset": _current(_graph)}
 
 
-def migrate(doc: Mapping[str, Any], *, source: str = "<document>") -> tuple[dict[str, Any], list[str]]:
+def migrate(doc: Mapping[str, Any], *, source: str = "<document>",
+            base_dir: str | Path | None = None) -> tuple[dict[str, Any], list[str]]:
     """``doc`` rewritten to its kind's current schema, and the steps taken (empty when it is current already).
+    ``base_dir`` is the document's directory, which a book's graphs and a graph's sidecars resolve against.
 
     Raises:
         NewerSchemaError: If the document is newer than this venngram reads.
@@ -171,7 +184,11 @@ def migrate(doc: Mapping[str, Any], *, source: str = "<document>") -> tuple[dict
     if kind not in _STEPS:
         raise ValueError(f"{source}: venngram migrates {sorted(_STEPS)}, not `{kind}`.")
     steps: list[str] = []
-    return _STEPS[kind](copy.deepcopy(dict(doc)), source, steps), steps
+    token = _BASE.set(Path(base_dir) if base_dir is not None else None)
+    try:
+        return _STEPS[kind](copy.deepcopy(dict(doc)), source, steps), steps
+    finally:
+        _BASE.reset(token)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -182,7 +199,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     path = Path(args.path)
     try:
-        migrated, steps = migrate(yaml.safe_load(path.read_text(encoding="utf-8")), source=str(path))
+        migrated, steps = migrate(yaml.safe_load(path.read_text(encoding="utf-8")), source=str(path),
+                                  base_dir=path.parent)
     except (ValueError, OSError) as err:
         print(f"{path}: {err}", file=sys.stderr)
         return 1
