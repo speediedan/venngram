@@ -39,22 +39,30 @@ every listed file must carry a sha256, so a fetch is checked even when the refer
 :func:`publish` writes a directory's documents and its manifest to a store. An address book may import another book by
 reference, so books on different stores compose.
 
+**Cache-only reads.** Within :func:`cache_only`, a fetch makes no request: a versioned store serves a pinned commit from
+its cache, a revision it would have to resolve is refused, and a file it never fetched raises :class:`CacheMissError`
+(which never means the document is absent). The scope is the calling context (a :class:`contextvars.ContextVar`), not
+the process, so other threads and the rest of the program stay online. A store reads cache-only only if it says it can
+(``supports_cache_only = True``: ``local`` and the Hub repository stores do); any other store refuses there.
+
 The Hub stores use ``huggingface_hub``.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
+import contextlib
+import contextvars
 import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import yaml
 
-from venngram.errors import StoreError
+from venngram.errors import CacheMissError, StoreError
 from venngram.manifest import build_manifest, DocumentEntry, Manifest, MANIFEST_NAME, sha256_of
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -68,7 +76,11 @@ class Store(Protocol):
 
     name: str
     versioned: bool
-    """Whether a reference can pin a revision. An unversioned store's references carry a sha256."""
+    """Whether a reference can pin a revision. An unversioned store's references carry a sha256.
+
+    A store may also set ``supports_cache_only = True`` when, within :func:`cache_only`, its ``resolve_revision`` and
+    ``fetch`` make no request and raise :class:`CacheMissError` for what they do not hold (a missing attribute means it
+    cannot, so it refuses there)."""
 
     def resolve_revision(self, ref: str, revision: str | None) -> str | None:
         """The immutable revision ``revision`` (or the current state) names; ``None`` for an unversioned store."""
@@ -128,6 +140,28 @@ _STORES: dict[str, tuple[bool, "Store | Callable[[], Store]"]] = {}
 #: Loaders by document kind: a fetched file's path -> the loaded document.
 _LOADERS: dict[str, Callable[[Path], Any]] = {}
 
+_CACHE_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar("venngram_cache_only", default=False)
+
+
+@contextlib.contextmanager
+def cache_only() -> Iterator[None]:
+    """Read only from local caches in this block: no store makes a request (see the module docstring). It scopes the
+    calling context, never the process, and leaves environment variables alone.
+
+    Raises:
+        CacheMissError: Within the block, when a read needs something no cache holds.
+    """
+    token = _CACHE_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CACHE_ONLY.reset(token)
+
+
+def cache_only_active() -> bool:
+    """Whether the calling context is within :func:`cache_only`."""
+    return _CACHE_ONLY.get()
+
 
 def register_store(name: str, store: "Store | Callable[[], Store]", *, versioned: bool, replace: bool = False) -> None:
     """Register a store (or a factory, called on first use, so a store's dependency is imported only when used).
@@ -150,6 +184,9 @@ def get_store(name: str) -> Store:
     if not isinstance(store, Store):
         store = store()
         _STORES[name] = (versioned, store)
+    if cache_only_active() and not getattr(store, "supports_cache_only", False):
+        raise CacheMissError(f"The store `{name}` cannot read cache-only (it does not set supports_cache_only); read "
+                             "it outside venngram.store.cache_only.")
     return store
 
 
@@ -301,6 +338,7 @@ class LocalStore:
 
     name = "local"
     versioned = False
+    supports_cache_only = True  # files are read in place
 
     def resolve_revision(self, ref: str, revision: str | None) -> str | None:
         if revision is not None:
@@ -337,6 +375,7 @@ class HubRepoStore:
     ``hub-model:<owner>/<name>[/<dir>][@<revision>]:<path>``. Versioned by commit; files land in the Hub's own cache."""
 
     versioned = True
+    supports_cache_only = True
 
     def __init__(self, repo_type: str) -> None:
         self.repo_type = repo_type
@@ -345,6 +384,9 @@ class HubRepoStore:
     def resolve_revision(self, ref: str, revision: str | None) -> str | None:
         if revision is not None and _COMMIT.fullmatch(revision):
             return revision  # already a commit: no request, so a pinned reference reads offline from the Hub's cache
+        if cache_only_active():
+            raise CacheMissError(f"{self.name}:{ref}: resolving {revision or 'the current revision'} to a commit needs "
+                                 "a request; a cache-only read needs a pinned commit.")
         from huggingface_hub import HfApi
 
         repo, _ = _split_hub(ref, self.name)
@@ -360,11 +402,34 @@ class HubRepoStore:
         root = None
         for rel in paths:
             full = _in(prefix, rel)
-            local = Path(hf_hub_download(repo, full, repo_type=self.repo_type, revision=revision))
+            if cache_only_active():
+                local = self._cached(repo, full, revision)
+            else:
+                local = Path(hf_hub_download(repo, full, repo_type=self.repo_type, revision=revision))
             root = local.parents[len(Path(full).parts) - 1]
         if root is None:
             return cache
         return root / prefix if prefix else root
+
+    def _cached(self, repo: str, path: str, revision: str | None) -> Path:
+        """``path`` from the Hub's cache at commit ``revision``, with no request.
+
+        Raises:
+            FileNotFoundError: If the cache records that the commit has no such file (a proven absence).
+            CacheMissError: If the cache does not hold it.
+        """
+        from huggingface_hub import _CACHED_NO_EXIST, try_to_load_from_cache
+
+        if revision is None or not _COMMIT.fullmatch(revision):
+            raise CacheMissError(f"{self.name}:{repo}:{path}: a cache-only read needs a pinned commit, not "
+                                 f"{revision or 'the current revision'}.")
+        local = try_to_load_from_cache(repo, path, revision=revision, repo_type=self.repo_type)
+        if local is _CACHED_NO_EXIST:
+            raise FileNotFoundError(f"{self.name}:{repo}@{revision}:{path}: the commit has no such file.")
+        if not isinstance(local, str):
+            raise CacheMissError(f"{self.name}:{repo}@{revision}:{path} is not in the Hub's cache; fetch it once with "
+                                 "network access, then read it cache-only.")
+        return Path(local)
 
     def push(self, ref: str, files: Mapping[str, Path], message: str, revision: str | None) -> str | None:
         from huggingface_hub import CommitOperationAdd, HfApi
@@ -483,6 +548,8 @@ for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), (
 
 __all__ = [
     "cache_dir",
+    "cache_only",
+    "cache_only_active",
     "fetch",
     "fetch_manifest",
     "get_store",

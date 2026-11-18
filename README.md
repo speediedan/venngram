@@ -251,7 +251,11 @@ derived from TransformerLens or another package) is indexed and found like the s
 architecture: lookup serves the best verified one, and `venngram.registry.rows` lists every candidate. The index is a
 parquet dataset partitioned by kind and subject (architecture, or model id for checkpoint documents), so a lookup reads
 one small file however large the registry grows; the last revision read is served from the cache, with a warning, when
-the store is unreachable (or `HF_HUB_OFFLINE` is set), and a registry never read before fails by name. A location may
+the store is unreachable (or `HF_HUB_OFFLINE` is set), and a registry never read before fails by name. A caller that
+must make no request at all asks for that per call, `component_map_for(architecture, cache_only=True)`, rather than
+setting `HF_HUB_OFFLINE` for the whole process: the lookup reads the cached index and map with the same ordering,
+selection and sha256 checks, treats an architecture as absent only when the cached subject list proves it, and raises
+`venngram.errors.CacheMissError` when the cache cannot decide. A location may
 pin a revision (`hub-dataset:<owner>/<repo>/index@<commit>`), so an example rendered against it cannot be moved by a
 later registry generation. `venngram.maps.known_architectures()` and `known_overlays()` list what the process and the
 registries know.

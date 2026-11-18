@@ -54,6 +54,15 @@ column existed are checked when loaded instead).
 (or ``HF_HUB_OFFLINE`` is set), the last revision is served from the cache with a :class:`RegistryOfflineWarning`
 naming it; a registry never fetched before fails by name.
 
+**Cache-only.** ``lookup_map(..., cache_only=True)`` (and :func:`venngram.maps.component_map_for`, :func:`rows`)
+makes no request at all, without touching ``HF_HUB_OFFLINE`` or any other process-wide setting
+(:func:`venngram.store.cache_only`). Each registry is read at the revision this process already resolved, else at the
+revision last remembered in venngram's cache; ordering, status selection, newer-schema handling and the documents'
+sha256 checks are unchanged. An architecture is absent from a registry only when its cached subject list proves it;
+when the cache cannot decide (a registry never fetched, a partition or a map never downloaded) the lookup raises
+:class:`venngram.errors.CacheMissError` rather than passing to the next row or registry, so a cache-only answer is the
+answer an online lookup at that revision would give.
+
 Uses ``pyarrow`` and, for the Hub stores, ``huggingface_hub`` (both venngram dependencies, imported on first use).
 
 .. code-block:: bash
@@ -69,6 +78,7 @@ Uses ``pyarrow`` and, for the Hub stores, ``huggingface_hub`` (both venngram dep
 .. warning:: This is an experimental API and may change in a future release.
 """
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -83,8 +93,9 @@ from typing import Any
 
 import yaml
 
-from venngram.errors import NewerSchemaError, VenngramError
-from venngram.store import _safe, cache_dir, fetch_manifest, get_store, load, Reference
+from venngram.errors import CacheMissError, NewerSchemaError, VenngramError
+from venngram.store import _safe, cache_dir, cache_only_active, fetch_manifest, get_store, load, Reference
+from venngram.store import cache_only as _cache_only
 
 INDEX_SCHEMA_VERSION = 1
 HEADER_NAME = "index.yaml"
@@ -187,6 +198,10 @@ def _offline() -> bool:
     return os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes", "on")
 
 
+def _scope(cache_only: bool) -> Any:
+    return _cache_only() if cache_only else contextlib.nullcontext()
+
+
 def _state(location: str) -> tuple[str | None, dict[str, Any]]:
     """The resolved revision and header of a registry, once per process; the last known one when offline."""
     if location in _STATE:
@@ -194,6 +209,8 @@ def _state(location: str) -> tuple[str | None, dict[str, Any]]:
     store, ref, pinned = _split(location)
     s = get_store(store)
     memo = cache_dir() / "registry" / _safe(location) / "last_revision"
+    if cache_only_active():
+        return _cached_state(location, s, ref, pinned, memo)
     try:
         if _offline() and s.versioned and pinned is None:
             raise RegistryError("HF_HUB_OFFLINE is set")
@@ -213,6 +230,21 @@ def _state(location: str) -> tuple[str | None, dict[str, Any]]:
         memo.write_text(revision, encoding="utf-8")
     _STATE[location] = (revision, header)
     return _STATE[location]
+
+
+def _cached_state(location: str, s: Any, ref: str, pinned: str | None, memo: Path) -> tuple[str | None, dict[str, Any]]:
+    """A registry's revision and header with no request: a pinned revision, else the remembered one. Nothing is
+    remembered, so a later online lookup in this process still resolves the registry's current revision."""
+    if not s.versioned:
+        revision = None
+    elif pinned is not None:
+        revision = s.resolve_revision(ref, pinned)
+    elif memo.is_file():
+        revision = memo.read_text(encoding="utf-8").strip()
+    else:
+        raise CacheMissError(f"{location}: this registry was never fetched into venngram's cache ({cache_dir()}), so "
+                             "a cache-only lookup cannot read it; look the architecture up once with network access.")
+    return revision, _header(location, revision)
 
 
 def _fetch(location: str, revision: str | None, path: str) -> Path | None:
@@ -267,16 +299,52 @@ def _read_rows(path: Path) -> list[Row]:
     return out
 
 
-def rows(kind: str, subject: str, *, locations: Sequence[str] | None = None) -> list[Row]:
+def rows(kind: str, subject: str, *, locations: Sequence[str] | None = None, cache_only: bool = False) -> list[Row]:
     """Every indexed document of ``kind`` about ``subject`` (an architecture or a model id), registry by registry in
-    order, best first within each."""
+    order, best first within each.
+
+    Args:
+        kind: The document kind.
+        subject: The architecture or model id.
+        locations: The registries to read (default: :func:`registries`).
+        cache_only: Make no request (see the module docstring); also implied within :func:`venngram.store.cache_only`.
+
+    Raises:
+        RegistryError: If a registry cannot be read (and is not in the cache).
+        venngram.errors.CacheMissError: If cache-only and a registry's cache cannot decide.
+    """
     out: list[Row] = []
-    for location in (registries() if locations is None else locations):
-        revision, header = _state(location)
-        path = _fetch(location, revision, f"{header['current']}/{_partition(kind, subject)}")
-        if path is not None:
-            out += sorted(_read_rows(path), key=_order)
+    with _scope(cache_only):
+        for location in (registries() if locations is None else locations):
+            revision, header = _state(location)
+            path = _subject_partition(location, revision, header, kind, subject)
+            if path is not None:
+                out += sorted(_read_rows(path), key=_order)
     return out
+
+
+def _subject_partition(location: str, revision: str | None, header: Mapping[str, Any], kind: str,
+                       subject: str) -> Path | None:
+    """The cached or fetched rows file of one subject, or ``None`` when the registry has none. Cache-only, a rows file
+    not in the cache counts as absent only when the cached subject list of ``kind`` proves it."""
+    partition = f"{header['current']}/{_partition(kind, subject)}"
+    try:
+        return _fetch(location, revision, partition)
+    except CacheMissError:
+        if not cache_only_active():
+            raise
+        try:
+            listing = _fetch(location, revision, f"{header['current']}/{_partition(kind)}")
+        except CacheMissError:
+            listing = None
+            known = True
+        else:
+            known = listing is not None and subject in _parquet().read_table(listing).column("subject").to_pylist()
+        if known:
+            raise CacheMissError(f"{location}@{revision}: the cache does not hold {partition}"
+                                 + ("" if listing is not None else f" or the {kind} subject list") + ", so a "
+                                 "cache-only lookup cannot decide; look it up once with network access.") from None
+        return None
 
 
 def subjects(kind: str, *, locations: Sequence[str] | None = None) -> list[str]:
@@ -333,41 +401,50 @@ def readable(row: Row) -> bool:
     return False
 
 
-def lookup_map(architecture: str, *, strict: bool = False) -> Any:
+def lookup_map(architecture: str, *, strict: bool = False, cache_only: bool = False) -> Any:
     """The best component map for ``architecture`` in the configured registries, or ``None`` when none has one.
 
     Rows whose schema is newer than this venngram reads are passed over with a :class:`NewerSchemaWarning`.
 
+    Args:
+        architecture: The architecture class name.
+        strict: Serve only a ``verified`` map.
+        cache_only: Make no request (see the module docstring); ``None`` then means every registry's cache proves the
+            architecture absent. Also implied within :func:`venngram.store.cache_only`.
+
     Raises:
         RegistryError: If a registry cannot be read (and is not in the cache).
+        venngram.errors.CacheMissError: If cache-only and the caches cannot decide.
     """
-    for location in registries():
-        candidates = [r for r in rows("component_map", architecture, locations=[location]) if r.status in SERVED]
-        if strict:
-            candidates = [r for r in candidates if r.status == "verified"]
-        for row in candidates:
-            if not readable(row):
-                continue
-            if row.reference not in _MAPS:
-                try:
-                    _MAPS[row.reference] = load(row.reference)
-                except NewerSchemaError as err:
-                    _pass_over(row.reference, f"its {err.kind} schema {err.version} is newer than this venngram "
-                                              f"reads ({err.newest})")
+    with _scope(cache_only):
+        for location in registries():
+            candidates = [r for r in rows("component_map", architecture, locations=[location]) if r.status in SERVED]
+            if strict:
+                candidates = [r for r in candidates if r.status == "verified"]
+            for row in candidates:
+                if not readable(row):
                     continue
-            return _MAPS[row.reference]
+                if row.reference not in _MAPS:
+                    try:
+                        _MAPS[row.reference] = load(row.reference)
+                    except NewerSchemaError as err:
+                        _pass_over(row.reference, f"its {err.kind} schema {err.version} is newer than this venngram "
+                                                  f"reads ({err.newest})")
+                        continue
+                return _MAPS[row.reference]
     return None
 
 
-def lookup_overlay(name: str) -> Any:
+def lookup_overlay(name: str, *, cache_only: bool = False) -> Any:
     """The best overlay map called ``name`` in the configured registries, or ``None`` when none has one.
 
     Raises:
         RegistryError: If a registry cannot be read (and is not in the cache).
+        venngram.errors.CacheMissError: If ``cache_only`` and the caches cannot decide.
     """
     from venngram.maps.overlay import OVERLAY_SUBJECT_PREFIX
 
-    return lookup_map(f"{OVERLAY_SUBJECT_PREFIX}{name}")
+    return lookup_map(f"{OVERLAY_SUBJECT_PREFIX}{name}", cache_only=cache_only)
 
 
 def mined_rules(*, locations: Sequence[str] | None = None) -> list[Any]:

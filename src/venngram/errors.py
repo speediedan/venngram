@@ -42,6 +42,12 @@ class StoreError(VenngramError):
     hash that does not match, or a store that cannot provide what a reference names."""
 
 
+class CacheMissError(StoreError):
+    """Raised by a cache-only read (:func:`venngram.store.cache_only`) that needs something the local caches do not
+    hold: a revision never resolved, a file never fetched, or a store that cannot read from a cache. It never means the
+    document does not exist; fetch it once with network access, then read it cache-only."""
+
+
 class NewerSchemaError(VenngramError):
     """Raised when a document's schema is newer than this venngram reads.
 
@@ -99,5 +105,5 @@ class AddressUnresolvable(VenngramError):
         super().__init__(f"The address `{address}` does not resolve: {detail}")
 
 
-__all__ = ["AddressError", "AddressUnresolvable", "NewerAddressSchemaError", "NewerSchemaError", "Refusal", "RoleError",
-           "StoreError", "VenngramError"]
+__all__ = ["AddressError", "AddressUnresolvable", "CacheMissError", "NewerAddressSchemaError", "NewerSchemaError",
+           "Refusal", "RoleError", "StoreError", "VenngramError"]
