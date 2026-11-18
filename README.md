@@ -126,6 +126,42 @@ before books and recipes merged) is still read, and `Recipe.as_book` turns it in
 recipes are read through `migrate`. Applying a treatment is the consumer's; treatments written in another tool's format
 are read by an adapter outside venngram's core.
 
+### Graph subsets
+
+A pruned piece of an attribution graph is a `kind: graph_subset` document (`venngram.graphs`): nodes with their
+coordinates and source values, optional edges with their attributions, and the provenance of the graph they came from
+(the source prompt's pinned tokenizer and token ids, attribution targets, pruning). A book names the graphs its
+treatments apply under `graphs` (book schema 5), each cited by hash, and an op targets one with
+`target: {graph: <name>}` (recipe schema 5), reading its value `from` a node column, optionally as a delta from a
+baseline column:
+
+```yaml
+graphs:
+  reasoning: {file: reasoning.yaml, sha256: 4be1...}
+treatments:
+  transfer:
+    model: {id: example/model, revision: pinned-model-commit}
+    stages:
+      - site: mlp.out.hook_out
+        ops:
+          - {op: add, target: {graph: reasoning},
+             value: {from: {graph: reasoning, column: activation, baseline: baseline}}}
+          - {op: replace, target: {graph: reasoning, outside: {set: universe, tokens: prompt}}, value: {dose: 0.0}}
+```
+
+Each feature space declares its units' coordinates, so no featurizer is assumed: `index` lists the identity axes (one
+tier, `[feature]`, for a transcoder or SAE; the block index, and optionally a coordinate within the block, for a
+block-sparse featurizer), and `value_shape` the shape of one node's value (a scalar, or `[d]` for a block's intra-block
+state). Each node carries an **anchor** that places it in a new prompt: an `absolute` position, an offset `from_end`, a
+`token_match` of an exact span of token ids (unique unless an `occurrence` is given), or `all` positions.
+`GraphSubset.plan` resolves every node before returning: a node without an anchor, an anchor that does not resolve, or
+two nodes landing on one coordinate refuses the whole plan, never dropping a node. A restriction
+(`outside: {set: ...}`) targets everything else in a finite feature set of the book, for ablating all but the subset
+(`GraphSubset.restriction`). Only feature nodes are applied; error, embedding and logit nodes and edges are evidence. A
+large table goes to a sidecar (`nodes: {file, sha256}`): a safetensors file of typed columns, one row per node, where
+integer identities stay integer columns. `anchor_cases` gives conformance vectors for anchoring, and a consumer declares
+what it applies in its support record's `circuits.subsets` section.
+
 ### Sharing documents: manifests and stores
 
 A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
@@ -152,7 +188,7 @@ documents is a new store (`venngram.store.register_store`).
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
 reader meets it: every listed document is fetched at one revision and loaded by its kind, every book's sets are
 checked against each support record's `tuning` section, and its treatments (and any recipe) against its `steering`
-section. It exits non-zero when a
+section, or, for ops on graph subsets, its `circuits` section. It exits non-zero when a
 document fails to load or a recipe or book asks for more than a given record honours, so a format adapter's CI, or a
 scheduled job over published examples, can run it.
 
@@ -177,7 +213,10 @@ a package reads, with where to install it from). A `tuning` section that lists `
 gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
 of a value part and a gradient part, and `union-masks`, a union of gradient conjunctions with unit sets. A `steering`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
-section), and its `readouts` the reductions it computes a readout with. A section a record omits is a contract its
+section), and its `readouts` the reductions it computes a readout with. A `circuits` section's `subsets` (schema 6)
+declares the treatments over graph subsets it applies: the ops, the anchors it resolves, the featurizer kinds it
+places, scalar or vector values, the columns and transforms, and whether it applies a restriction; reading graphs alone
+is not permission to apply them. A section a record omits is a contract its
 consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
 defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
 and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
@@ -383,9 +422,10 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 4 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout` | ignored at the top level |
-| recipe | 1 to 4 | 2, 3 when it has `weights`, 4 when it has `gradients` or a `readout` | refused in `method` and in an op's parameters |
-| support record | 1 to 5 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts` | refused; an unknown *section* is skipped with a warning |
+| address book | 1 to 5 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs` | ignored at the top level |
+| recipe | 1 to 5 | 2, 3 when it has `weights`, 4 when it has `gradients` or a `readout`, 5 when an op targets a graph | refused in `method` and in an op's parameters |
+| support record | 1 to 6 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets` | refused; an unknown *section* is skipped with a warning |
+| graph subset | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |
 | weight patch | 1 | 1 | refused |

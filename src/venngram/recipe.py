@@ -100,13 +100,29 @@ consumer. Parameter gradients (the ``gradients`` section) are the training objec
         - {reduce: sum, set: answer_logit, tokens: last, weight: 1.0}
         - {reduce: sum, set: foil_logit, tokens: last, weight: -1.0}
 
+**Graphs**: an op may target a graph subset the book names (``target: {graph: <name>}``, recipe schema 5,
+:mod:`venngram.graphs`): it acts on the graph's feature nodes at the stage's site, each placed by its anchor, and reads
+its value ``from`` a node column, optionally as a delta from a baseline column. ``replace`` and ``add`` keep their
+meanings. ``target: {graph: <name>, outside: {set: <universe>, tokens: prompt}}`` targets everything else in a finite
+feature set of the book (a restriction, with ``replace`` and a ``dose``). Anchors fix a graph target's positions, so its
+stage gives no ``tokens`` and the op no ``tokens`` or operand; every site of the graph's feature nodes must be reached
+by a stage, and the graph must pin the recipe's model. Graph values pass only through transforms that act on each value
+alone (:data:`~venngram.graphs.GRAPH_TRANSFORMS`). A consumer declares what it honours in its support record's
+``circuits.subsets`` section (:class:`venngram.support.SubsetSupport`).
+
+.. code-block:: yaml
+
+    stages:
+      - site: mlp.out.hook_out
+        ops: [{op: replace, target: {graph: reasoning}, value: {from: {graph: reasoning, column: activation}}}]
+
 **Composition** (:func:`compose`): recipes on one model revision compose stage by stage. Without an order, ops from
 different recipes at one site must commute (the same summing or multiplying op, or disjoint unit sets); otherwise the
 composition must state ``order: listed``. ``weights`` and ``gradients`` ops compose the same way, section by section
 (:func:`compose_weights`).
 
-**Versions**: schema 2 is written, schema 3 when the recipe has ``weights``, or schema 4 when it has ``gradients``
-or a ``readout``;
+**Versions**: schema 2 is written, schema 3 when the recipe has ``weights``, schema 4 when it has ``gradients``
+or a ``readout``, or schema 5 when an op targets a graph;
 schema 1 (one ``method`` and its
 ``treatments``) is read through :func:`migrate` with a deprecation warning.
 
@@ -125,6 +141,7 @@ from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Ter
 from venngram.book import _states_readout, AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError
+from venngram.graphs import GRAPH_TRANSFORMS
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
 from venngram.readouts import READOUTS
@@ -135,13 +152,17 @@ from venngram.units import _sha256 as _sha256_file
 RECIPE_SCHEMA_VERSION = 2
 
 #: The recipe schemas this code reads (schema 1 through :func:`migrate`).
-RECIPE_WINDOW = (1, 4)
+RECIPE_WINDOW = (1, 5)
 
 #: The first recipe schema with a ``weights`` section (a key an older reader would pass over silently).
 WEIGHTS_SCHEMA = 3
 #: The first recipe schema with a ``gradients`` section (ops on parameter gradients) or a ``readout`` (what a stage's
 #: gradients are taken of); an older reader would pass over either silently.
 GRADIENTS_SCHEMA = 4
+#: The first recipe schema whose ops may target a graph subset (``target: {graph: ...}``).
+GRAPHS_SCHEMA = 5
+#: The ops a graph target admits, by target kind.
+GRAPH_OPS = {"graph_nodes": ("replace", "add"), "graph_complement": ("replace",)}
 
 #: Token scopes written as a bare string.
 _BARE_SCOPES = ("all", "last", "prompt", "generated")
@@ -229,7 +250,8 @@ class Tokens:
 
 @dataclass(frozen=True)
 class Value:
-    """An op's value: a ``dose``, per-unit ``doses``, or ``from`` evidence through a transform pipeline."""
+    """An op's value: a ``dose``, per-unit ``doses``, ``from`` evidence, or ``from`` a graph's node column (source
+    ``graph``, optionally less a ``baseline`` column), through a transform pipeline."""
 
     source: str
     dose: float | None = None
@@ -237,6 +259,8 @@ class Value:
     evidence: str | None = None
     column: str | None = None
     transform: tuple[Transform, ...] = ()
+    graph: str | None = None
+    baseline: str | None = None
 
     def to_mapping(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -244,6 +268,9 @@ class Value:
             out["dose"] = self.dose
         elif self.source == "doses":
             out["doses"] = {k: dict(v) for k, v in (self.doses or {}).items()}
+        elif self.source == "graph":
+            out["from"] = {"graph": self.graph, "column": self.column,
+                           **({"baseline": self.baseline} if self.baseline is not None else {})}
         else:
             out["from"] = {"evidence": self.evidence, "column": self.column}
         if self.transform:
@@ -265,6 +292,10 @@ class Op:
     """An op of the recipe's ``weights`` section: its target is a parameter."""
     gradients: bool = False
     """An op of the recipe's ``gradients`` section: its target is a parameter's gradient."""
+    graph: str | None = None
+    """The graph subset of the book the op targets (``target: {graph: ...}``)."""
+    outside: str | None = None
+    """For a restriction, the finite feature set of the book whose members outside the graph the op targets."""
 
     @property
     def spec(self) -> OpSpec:
@@ -273,7 +304,9 @@ class Op:
     def target_kind(self, book: AddressBook) -> str:
         """``activation`` (no target), ``units`` or ``features``, from the target set (a composed target is a unit
         set: a recipe refuses any other composition when it is read); for a ``weights`` or ``gradients`` op, ``param``
-        or ``param_units``."""
+        or ``param_units``; for a graph target, ``graph_nodes`` or (with ``outside``) ``graph_complement``."""
+        if self.graph is not None:
+            return "graph_complement" if self.outside is not None else "graph_nodes"
         if self.weights or self.gradients:
             return "param_units" if _names_units(book.sets(), self.target) else "param"
         if self.target is None:
@@ -288,7 +321,7 @@ class Op:
         if self.gradients:
             return "grad"
         if self.target is None:
-            return "value"
+            return "value"  # a graph target acts on activations
         term = book.sets()[self.target]
         if isinstance(term, Term):
             return term.of or "value"
@@ -309,6 +342,9 @@ class Op:
         out: dict[str, Any] = {"op": self.op}
         if self.target is not None:
             out["target"] = {"set": self.target}
+        if self.graph is not None:
+            out["target"] = {"graph": self.graph, **({"outside": {"set": self.outside, "tokens": "prompt"}}
+                                                     if self.outside is not None else {})}
         if self.operand is not None:
             out["operand"] = self.operand
         if self.params:
@@ -363,7 +399,10 @@ class Stage:
     """What this stage's ``of: grad`` ops act on the gradients of, replacing the treatment's readout."""
 
     def to_mapping(self) -> dict[str, Any]:
-        out = {"site": self.site, "tokens": self.tokens.to_doc(), "ops": [o.to_mapping() for o in self.ops]}
+        out: dict[str, Any] = {"site": self.site}
+        if not (any(o.graph is not None for o in self.ops) and self.tokens == Tokens()):  # anchors place graph nodes
+            out["tokens"] = self.tokens.to_doc()
+        out["ops"] = [o.to_mapping() for o in self.ops]
         if self.readout is not None:
             out["readout"] = self.readout.to_mapping()
         return out
@@ -452,6 +491,11 @@ class Recipe:
             raise AddressError(f"{source}: `stages` lists at least one {{site, ops}} (or the recipe has `weights` or "
                                "`gradients`).")
         stages = tuple(_stage(raw, i, book, operands, source, version) for i, raw in enumerate(raw_stages))
+        if any(o.graph is not None for st in stages for o in st.ops):
+            if version < GRAPHS_SCHEMA:
+                raise AddressError(f"{source}: a graph target needs recipe schema {GRAPHS_SCHEMA}, not {version}: an "
+                                   "older venngram would refuse it by name rather than apply it.")
+            _check_graphs(stages, model, book, source)
         readout = None
         if doc.get("readout") is not None:
             if version < GRADIENTS_SCHEMA:
@@ -480,7 +524,8 @@ class Recipe:
         header = sorted({"schema_version", "kind", "name", "book"} & set(body))
         if header:
             raise AddressError(f"{source}: a treatment is written in the book it treats, so it has no {header}.")
-        version = _schema(weights="weights" in body, gradients="gradients" in body, readout=_states_readout(body))
+        version = _schema(weights="weights" in body, gradients="gradients" in body, readout=_states_readout(body),
+                          graphs=_uses_graphs(body))
         return cls.from_mapping({"schema_version": version, "kind": "recipe", "name": name, **body, "book": book},
                                 source=source, base_dir=base_dir)
 
@@ -506,7 +551,8 @@ class Recipe:
         """The recipe as a schema 2 document (3 when it has ``weights``, 4 when it has ``gradients``)."""
         doc: dict[str, Any] = {
             "schema_version": _schema(weights=bool(self.weights), gradients=bool(self.gradients),
-                                      readout=self.readout is not None or any(s.readout for s in self.stages)),
+                                      readout=self.readout is not None or any(s.readout for s in self.stages),
+                                      graphs=any(o.graph is not None for s in self.stages for o in s.ops)),
             "kind": "recipe",
             "name": self.name,
             "model": {"id": self.model_id, "revision": self.revision, "revision_source": self.revision_source},
@@ -527,8 +573,10 @@ class Recipe:
         return doc
 
 
-def _schema(*, weights: bool, gradients: bool, readout: bool = False) -> int:
+def _schema(*, weights: bool, gradients: bool, readout: bool = False, graphs: bool = False) -> int:
     """The recipe schema a document's sections need."""
+    if graphs:
+        return GRAPHS_SCHEMA
     return GRADIENTS_SCHEMA if gradients or readout else WEIGHTS_SCHEMA if weights else RECIPE_SCHEMA_VERSION
 
 
@@ -676,8 +724,21 @@ def _value(raw: Any, where: str) -> Value:
         return Value("doses", doses={int(k): {int(u): float(d) for u, d in v.items()} for k, v in doses.items()},
                      transform=tuple(transform))
     frm = raw["from"]
+    if isinstance(frm, Mapping) and "graph" in frm:
+        if not set(frm) <= {"graph", "column", "baseline"} or not all(isinstance(frm.get(k), str) and frm[k]
+                                                                       for k in frm) or "column" not in frm:
+            raise AddressError(f"{where}: a graph value is `from: {{graph: <name>, column: <column>, baseline: "
+                               f"<column>}}` (baseline optional), got {frm!r}.")
+        elementwise = sorted({t.name for t in transform} - set(GRAPH_TRANSFORMS))
+        if elementwise:
+            raise AddressError(f"{where}: {elementwise} do not act on each value alone, so a graph value refuses "
+                               f"them (it admits {list(GRAPH_TRANSFORMS)}): an `all` anchor expands a node to many "
+                               "rows, and those transforms would mean different things on the two.")
+        return Value("graph", graph=frm["graph"], column=frm["column"], baseline=frm.get("baseline"),
+                     transform=tuple(transform))
     if not isinstance(frm, Mapping) or not all(isinstance(frm.get(k), str) for k in ("evidence", "column")):
-        raise AddressError(f"{where}: `from` is {{evidence: <name>, column: <column>}}.")
+        raise AddressError(f"{where}: `from` is {{evidence: <name>, column: <column>}}, or {{graph: <name>, "
+                           "column: <column>}}.")
     return Value("from", evidence=frm["evidence"], column=frm["column"], transform=tuple(transform))
 
 
@@ -699,6 +760,9 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
     section = "weights" if weights else "gradients" if gradients else None
     if section is not None and "target" not in raw:
         raise AddressError(f"{where}: a `{section}` op names the tensors it acts on (`target: {{set: ...}}`).")
+    if isinstance(raw.get("target"), Mapping) and "graph" in raw["target"] and "set" not in raw["target"] \
+            and section is None:
+        return _graph_op(raw, name, where, book)
     if "target" in raw:
         t = raw["target"]
         sets = book.sets()
@@ -765,6 +829,93 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
     return Op(name, target, operand, params, value, tokens, weights, gradients)
 
 
+def _graph_op(raw: Mapping[str, Any], name: str, where: str, book: AddressBook) -> Op:
+    """Read an op whose target is a graph subset of the book (``{graph}``, or ``{graph, outside}`` for a
+    restriction)."""
+    t = raw["target"]
+    graph = t.get("graph")
+    if not isinstance(graph, str) or graph not in book.graphs:
+        raise AddressError(f"{where}: `target` names a graph of the book ({sorted(book.graphs)}), got {t!r}.")
+    if not set(t) <= {"graph", "outside"}:
+        raise AddressError(f"{where}: a graph target contains only `graph` and `outside`, got {t!r}: anchors already "
+                           "place its nodes, so a set or token filter on it could drop some silently.")
+    outside = None
+    if "outside" in t:
+        o = t["outside"]
+        sets = book.sets()
+        if not isinstance(o, Mapping) or set(o) != {"set", "tokens"} or o.get("tokens") != "prompt" \
+                or o.get("set") not in sets:
+            raise AddressError(f"{where}: `outside` is {{set: <a feature set of the book>, tokens: prompt}}, the "
+                               f"finite universe a restriction acts in, got {o!r}.")
+        spaces = book.graphs[graph].spaces
+        for term in _leaf_terms(sets, o["set"]):
+            if term.target != "feature" or term.features not in spaces:
+                raise AddressError(f"{where}: the universe `{o['set']}` addresses `{to_string(term)}`; a restriction's "
+                                   f"universe is the features of the graph's spaces ({sorted(spaces)}).")
+        outside = o["set"]
+    kind = "graph_complement" if outside is not None else "graph_nodes"
+    if name not in GRAPH_OPS[kind]:
+        raise AddressError(f"{where}: a `{kind}` target admits {list(GRAPH_OPS[kind])}, not `{name}`.")
+    unknown = sorted(set(raw) & {"operand", "tokens"})
+    if unknown:
+        raise AddressError(f"{where}: a graph target takes no {unknown}: its nodes' anchors fix the positions, and "
+                           "its values come from the graph.")
+    spec = OPS[name]
+    params = _params(raw.get("params") or {}, spec.params, where)
+    if "value" not in raw:
+        raise AddressError(f"{where}: a graph target needs a `value`.")
+    value = _value(raw["value"], where)
+    if outside is not None and value.source != "dose":
+        raise AddressError(f"{where}: a restriction replaces the universe's other members with a `dose` (zero, or a "
+                           f"statistic through a transform), not a `{value.source}` value.")
+    if outside is None and value.source not in ("dose", "graph"):
+        raise AddressError(f"{where}: a graph target's value is a `dose` or `from` a column of the graph, not a "
+                           f"`{value.source}` value.")
+    if value.source == "graph":
+        if value.graph != graph:
+            raise AddressError(f"{where}: the value reads graph `{value.graph}`, and the target is graph `{graph}`; "
+                               "values come from the nodes they are applied to.")
+        columns = book.graphs[graph].columns
+        missing = [c for c in (value.column, value.baseline) if c is not None and c not in columns]
+        if missing:
+            raise AddressError(f"{where}: graph `{graph}` has no column {missing} on every node (columns: "
+                               f"{list(columns)}).")
+    return Op(name, params=params, value=value, graph=graph, outside=outside)
+
+
+def _check_graphs(stages: Sequence[Stage], model: Mapping[str, Any], book: AddressBook, source: str) -> None:
+    """Refuse graph ops whose graph pins another model, whose stage has no feature node of the graph or a token
+    scope, or whose graph has feature nodes at a site no stage reaches."""
+    reached: dict[str, set[str]] = {}
+    for i, stage in enumerate(stages):
+        for op in stage.ops:
+            if op.graph is None:
+                continue
+            graph = book.graphs[op.graph]
+            if (graph.model.get("id"), str(graph.model.get("revision"))) != (model["id"], str(model["revision"])):
+                raise AddressError(f"{source}: graph `{op.graph}` pins {graph.model.get('id')}@"
+                                   f"{graph.model.get('revision')}, not the recipe's "
+                                   f"{model['id']}@{model['revision']}.")
+            if stage.site not in graph.sites():
+                raise AddressError(f"{source}: stage {i} ({stage.site}) targets graph `{op.graph}`, which has no "
+                                   f"feature node there (its sites: {list(graph.sites())}).")
+            reached.setdefault(op.graph, set()).add(stage.site)
+    for name, sites in reached.items():
+        unreached = [s for s in book.graphs[name].sites() if s not in sites]
+        if unreached:
+            raise AddressError(f"{source}: graph `{name}` has feature nodes at {unreached}, which no stage targeting "
+                               "it reaches; select a smaller graph rather than drop its nodes.")
+
+
+def _uses_graphs(body: Any) -> bool:
+    """Whether a recipe or treatment mapping has an op targeting a graph."""
+    stages = body.get("stages") if isinstance(body, Mapping) else None
+    return isinstance(stages, list) and any(
+        isinstance(st, Mapping) and isinstance(st.get("ops"), list)
+        and any(isinstance(o, Mapping) and isinstance(o.get("target"), Mapping) and "graph" in o["target"]
+                for o in st["ops"]) for st in stages)
+
+
 def _leaf_terms(sets: Mapping[str, Expr], name: str) -> list[Term]:
     """Every term the set ``name`` reaches, following references (the book refuses cycles when it loads)."""
     out: list[Term] = []
@@ -815,6 +966,9 @@ def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand],
     if unknown:
         raise AddressError(f"{where}: unknown keys {sorted(unknown)}.")
     ops = tuple(_op(o, f"{where} op {j}", book, operands) for j, o in enumerate(raw["ops"]))
+    if "tokens" in raw and any(o.graph is not None for o in ops):
+        raise AddressError(f"{where}: a stage with a graph target gives no `tokens`: the graph's anchors place its "
+                           "nodes, and a token scope could drop some silently.")
     readout = None
     if raw.get("readout") is not None:
         if version < GRADIENTS_SCHEMA:
@@ -1179,6 +1333,8 @@ __all__ = [
     "ReadoutTerm",
     "RecipeSchemaWarning",
     "GRADIENTS_SCHEMA",
+    "GRAPH_OPS",
+    "GRAPHS_SCHEMA",
     "WEIGHTS_SCHEMA",
     "Stage",
     "Tokens",

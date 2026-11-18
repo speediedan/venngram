@@ -535,6 +535,13 @@ def _load_weight_patch(path: Path) -> Any:
     return read_weight_patch(path)
 
 
+def _load_graph(path: Path) -> Any:
+    """Read a ``graph_subset`` document, checking its table sidecars (:class:`venngram.graphs.GraphSubset`)."""
+    from venngram.graphs import GraphSubset
+
+    return GraphSubset.from_file(path)
+
+
 register_store("local", LocalStore(), versioned=False)
 register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
@@ -542,7 +549,7 @@ register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
                        ("rules", _load_rules), ("verification_record", _read_yaml),
                        ("support_record", _load_support), ("op_specs", _load_op_specs),
-                       ("weight_patch", _load_weight_patch)):
+                       ("weight_patch", _load_weight_patch), ("graph_subset", _load_graph)):
     register_loader(_kind, _loader)
 
 

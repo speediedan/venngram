@@ -641,6 +641,8 @@ def check_support(recipe: Any, support: Support) -> list[str]:
         if not support.site_ok(stage.site):
             out.append(f"{where}: the site `{stage.site}` is not one this consumer reaches")
         for j, op in enumerate(stage.ops):
+            if getattr(op, "graph", None) is not None:
+                continue  # a graph op is checked against a `circuits` section's `subsets`
             at = f"{where} op {j} (`{op.op}`)"
             tokens = (op.tokens or stage.tokens).kind
             if op.op not in support.ops:

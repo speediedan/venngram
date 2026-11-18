@@ -39,7 +39,16 @@ sets, so a selection and what is done to it travel together and a consumer reads
         model: {id: Qwen/Qwen3-0.6B, revision: c1899de}
         stages: [{site: mlp.out.hook_in, ops: [{op: add, target: {set: top}, value: {dose: 0.8}}]}]
 
-A consumer that only selects (a tuning schedule) ignores them. A ``kind: recipe`` document, written before the two
+A consumer that only selects (a tuning schedule) ignores them.
+
+**Graphs** are optional too: graph subsets (:mod:`venngram.graphs`) the book's treatments apply, by name, each a
+``graph_subset`` document beside the book, cited by hash (book schema 5). A book whose treatments apply only graphs may
+have an empty ``sets``:
+
+.. code-block:: yaml
+
+    graphs:
+      reasoning: {file: reasoning.yaml, sha256: 4be1...} A ``kind: recipe`` document, written before the two
 kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it into its book with one treatment).
 
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
@@ -47,7 +56,8 @@ may ignore without misreading the book (``description``, ``charts``, any unknown
 version; a key that changes what a set selects does. Schema 2 adds the ``of`` address field (a set's gradients), so a
 book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
 ``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
-``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently.
+``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
+adds ``graphs``, and treatments whose ops target a graph.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -80,7 +90,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 4)
+SCHEMA_WINDOW = (1, 5)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -88,6 +98,8 @@ WEIGHTS_SCHEMA = 3
 #: The first schema whose treatments may carry a ``gradients`` section (ops on parameter gradients) or a ``readout``
 #: (what a stage's gradients are taken of).
 GRADIENTS_SCHEMA = 4
+#: The first schema with a ``graphs`` section (graph subsets its treatments apply).
+GRAPHS_SCHEMA = 5
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -164,6 +176,8 @@ class AddressBook:
     extra: Mapping[str, Any] = field(default_factory=dict)
     treatments: Mapping[str, Any] = field(default_factory=dict)
     """Treatments by name (each a :class:`venngram.recipe.Recipe` over this book), from the ``treatments`` section."""
+    graphs: Mapping[str, Any] = field(default_factory=dict)
+    """Graph subsets by name (each a :class:`venngram.graphs.GraphSubset`), from the ``graphs`` section."""
 
     @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>", base_dir: str | Path | None = None,
@@ -197,9 +211,16 @@ class AddressBook:
         if scheme is not None and (not isinstance(scheme, str) or not scheme):
             raise AddressError(f"{source}: `requires.naming_scheme` is a view's naming scheme, a non-empty string"
                                f" such as `physical` or `tl`, got {scheme!r}.")
+        graphs = _graphs(doc.get("graphs"), source, base_dir) if doc.get("graphs") is not None else {}
+        if graphs and inline and "schema_version" not in doc:
+            version = GRAPHS_SCHEMA
+        if graphs and version < GRAPHS_SCHEMA:
+            raise AddressError(f"{source}: `graphs` needs address book schema {GRAPHS_SCHEMA}, not {version}: an older "
+                               "venngram would pass over it silently.")
         raw_sets = doc.get("sets")
-        if not isinstance(raw_sets, Mapping) or not raw_sets:
-            raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses.")
+        if not isinstance(raw_sets, Mapping) or not (raw_sets or graphs):
+            raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses (it may be empty "
+                               "when the book has `graphs`).")
         own: dict[str, Expr] = {}
         with sidecar_root(base_dir):  # a sidecar unit set's path is relative to the book
             for set_name, address in raw_sets.items():
@@ -212,7 +233,7 @@ class AddressBook:
                     raise AddressError(f"{source}: set `{set_name}`: {err}") from err
         uses_of = sorted(n for n, expr in own.items() if any(t.of is not None for t in terms(expr)))
         if uses_of and inline and "schema_version" not in doc:
-            version = OF_SCHEMA  # an inline book takes the version its sets need
+            version = max(version, OF_SCHEMA)  # an inline book takes the version its sets need
         raw_treatments = doc.get("treatments")
         with_weights = sorted(n for n, body in raw_treatments.items()
                               if isinstance(body, Mapping) and "weights" in body) \
@@ -221,9 +242,9 @@ class AddressBook:
                                 if isinstance(body, Mapping) and ("gradients" in body or _states_readout(body))) \
             if isinstance(raw_treatments, Mapping) else []
         if with_weights and inline and "schema_version" not in doc:
-            version = WEIGHTS_SCHEMA
+            version = max(version, WEIGHTS_SCHEMA)
         if with_gradients and inline and "schema_version" not in doc:
-            version = GRADIENTS_SCHEMA
+            version = max(version, GRADIENTS_SCHEMA)
         for names, key, needed in ((with_weights, "weights", WEIGHTS_SCHEMA),
                                    (with_gradients, "gradients` or a `readout", GRADIENTS_SCHEMA)):
             if names and version < needed:
@@ -238,7 +259,7 @@ class AddressBook:
         extra = {k: v for k, v in doc.items() if k not in _KNOWN_KEYS}
         book = cls(name=str(doc.get("name", source)), schema_version=version, portability=portability,
                    applies_to=applies_to, requires=requires, own_sets=own, imports=imports, source=source,
-                   description=doc.get("description"), extra=extra)
+                   description=doc.get("description"), extra=extra, graphs=graphs)
         for set_name, expr in own.items():
             missing = [r for r in references(expr) if r not in known]
             if missing:
@@ -367,7 +388,27 @@ def _states_readout(body: Mapping[str, Any]) -> bool:
 
 
 _KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets",
-               "treatments")
+               "treatments", "graphs")
+
+
+def _graphs(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
+    from venngram.graphs import GraphSubset
+
+    if not isinstance(raw, Mapping) or not raw:
+        raise AddressError(f"{source}: `graphs` maps a graph name to its document {{file, sha256}}.")
+    out = {}
+    for name, ref in raw.items():
+        if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
+            raise AddressError(f"{source}: {name!r} is not a valid graph name (letters, digits, `_` and `-`).")
+        if not isinstance(ref, Mapping) or set(ref) != {"file", "sha256"} or not all(isinstance(ref[k], str) and ref[k]
+                                                                                    for k in ref):
+            raise AddressError(f"{source}: graph `{name}` is {{file, sha256}}: a graph is cited by its hash, so a "
+                               "changed document is refused rather than re-read.")
+        try:
+            out[name] = GraphSubset.from_file(Path(base_dir or ".") / ref["file"], sha256=ref["sha256"])
+        except VenngramError as err:
+            raise AddressError(f"{source}: graph `{name}`: {err}") from err
+    return out
 
 
 def _treatments(raw: Any, book: AddressBook, source: str, base_dir: str | Path | None) -> dict[str, Any]:
@@ -414,6 +455,7 @@ def diff_lock(lock: Mapping[str, Any], selections: Mapping[str, Mapping[str, tup
 __all__ = [
     "AddressBook",
     "diff_lock",
+    "GRAPHS_SCHEMA",
     "make_lock",
     "PORTABILITY",
     "register_uri_resolver",
