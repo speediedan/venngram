@@ -227,13 +227,17 @@ def hub(tmp_path, monkeypatch, requests) -> Path:
     lookup with network access would have left them. Returns the snapshot directory."""
     from huggingface_hub import constants
 
+    from venngram.store import cache_only
+
     monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hf"))
     repo = tmp_path / "hf" / "datasets--owner--vg"
     snapshot = repo / "snapshots" / COMMIT
     maps = directory(tmp_path / "maps", {"tiny.yaml": TINY, "llama.yaml": seed_doc("llama.yaml")})
     shutil.copytree(maps.removeprefix("local:"), snapshot / "maps")
-    index = registry.crawl([f"hub-dataset:owner/vg/maps@{COMMIT}"])  # a pinned crawl reads the cache, no request
-    registry.write_index(index, tmp_path / "idx", name="hub", sources=["hub-dataset:owner/vg/maps"])
+    # cache-only, since even a cached pinned download can make a request (huggingface_hub builds its headers first)
+    with cache_only():
+        index = registry.crawl([f"hub-dataset:owner/vg/maps@{COMMIT}"])
+        registry.write_index(index, tmp_path / "idx", name="hub", sources=["hub-dataset:owner/vg/maps"])
     shutil.copytree(tmp_path / "idx", snapshot / "index")
     (repo / "refs").mkdir()
     (repo / "refs" / "main").write_text(COMMIT)
