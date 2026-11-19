@@ -36,6 +36,13 @@ own is a conflict, refused by name with the tensor and both roles, never resolve
 assigns is one in its own :meth:`~TunableViewExtras.roles` (a ``base`` it lists explicitly counts), or one promoted
 since.
 
+**Roles by address.** A view's ``roles`` maps a tensor name to its role, or a role to an address
+(``{"adapter:lora": 'component:attn & name:".*lora_[AB].*"'}``) resolved against the view's own names and structure
+when the view is built (:func:`expand_roles`), so one declaration carries to every view that places the same
+components. The address states no ``role`` term, since roles are what it assigns, and may reference a book's sets.
+A tensor two role addresses give different roles is refused by name unless a name entry settles it, and a name
+entry always wins over an address.
+
 .. warning:: This is an experimental API and may change in a future release.
 """
 import itertools
@@ -162,6 +169,62 @@ class TunableViewExtras(Protocol):
         """Places the root's physical tensors in its block structure, for addresses' ``layers``, ``stack`` and
         ``component`` fields."""
         ...
+
+
+def expand_roles(roles: Mapping[str, Any], names: Sequence[str], structure: StructureProvider | None, *,
+                 known: Collection[str] | None = None, sets: Any = None) -> dict[str, str]:
+    """A view's ``roles`` as tensor names mapped to roles: name entries as they are, and each role-to-address entry
+    expanded to the tensors its address selects among ``names`` (placed by ``structure``).
+
+    Args:
+        roles: Tensor names mapped to roles, and roles mapped to addresses. A key that is a tensor name (one of
+            ``known``) is a name entry; any other key is a role.
+        names: The tensors role addresses select from (the root's parameters and buffers).
+        structure: What places them in blocks and components, for ``layers``, ``stack`` and ``component``.
+        known: The names a name entry may use (``names`` when ``None``).
+        sets: Named sets an address may reference (``@<set>``): a mapping, or an
+            :class:`~venngram.book.AddressBook` (its :meth:`~venngram.book.AddressBook.sets`).
+
+    Raises:
+        TunableViewError: If a key is neither a tensor name nor a valid role, an address states a ``role`` term,
+            does not resolve or selects nothing, or two role addresses give one tensor different roles and no name
+            entry settles it.
+    """
+    from venngram.address import parse, terms, to_string
+    from venngram.resolve import ParamSpace, select
+
+    known_names = set(names if known is None else known)
+    by_name = {k: v for k, v in roles.items() if k in known_names}
+    by_address = {k: v for k, v in roles.items() if k not in known_names}
+    if not by_address:
+        return dict(by_name)
+    book_sets = sets.sets() if callable(getattr(sets, "sets", None)) else dict(sets or {})
+    space = ParamSpace(list(names), structure=structure)
+    claimed: dict[str, list[str]] = {}
+    for role, address in by_address.items():
+        try:
+            parse_role(role)
+        except ValueError as err:
+            raise TunableViewError(f"The role key {role!r} names neither a parameter nor a buffer of the module, and "
+                                   f"is not a role either: {err}") from None
+        try:
+            expr = parse(address)
+            stated = [to_string(t) for t in terms(expr) if t.role is not None]
+            if stated:
+                raise TunableViewError(f"Role `{role}`: its address states a role ({stated[0]}); a role address "
+                                       "selects by name and structure, since roles are what it assigns.")
+            for name in select(expr, space, book_sets):
+                claimed.setdefault(name, []).append(role)
+        except TunableViewError:
+            raise
+        except ValueError as err:
+            raise TunableViewError(f"Role `{role}`: its address does not resolve on this view: {err}") from None
+    conflicts = [f"{n!r} ({' and '.join(sorted(set(rs)))})" for n, rs in claimed.items()
+                 if len(set(rs)) > 1 and n not in by_name]
+    if conflicts:
+        raise TunableViewError(f"Role addresses give tensors different roles: {', '.join(conflicts)}; name each one's "
+                               "role explicitly to settle it.")
+    return {**{n: rs[0] for n, rs in claimed.items()}, **by_name}
 
 
 def uncheckpointed_keys(roles: Mapping[str, str]) -> set[str]:
@@ -488,15 +551,22 @@ class CanonicalView(ViewDefaults):
 
     Args:
         root: The module to view.
-        roles: Optional roles for the root's parameters and buffers (anything unlisted is ``base``).
+        roles: Optional roles for the root's parameters and buffers (anything unlisted is ``base``): tensor names
+            mapped to roles, or roles mapped to addresses resolved against this view's names and structure (see
+            "Roles by address" above, and :func:`expand_roles`).
+        sets: Named sets the role addresses may reference: a mapping, or an address book.
 
     Raises:
-        TunableViewError: If a role is invalid or a role key names neither a parameter nor a buffer.
+        TunableViewError: If a role is invalid, a role key names neither a tensor nor a role, or a role address does
+            not resolve or gives a tensor two roles.
     """
 
-    def __init__(self, root: nn.Module, roles: Mapping[str, str] | None = None) -> None:
+    def __init__(self, root: nn.Module, roles: Mapping[str, Any] | None = None, *, sets: Any = None,
+                 _base_roles: Mapping[str, str] | None = None) -> None:
         self.root = root
-        self._roles = validate_roles(roles or {}, (n for n, _ in root.named_parameters()),
+        names = [n for n, _ in root.named_parameters()] + [n for n, _ in root.named_buffers()]
+        expanded = expand_roles(roles or {}, names, self.structure() if roles else None, sets=sets)
+        self._roles = validate_roles({**(_base_roles or {}), **expanded}, (n for n, _ in root.named_parameters()),
                                      (n for n, _ in root.named_buffers()))
 
     def support(self) -> TunableSupport:
@@ -546,6 +616,7 @@ __all__ = [
     "BoundView",
     "canonical_fqn",
     "CanonicalView",
+    "expand_roles",
     "artifact_state_keys",
     "instrument_state_keys",
     "OPTIONAL_MEMBERS",

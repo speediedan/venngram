@@ -25,6 +25,7 @@ the modules it carries. ``MappedView(model, maps=[...])`` names the maps to use 
 .. warning:: This is an experimental API and may change in a future release.
 """
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from torch import nn
 
@@ -103,7 +104,11 @@ class MappedView(CanonicalView):
             map up from the model (:func:`~venngram.maps.structure.map_for`) and applies every known overlay that
             applies to it (:func:`~venngram.maps.overlay.overlays_for`). When only overlays are given, the base map
             is still looked up, and exactly those overlays apply.
-        roles: Explicit roles, applied over the ones the overlays give.
+        roles: Explicit roles, applied over the ones the overlays give: tensor names mapped to roles, or roles mapped
+            to addresses resolved against this view's names and its map's structure
+            (:func:`~venngram.tuning.views.expand_roles`), so ``{"adapter:lora": "component:attn.* & leaf:lora_*"}``
+            reads the same on every mapped architecture.
+        sets: Named sets the role addresses may reference: a mapping, or an address book.
         prefix: The leading module path the mapped model lacks relative to the base map; found from the blocks when
             ``None``.
         mount: The path of the submodule of ``root`` holding the mapped model, for a root that wraps it (a framework
@@ -126,13 +131,13 @@ class MappedView(CanonicalView):
     """
 
     def __init__(self, root: nn.Module, maps: ComponentMap | OverlayMap | Sequence[ComponentMap | OverlayMap] |
-                 None = None, *, roles: dict[str, str] | None = None, prefix: str | None = None,
-                 mount: str | None = None, attached: Mapping[str, str] | None = None) -> None:
+                 None = None, *, roles: Mapping[str, Any] | None = None, prefix: str | None = None,
+                 mount: str | None = None, attached: Mapping[str, str] | None = None, sets: Any = None) -> None:
         cmap, overlays, mount = _split(root, maps, mount)
-        super().__init__(root, roles={**overlay_roles(root, overlays), **(roles or {})})
         self.cmap = cmap
         self.overlays = tuple(overlays)
-        self._structure = MapStructure(root, cmap, prefix, mount, attached)
+        self._structure = MapStructure(root, cmap, prefix, mount, attached)  # role addresses resolve through it
+        super().__init__(root, roles=roles, sets=sets, _base_roles=overlay_roles(root, overlays))
 
     def structure(self) -> MapStructure:
         return self._structure
