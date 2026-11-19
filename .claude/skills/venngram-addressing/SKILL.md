@@ -27,7 +27,7 @@ tighter than `|`, and parentheses group. Operators are delimited by spaces, so v
 | field | selects | example |
 | --- | --- | --- |
 | `role` | tensors by lifecycle role (`base`, `adapter[:name]`, `intervention[:name]`, `latent:<name>`, `fitted`, `artifact`) | `role:adapter` |
-| `layers` | blocks: an index, a list, a half-open slice (negatives count from the depth), `odd`, `even` | `layers:-4:`, `layers:8:-4` |
+| `layers` | blocks: an index, a list, a half-open slice (negatives count from the depth), `odd`, `even`; an index or slice end may be a fraction of the depth, `0.25d` (the floor of a quarter of it; book schema 7) | `layers:-4:`, `layers:8:-4`, `layers:0.25d:0.75d` |
 | `module` | tensors under modules whose path ends with the pattern, on whole segments (`*` one segment, `**` any) | `module:q_proj`, `module:mlp.*` |
 | `leaf` | tensor-name suffixes, on whole segments | `leaf:weight` |
 | `name` | a regex over tensor names, matched in full: the only regex field, and quoted | `name:"layers\.0\..*"` |

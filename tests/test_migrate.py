@@ -40,7 +40,7 @@ def test_every_published_schema_has_a_fixture():
                                                             "address_book_v1",
                                                             "address_book_v2", "address_book_v3",
                                                             "address_book_v4", "address_book_v5",
-                                                            "address_book_v6", "rules_v2",
+                                                            "address_book_v6", "address_book_v7", "rules_v2",
                                                             "op_specs_v1", "op_specs_v2", "weight_patch_v1"} == names
 
 

@@ -33,7 +33,7 @@ An address is a record whose fields intersect:
 | field | selects | example |
 | --- | --- | --- |
 | `role` | tensors by lifecycle role | `adapter`, `adapter:top` |
-| `layers` | blocks: an index, a list, a half-open slice (negatives count from the depth), `odd`, `even` | `-4:`, `8:-4` |
+| `layers` | blocks: an index, a list, a half-open slice (negatives count from the depth), `odd`, `even`; an index or slice end may be a fraction of the depth, `<decimal>d`, resolved to the floor of that share of it, so `0.25d:0.75d` is blocks 7 to 20 of 28 and 4 to 11 of 16 (book schema 7; unit sets refuse it) | `-4:`, `8:-4`, `0.25d:0.75d` |
 | `module` | tensors under modules whose path ends with the pattern, on whole segments | `q_proj` |
 | `name` | tensor names by regex (`re.fullmatch`) | `"model\.layers\.2[4-7]\..*"` |
 | `leaf` | tensor-name suffixes | `lora_A.weight` |
@@ -424,7 +424,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 6 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis` | ignored at the top level |
+| address book | 1 to 7 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction | ignored at the top level |
 | recipe | 1 to 5 | 2, 3 when it has `weights`, 4 when it has `gradients` or a `readout`, 5 when an op targets a graph | refused in `method` and in an op's parameters |
 | support record | 1 to 6 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |

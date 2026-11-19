@@ -1,0 +1,9 @@
+# Golden fixture: an address book at schema 7, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 7
+name: golden
+sets:
+  middle_band:
+    role: adapter
+    layers: 0.25d:0.75d
+  answer_pair: 'role:adapter & layers:[0.5d, 0.75d]'
