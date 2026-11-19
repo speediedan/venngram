@@ -770,6 +770,10 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
             raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}) and contains only `set`, "
                                f"got {t!r}.")
         term = sets[t["set"]]
+        axes = [to_string(x) for x in _leaf_terms(sets, t["set"]) if x.axis is not None]
+        if axes:
+            raise AddressError(f"{where}: target set `{t['set']}` names an `axis` ({axes[0]}); a recipe's unit targets "
+                               "run along their component's unit axis, and no recipe reads `axis` yet.")
         if section is not None:
             of = _check_param_set(sets, t["set"], where, section)
         elif isinstance(term, Term):

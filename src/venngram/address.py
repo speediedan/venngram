@@ -39,6 +39,9 @@ units      an index set along the target's unit axis: a list, a slice, or per   
            layer
 of         what the consumer acts on: ``value`` (the default) or ``grad``, the     ``grad``
            gradient of what the rest of the address selects
+axis       the dimension of a tensor's gradient its ``units`` index: ``unit`` (the  ``unit``, ``1``
+           component's unit axis, from the map's layout) or a physical dimension;
+           unset, a gradient mask runs along the first dimension
 =========  ======================================================================  ===============================
 
 The string form:
@@ -82,7 +85,7 @@ from venngram.roles import parse_selector
 from venngram.units import SidecarRef
 
 FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "features", "subspace", "space", "leaf",
-          "units", "of")
+          "units", "of", "axis")
 #: What an address's consumer acts on (the ``of`` field).
 OF = ("value", "grad")
 COMBINATORS = ("any", "all", "exclude")
@@ -283,6 +286,14 @@ def _check_field(name: str, value: Any) -> Any:
         return UnitSet.parse(value)
     if name == "of" and value not in OF:
         raise AddressError(f"The `of` field is {' or '.join(OF)}, got {value!r}.")
+    if name == "axis":
+        if value == "unit":
+            return value
+        if isinstance(value, str) and re.fullmatch(r"\d+", value):
+            return int(value)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        raise AddressError(f"The `axis` field is `unit` or a nonnegative dimension, got {value!r}.")
     if not isinstance(value, str) or not value:
         raise AddressError(f"The `{name}` field takes a non-empty string, got {value!r}.")
     if name == "role":
@@ -316,6 +327,7 @@ class Term:
     leaf: str | None = None
     units: UnitSet | None = None
     of: str | None = None
+    axis: str | int | None = None
 
     def __post_init__(self) -> None:
         for f in FIELDS:
@@ -337,6 +349,9 @@ class Term:
                                "reached from its `features` address.")
         if self.space is not None and self.point is None:
             raise AddressError(f"`space:{self.space}` reads a site through a linear map, so it needs a `point`.")
+        if self.axis is not None and (self.units is None or self.target != "param"):
+            raise AddressError(f"`axis:{self.axis}` says which dimension of a tensor's gradient its units index, so it "
+                               "needs `units` and a tensor target (no `point`, `features` or `subspace`).")
 
     @property
     def target(self) -> str:
