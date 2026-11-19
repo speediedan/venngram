@@ -314,4 +314,27 @@ class ViewConformance:
         _check(not unsaved, f"Promoted tensors are left out of the checkpoint state: {unsaved}.")
 
 
-__all__ = ["ConformanceCase", "ConformanceError", "ConformanceReport", "ViewConformance"]
+def role_address_case(build: Callable[[dict[str, Any]], Any], roles: dict[str, Any], *,
+                      name: str = "roles_by_address") -> ConformanceCase:
+    """A case checking that a view built with roles assigned by address reports the same roles as one built with the
+    name-assigned roles they expand to, so a consumer's role declarations by address mean exactly what the names did.
+
+    Args:
+        build: Builds the consumer's view from a ``roles`` mapping (names, or roles mapped to addresses).
+        roles: The roles to check, with at least one role-to-address entry.
+        name: The case's name.
+    """
+
+    def run() -> None:
+        by_address = as_view(build(roles))
+        by_name = as_view(build({n: r for n, r in by_address.view_roles().items()}))
+        _check(dict(by_address.roles()) == dict(by_name.roles()),
+               f"Roles assigned by address {dict(by_address.roles())} differ from the name-assigned roles they expand "
+               f"to {dict(by_name.roles())}.")
+        expanded = {n for n, r in by_address.view_roles().items() if r != "base"}
+        _check(bool(expanded), "The role addresses select no tensor of the view.")
+
+    return ConformanceCase(name, "roles", lambda support, view: True, run)
+
+
+__all__ = ["ConformanceCase", "ConformanceError", "ConformanceReport", "role_address_case", "ViewConformance"]

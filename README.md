@@ -378,7 +378,7 @@ is an overlay in the same way: a new library is a published document, not a venn
 **The view.** `view(model)` (a `venngram.maps.MappedView`) applies **every map that applies**: the model's base map and
 every known overlay whose `applies_when` holds, refusing two overlays that give one tensor different roles. To choose
 instead, name the maps: `view(model, [base_map, overlay])`, or `view(model, overlay)` to keep the looked-up base map with
-exactly that overlay. `roles=` sets individual tensors' roles over the overlays'. A model held inside a module of a
+exactly that overlay. `roles=` sets tensors' roles over the overlays', by name or by address: `roles={"adapter:lora": "component:attn.* & leaf:lora_*"}` is resolved against the view's own structure (with `sets=` for an address book's named sets), so one declaration reads the same on every mapped architecture; a tensor two role addresses give different roles is refused unless a name entry settles it, and `role_address_case` checks that the roles match the names they expand to. A model held inside a module of a
 framework's own (a wrapper carrying it under `model.`, with steering vectors or spliced dictionaries beside it) is
 described at that submodule: `view(wrapper)` finds the one mapped descendant, or `view(wrapper, mount="model")` names
 it. Names stay the wrapper's, and the wrapper's own tensors keep their roles with no layer or component.
