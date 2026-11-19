@@ -100,9 +100,10 @@ def test_a_delta_operand_is_a_weight_patch_applied_only_by_a_weights_op(tmp_path
                             operands={"edit": {"patch": "edit.yaml"}})
     with pytest.raises(AddressError, match="is a weight patch, which only a `weights` op applies"):
         Recipe.from_mapping(in_a_stage, base_dir=tmp_path)
-    (tmp_path / "recipe.yaml").write_text(yaml.safe_dump({**doc, "book": doc["book"]}))
-    entries = {e.path: e.kind for e in build_manifest(tmp_path, [("recipe", "recipe.yaml")]).documents}
-    assert entries == {"recipe.yaml": "recipe", "edit.yaml": "weight_patch", "edit.safetensors": "weight_delta"}
+    (tmp_path / "book.yaml").write_text(yaml.safe_dump({**doc["book"], "schema_version": 3,
+                                                         "treatments": {"edit": recipe.to_treatment()}}))
+    entries = {e.path: e.kind for e in build_manifest(tmp_path, [("address_book", "book.yaml")]).documents}
+    assert entries == {"book.yaml": "address_book", "edit.yaml": "weight_patch", "edit.safetensors": "weight_delta"}
 
 
 @pytest.mark.parametrize("form, tensors, delta", [

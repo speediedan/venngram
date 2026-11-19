@@ -31,10 +31,10 @@ verified one (see below), and :func:`rows` lists every candidate.
     generations/<id>/mined_rules.yaml                  # drafting rules mined from every crawled map
 
 The index is a **partitioned parquet dataset**, partitioned by kind and by subject (the architecture for family-level
-documents such as maps and verification records; the model id for checkpoint documents such as books and recipes), so
-a lookup reads one small file and a query over the Hub (DuckDB over ``hf://``) reads only its partitions. A rebuild
-writes a new generation and then the header, so a reader never sees a half-written index and a removed document leaves
-no stale row.
+documents such as maps and verification records; the model id for checkpoint documents such as books), so a lookup
+reads one small file and a query over the Hub (DuckDB over ``hf://``) reads only its partitions. A rebuild writes a new
+generation and then the header, so a reader never sees a half-written index and a removed document leaves no stale
+row.
 
 **Lookup** (:func:`lookup_map`, used by :func:`venngram.maps.component_map_for` after maps registered in the running
 process): the configured registries in order (:func:`registries`: ``VENNGRAM_REGISTRIES``, else
@@ -373,14 +373,13 @@ def newest_readable(kind: str, subject: str = "") -> int | None:
     from venngram.maps.verification import RECORD_SCHEMA_VERSION
     from venngram.ops import OP_SPECS_WINDOW
     from venngram.patches import WEIGHT_PATCH_WINDOW
-    from venngram.recipe import RECIPE_WINDOW
     from venngram.support import SCHEMA_WINDOW as SUPPORT_WINDOW
 
     if kind == "component_map":
         return OVERLAY_SCHEMA_VERSION if subject.startswith(OVERLAY_SUBJECT_PREFIX) else COMPONENT_MAP_SCHEMA_VERSION
-    return {"rules": RULES_SCHEMA_VERSION, "address_book": BOOK_WINDOW[1], "recipe": RECIPE_WINDOW[1],
-            "support_record": SUPPORT_WINDOW[1], "verification_record": RECORD_SCHEMA_VERSION,
-            "op_specs": OP_SPECS_WINDOW[1], "weight_patch": WEIGHT_PATCH_WINDOW[1]}.get(kind)
+    return {"rules": RULES_SCHEMA_VERSION, "address_book": BOOK_WINDOW[1], "support_record": SUPPORT_WINDOW[1],
+            "verification_record": RECORD_SCHEMA_VERSION, "op_specs": OP_SPECS_WINDOW[1],
+            "weight_patch": WEIGHT_PATCH_WINDOW[1]}.get(kind)
 
 
 def _pass_over(reference: str, detail: str) -> None:
@@ -502,9 +501,6 @@ def _subject_of(kind: str, doc: Any) -> tuple[str | None, str | None, str | None
         models = (doc.get("applies_to") or {}).get("models") or []
         first = models[0] if models and isinstance(models[0], Mapping) else {}
         return None, first.get("id"), first.get("revision")
-    if kind == "recipe":
-        model = doc.get("model") or {}
-        return None, model.get("id"), model.get("revision")
     return None, None, None
 
 

@@ -35,19 +35,30 @@ component map       4 -> 5     none (schema 5 adds per-row ``layout``, which the
 overlay map         4 -> 5     none (schema 5 adds templates)
 recipe              1 -> 2     one ``method`` and its ``treatments`` become one stage of ops
                                (:func:`venngram.recipe.migrate`)
+recipe              -> book    recipe -> address book: the recipe becomes its book's treatment (named by its
+                               ``name``), since the ``kind: recipe`` document is retired
 support record      1 -> 2     the top-level steering contract moves under ``sections.steering``
 ==================  =========  ==================================================================================
 
-An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a recipe at schema 2 or 3 (3 adds
-``weights``), a support record at schema 2 to 4, a rule set, an ``op_specs`` document (2 adds parameter targets), a
-``weight_patch`` document and a ``graph_subset`` document are current already. A book that names graphs reads them
-relative to ``base_dir`` (the document's directory, from the command line).
-A document newer than this venngram reads is refused as :class:`~venngram.errors.NewerSchemaError`.
+The ``kind: recipe`` document is retired (a treatment is written in its book), so a recipe of any schema is rewritten
+as an address book: its inline ``book``, or the book its ``book`` path names (relative to ``base_dir``), with the recipe
+added under ``treatments`` (:meth:`venngram.recipe.Recipe.to_treatment`) at the book schema the treatment needs (3 for
+``weights``, 4 for ``gradients`` or a ``readout``, 5 for a graph target). A book that already has a treatment of the
+recipe's name is refused by name. A book read from a path keeps its own paths, which resolve from its directory, so the
+treatment's operand files are rewritten relative to it, and the command refuses ``--write`` for such a recipe when the
+book sits in another directory: write the output beside the book instead.
+
+An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a support record at schema 2 to 4, a
+rule set, an ``op_specs`` document (2 adds parameter targets), a ``weight_patch`` document and a ``graph_subset``
+document are current already. A book that names graphs reads them relative to ``base_dir`` (the document's directory,
+from the command line). A document newer than this venngram reads is refused as
+:class:`~venngram.errors.NewerSchemaError`.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
 import argparse
 import copy
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
@@ -103,13 +114,58 @@ def _overlay_map(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str
 
 
 def _recipe(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str, Any]:
+    from venngram.book import AddressBook, GRADIENTS_SCHEMA, WEIGHTS_SCHEMA
     from venngram.recipe import migrate as migrate_recipe, Recipe, RECIPE_SCHEMA_VERSION
 
     if doc.get("schema_version") == 1:
         doc = migrate_recipe(doc, source=source)
         steps.append(f"recipe 1 -> {RECIPE_SCHEMA_VERSION}: `method` and `treatments` became one stage of ops")
-    Recipe.from_mapping(doc, source=source, base_dir=_BASE.get())
-    return doc
+    base = _BASE.get()
+    recipe = Recipe.from_mapping(doc, source=source, base_dir=base)
+    name = doc.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"{source}: a recipe becomes a treatment named by its `name`, and this one has none.")
+    if isinstance(doc["book"], str):
+        book_path = Path(base or ".") / doc["book"]
+        with open(book_path, encoding="utf-8") as fh:
+            book, book_base, where = yaml.safe_load(fh), book_path.parent, f"its book `{doc['book']}`"
+    else:
+        book, book_base, where = dict(doc["book"]), base, "its inline book"
+    treatments = dict(book.get("treatments") or {})
+    if name in treatments:
+        raise ValueError(f"{source}: {where} already has a treatment `{name}`, so the recipe cannot become one of that "
+                         "name; rename the recipe or that treatment first.")
+    needs = [recipe.book.schema_version]  # a graph target needs the book's `graphs`, which are schema 5 already
+    if recipe.weights:
+        needs.append(WEIGHTS_SCHEMA)
+    if recipe.gradients or recipe.readout is not None or any(st.readout is not None for st in recipe.stages):
+        needs.append(GRADIENTS_SCHEMA)
+    out = {"schema_version": max(needs), **{k: v for k, v in book.items() if k != "schema_version"}}
+    out.setdefault("name", name)
+    out["treatments"] = {**treatments, name: _rebased(recipe.to_treatment(), base, book_base)}
+    AddressBook.from_mapping(out, source=source, base_dir=book_base)
+    steps.append(f"recipe -> address book: the recipe became treatment `{name}` of {where}")
+    return out
+
+
+def _rebased(body: dict[str, Any], base: Path | None, book_base: Path | None) -> dict[str, Any]:
+    """``body`` with its operands' files relative to ``book_base`` (the book's directory) instead of ``base``."""
+    here, there = Path(base or ".").resolve(), Path(book_base or ".").resolve()
+    if here == there:
+        return body
+    for operand in (body.get("operands") or {}).values():
+        for key in ("file", "patch"):
+            if isinstance(operand.get(key), str):
+                operand[key] = Path(os.path.relpath(here / operand[key], there)).as_posix()
+    return body
+
+
+def _book_elsewhere(doc: Any, base: Path) -> Path | None:
+    """The directory of a recipe's book named by path, when it is not ``base`` (where ``--write`` would put it)."""
+    if not isinstance(doc, Mapping) or doc.get("kind") != "recipe" or not isinstance(doc.get("book"), str):
+        return None
+    there = (base / doc["book"]).parent
+    return None if there.resolve() == base.resolve() else there
 
 
 def _support_record(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str, Any]:
@@ -199,10 +255,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     path = Path(args.path)
     try:
-        migrated, steps = migrate(yaml.safe_load(path.read_text(encoding="utf-8")), source=str(path),
-                                  base_dir=path.parent)
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        migrated, steps = migrate(doc, source=str(path), base_dir=path.parent)
     except (ValueError, OSError) as err:
         print(f"{path}: {err}", file=sys.stderr)
+        return 1
+    elsewhere = _book_elsewhere(doc, path.parent)
+    if args.write and elsewhere is not None:
+        print(f"{path}: the recipe's book is in {elsewhere}, and its paths resolve from there, so the migrated book "
+              "belongs beside it: print it and write it there instead of using --write.", file=sys.stderr)
         return 1
     for step in steps or ["current already"]:
         print(f"{path}: {step}", file=sys.stderr)

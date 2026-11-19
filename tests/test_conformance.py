@@ -1,4 +1,4 @@
-"""A published directory checked from the outside: every document loads, recipes against support records."""
+"""A published directory checked from the outside: every document loads, books against support records."""
 import pytest
 import yaml
 
@@ -19,7 +19,7 @@ def cache(tmp_path, monkeypatch):
 
 
 def published(tmp_path, tokens="all"):
-    """A book with a sidecar set, a recipe over it, and a support record, published to a local store."""
+    """A book with a sidecar set, a book importing it with a treatment, and a support record, published locally."""
     src = tmp_path / "src"
     (src / "books").mkdir(parents=True)
     value = units_value({15: list(range(0, 2000, 3))}, 9216, src / "books" / "chess.safetensors",
@@ -27,15 +27,15 @@ def published(tmp_path, tokens="all"):
     (src / "books" / "chess.yaml").write_text(yaml.safe_dump({
         "schema_version": 1, "name": "chess", "portability": "checkpoint", "applies_to": {"models": [MODEL]},
         "sets": {"chess": {"point": "mlp.out.hook_in", "units": value}}}))
-    (src / "recipes").mkdir()
-    (src / "recipes" / "chess.yaml").write_text(yaml.safe_dump({
-        "schema_version": 2, "kind": "recipe", "name": "chess", "model": {**MODEL, "revision_source": "pinned"},
-        "book": "../books/chess.yaml", "stages": [{"site": "mlp.out.hook_in", "tokens": tokens, "ops": [
-            {"op": "add", "target": {"set": "chess"}, "value": {"dose": 0.8}}]}]}))
+    (src / "books" / "steer.yaml").write_text(yaml.safe_dump({
+        "schema_version": 1, "name": "steer", "imports": {"base": "chess.yaml"}, "sets": {"top": {"layers": "-4:"}},
+        "treatments": {"chess": {"model": {**MODEL, "revision_source": "pinned"}, "stages": [{
+            "site": "mlp.out.hook_in", "tokens": tokens, "ops": [
+                {"op": "add", "target": {"set": "base.chess"}, "value": {"dose": 0.8}}]}]}}}))
     (src / "support").mkdir()
     (src / "support" / "steerer.yaml").write_text(yaml.safe_dump(STEERER))
     pub = tmp_path / "pub"
-    publish("local", str(pub), src, documents=[("recipe", "recipes/chess.yaml"),
+    publish("local", str(pub), src, documents=[("address_book", "books/steer.yaml"),
                                                ("support_record", "support/steerer.yaml")])
     return f"local:{pub}", pub
 
@@ -44,21 +44,22 @@ def test_every_document_loads_and_sidecars_are_listed_not_loaded(tmp_path):
     location, _ = published(tmp_path)
     report = check(location)
     assert report.ok and {(d.kind, d.path) for d in report.documents} == {
-        ("recipe", "recipes/chess.yaml"), ("address_book", "books/chess.yaml"),
+        ("address_book", "books/steer.yaml"), ("address_book", "books/chess.yaml"),
         ("support_record", "support/steerer.yaml")}
     assert report.unloaded == (("units", "books/chess.safetensors"),)
     assert "0 failing" in report.render()
 
 
-def test_recipes_are_checked_against_each_support_record(tmp_path):
+def test_treatments_are_checked_against_each_support_record(tmp_path):
     location, _ = published(tmp_path, tokens="prompt")
     steerer = read_support(f"{location}:support/steerer.yaml")  # a support record read by reference
     assert steerer.name == "steerer" and steerer.tuning is None  # schema 1: a steering section only
     assert steerer.steering.site_ok("mlp.out.hook_in") and not steerer.steering.site_ok("attn.hook_z")
     report = check(location, supports=[steerer, Support(ops=frozenset({"add"}), tokens=frozenset({"prompt"}))])
-    (recipe,) = [d for d in report.documents if d.kind == "recipe"]
-    assert recipe.refusals == {"steerer": ("stage 0 (mlp.out.hook_in) op 0 (`add`): token scope `prompt` is not "
-                                           "supported",), "support 1": ()}
+    steer, chess = (next(d for d in report.documents if d.path == f"books/{n}.yaml") for n in ("steer", "chess"))
+    assert steer.refusals == {"steerer": ("treatment `chess`: stage 0 (mlp.out.hook_in) op 0 (`add`): token scope "
+                                          "`prompt` is not supported",), "support 1": ()}
+    assert chess.refusals == {}  # no treatments, and neither record offers a tuning contract
     assert not report.ok and "refused by steerer" in report.render()
 
 
@@ -67,8 +68,19 @@ def test_a_document_that_fails_to_load_is_reported_not_raised(tmp_path):
     (pub / "books" / "chess.yaml").write_text("tampered: true\n")
     report = check(location)
     failing = {d.path: d.error for d in report.documents if not d.ok}
-    assert set(failing) == {"books/chess.yaml", "recipes/chess.yaml"}  # the recipe needs the book
+    assert set(failing) == {"books/chess.yaml", "books/steer.yaml"}  # the treated book imports the tampered one
     assert all("sha256" in e for e in failing.values())
+
+
+def test_a_retired_recipe_entry_is_listed_not_loaded(tmp_path):
+    location, pub = published(tmp_path)
+    manifest = yaml.safe_load((pub / "venngram.yaml").read_text())
+    manifest["documents"].append({"kind": "recipe", "path": "recipes/chess.yaml"})
+    (pub / "venngram.yaml").write_text(yaml.safe_dump(manifest))
+    with pytest.warns(UserWarning, match="retired kind `recipe`"):
+        report = check(location)
+    assert report.ok and ("recipe", "recipes/chess.yaml") in report.unloaded
+    assert all(d.kind != "recipe" for d in report.documents)
 
 
 def test_the_command_exits_by_outcome(tmp_path, capsys):

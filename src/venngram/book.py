@@ -48,8 +48,10 @@ have an empty ``sets``:
 .. code-block:: yaml
 
     graphs:
-      reasoning: {file: reasoning.yaml, sha256: 4be1...} A ``kind: recipe`` document, written before the two
-kinds merged, is still read (:meth:`venngram.recipe.Recipe.as_book` turns it into its book with one treatment).
+      reasoning: {file: reasoning.yaml, sha256: 4be1...}
+
+A standalone ``kind: recipe`` document, written before books and recipes merged, is retired:
+``python -m venngram.migrate`` rewrites one as its book, carrying the recipe as a treatment (:mod:`venngram.migrate`).
 
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the

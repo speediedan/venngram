@@ -23,8 +23,9 @@ Keep the sample bounded; change it when a new structural behavior warrants cover
 workflow fetches the same pinned generation, compares the export byte for byte, and runs the same sampled contracts
 against the fresh export. Network failures fail that scheduled check without affecting pull request CI.
 
-This initial contract covers base and overlay maps. Address books, recipes and other documents keep their existing
-schema, support and published-document conformance tests; they can gain model-level contracts when needed.
+This initial contract covers base and overlay maps. Address books (with their treatments) and other documents keep
+their existing schema, support and published-document conformance tests; they can gain model-level contracts when
+needed.
 
 ## Inspecting and rebuilding the seed index
 

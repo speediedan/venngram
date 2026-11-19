@@ -10,7 +10,7 @@ from venngram.book import AddressBook
 from venngram.errors import AddressError, StoreError
 from venngram.manifest import build_manifest, Manifest, MANIFEST_NAME, satisfies, sha256_of, UnknownKindWarning
 from venngram.recipe import Recipe
-from venngram.store import fetch, fetch_manifest, load, pin, publish, Reference
+from venngram.store import fetch, fetch_manifest, load, loader_kinds, pin, publish, Reference
 from venngram.units import units_value
 
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
@@ -23,7 +23,7 @@ def cache(tmp_path, monkeypatch):
 
 
 def write_docs(root: Path) -> None:
-    """A book whose set's units are a sidecar, a book it imports, and a recipe over the first book."""
+    """A book whose set's units are a sidecar, a book it imports, and a book treating the first one's set."""
     (root / "books").mkdir(parents=True)
     value = units_value({15: DENSE, 16: [7, 8]}, 9216, root / "books" / "chess.safetensors", relative_to=root / "books")
     (root / "books" / "common.yaml").write_text(yaml.safe_dump(
@@ -31,26 +31,25 @@ def write_docs(root: Path) -> None:
     (root / "books" / "chess.yaml").write_text(yaml.safe_dump({
         "schema_version": 1, "name": "chess", "portability": "checkpoint", "applies_to": {"models": [MODEL]},
         "imports": {"base": "common.yaml"}, "sets": {"chess": {"point": "mlp.out.hook_in", "units": value}}}))
-    (root / "recipes").mkdir()
-    (root / "recipes" / "chess.yaml").write_text(yaml.safe_dump({
-        "schema_version": 2, "kind": "recipe", "name": "chess", "model": {**MODEL, "revision_source": "pinned"},
-        "book": "../books/chess.yaml",
-        "stages": [{"site": "mlp.out.hook_in", "ops": [{"op": "add", "target": {"set": "chess"},
-                                                        "value": {"dose": 0.8}}]}]}))
+    (root / "books" / "steer.yaml").write_text(yaml.safe_dump({
+        "schema_version": 1, "name": "steer", "imports": {"chess": "chess.yaml"}, "sets": {"top": {"layers": "-4:"}},
+        "treatments": {"chess": {"model": {**MODEL, "revision_source": "pinned"}, "stages": [{
+            "site": "mlp.out.hook_in", "ops": [{"op": "add", "target": {"set": "chess.chess"},
+                                               "value": {"dose": 0.8}}]}]}}}))
 
 
-DOCS = [("recipe", "recipes/chess.yaml")]
+DOCS = [("address_book", "books/steer.yaml")]
 
 
 def test_a_manifest_lists_each_document_with_what_it_needs(tmp_path):
     write_docs(tmp_path)
     manifest = build_manifest(tmp_path, DOCS, requires={"venngram": ">=0.1.0.dev0"})
     by_path = {e.path: e for e in manifest.documents}
-    assert set(by_path) == {"recipes/chess.yaml", "books/chess.yaml", "books/common.yaml", "books/chess.safetensors"}
+    assert set(by_path) == {"books/steer.yaml", "books/chess.yaml", "books/common.yaml", "books/chess.safetensors"}
     assert by_path["books/chess.yaml"].kind == "address_book" and by_path["books/chess.safetensors"].kind == "units"
     assert by_path["books/chess.yaml"].needs == ("books/chess.safetensors", "books/common.yaml")
-    assert by_path["recipes/chess.yaml"].schema_version == 2
-    assert {e.path for e in manifest.closure("recipes/chess.yaml")} == set(by_path)
+    assert by_path["books/steer.yaml"].schema_version == 1
+    assert {e.path for e in manifest.closure("books/steer.yaml")} == set(by_path)
     assert all(e.sha256 == sha256_of(tmp_path / e.path) for e in manifest.documents)
     manifest.write(tmp_path)
     assert Manifest.from_file(tmp_path / MANIFEST_NAME).to_mapping() == manifest.to_mapping()
@@ -67,10 +66,28 @@ def test_unknown_kinds_are_skipped_and_kept():
         manifest.entry("h.bin")
 
 
+def test_a_retired_recipe_entry_is_skipped_with_a_warning_naming_migrate(tmp_path):
+    doc = {"venngram_schema_version": 1, "documents": [{"kind": "address_book", "path": "a.yaml"},
+                                                       {"kind": "recipe", "path": "recipes/chess.yaml"}]}
+    with pytest.warns(UnknownKindWarning, match=r"retired kind `recipe`: .*python -m venngram\.migrate") as caught:
+        manifest = Manifest.from_mapping(doc)
+    assert len(caught) == 1 and "this venngram knows" not in str(caught[0].message)
+    assert [e.path for e in manifest.documents] == ["a.yaml"] and [e.path for e in manifest.skipped] == [
+        "recipes/chess.yaml"]
+    assert manifest.to_mapping()["documents"][1] == {"kind": "recipe", "path": "recipes/chess.yaml"}  # carried
+    write_docs(tmp_path)
+    with pytest.raises(StoreError, match="retired kind `recipe`"):
+        build_manifest(tmp_path, [("recipe", "books/steer.yaml")])
+
+
+def test_the_store_has_no_recipe_loader():
+    assert "recipe" not in loader_kinds() and "address_book" in loader_kinds()
+
+
 @pytest.mark.parametrize("change, match", [
     (lambda d: d.update(venngram_schema_version=2), "must be in 1..1"),
     (lambda d: d.update(requires={"venngram": ">=99"}), "requires venngram >=99"),
-    (lambda d: d["documents"].append({"kind": "recipe", "path": "a.yaml"}), "listed twice"),
+    (lambda d: d["documents"].append({"kind": "units", "path": "a.yaml"}), "listed twice"),
     (lambda d: d["documents"][0].update(path="../a.yaml"), "relative POSIX path"),
     (lambda d: d["documents"][0].update(needs=["missing.yaml"]), "does not list"),
     (lambda d: d["documents"][0].update(sha256="abc"), "64 lowercase hex"),
@@ -111,14 +128,15 @@ def published(tmp_path) -> tuple[Path, Manifest]:
     return dest, manifest
 
 
-def test_a_published_book_and_recipe_load_by_reference(tmp_path):
+def test_a_published_book_and_its_treatment_load_by_reference(tmp_path):
     dest, manifest = published(tmp_path)
     sha = {e.path: e.sha256 for e in manifest.documents}
     book = load(f"local:{dest}:books/chess.yaml#{sha['books/chess.yaml']}")
     assert isinstance(book, AddressBook) and book.sets()["chess"].units.for_layer(16, 9216) == (7, 8)
     assert "base.mlp" in book.sets()
-    recipe = load(f"local:{dest}:recipes/chess.yaml#{sha['recipes/chess.yaml']}")
-    assert isinstance(recipe, Recipe) and recipe.stages[0].ops[0].unit_doses(recipe.book)[(16, 7)] == 0.8
+    steer = load(f"local:{dest}:books/steer.yaml#{sha['books/steer.yaml']}")
+    treatment = steer.treatments["chess"]
+    assert isinstance(treatment, Recipe) and treatment.stages[0].ops[0].unit_doses(steer)[(16, 7)] == 0.8
 
 
 def test_fetching_refuses_what_it_cannot_vouch_for(tmp_path):

@@ -497,12 +497,6 @@ def _load_book(path: Path) -> Any:
     return AddressBook.from_file(path)
 
 
-def _load_recipe(path: Path) -> Any:
-    from venngram.recipe import load_recipe
-
-    return load_recipe(path)
-
-
 def _load_map(path: Path) -> Any:
     from venngram.maps.schema import load_map
 
@@ -546,8 +540,8 @@ register_store("local", LocalStore(), versioned=False)
 register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
 register_store("hub-bucket", HubBucketStore(), versioned=False)
-for _kind, _loader in (("address_book", _load_book), ("recipe", _load_recipe), ("component_map", _load_map),
-                       ("rules", _load_rules), ("verification_record", _read_yaml),
+for _kind, _loader in (("address_book", _load_book), ("component_map", _load_map), ("rules", _load_rules),
+                       ("verification_record", _read_yaml),
                        ("support_record", _load_support), ("op_specs", _load_op_specs),
                        ("weight_patch", _load_weight_patch), ("graph_subset", _load_graph)):
     register_loader(_kind, _loader)
