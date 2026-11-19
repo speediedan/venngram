@@ -14,32 +14,31 @@ Recipes
 ^^^^^^^
 
 A recipe is a *treatment* over an address book's sets: what is done at which sites, to which units or features, in
-which order. It is kept apart from the evidence (generations, graphs, scores, which it names). Treatments are written in
-the book they treat, by name, under its ``treatments`` section (:mod:`venngram.book`), so one selection carries several
+which order. It is kept apart from the evidence (generations, graphs, scores, which it names). A treatment lives in the
+book it treats, by name, under its ``treatments`` section (:mod:`venngram.book`), so one selection carries several
 treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` reads one, and
-:meth:`Recipe.to_treatment` writes one.
-
-A ``kind: recipe`` document naming its book (a path, or the book inline), the form written before books and recipes
-merged, is still read, and :meth:`Recipe.as_book` turns it into its book with one treatment:
+:meth:`Recipe.to_treatment` writes one. :class:`Recipe` is a treatment in memory: its book, and the body below.
 
 .. code-block:: yaml
 
-    schema_version: 2
-    kind: recipe
-    name: chess-then-reject
-    model: {id: Qwen/Qwen3.5-4B, revision: 3f1e..., revision_source: pinned}
-    book: ./chess.yaml                       # a path relative to the recipe, or the book inline
-    operands:                                # named tensors, each in a declared basis
-      concept: {file: dirs.safetensors, key: concept, sha256: ..., shape: [2560], basis: unfolded}
-    stages:                                  # in order; a stage applies at one site
-      - site: mlp.out.hook_in
-        tokens: all                          # all | last | prompt | generated | {positions: [...]} | {slice: "-4:"}
-        ops:                                 # in order; each sees the previous op's output
-          - {op: add, target: {set: chess}, value: {dose: 0.8}}
-          - {op: add, target: {set: openings}, value: {doses: {15: {4041: 0.5}}}}
-          - {op: reject, operand: concept, params: {fraction: 1.0}}
-    sampling: {temperature: 0.7}
-    evidence: {examples: [...]}
+    treatments:
+      chess-then-reject:
+        model: {id: Qwen/Qwen3.5-4B, revision: 3f1e..., revision_source: pinned}
+        operands:                              # named tensors, each in a declared basis
+          concept: {file: dirs.safetensors, key: concept, sha256: ..., shape: [2560], basis: unfolded}
+        stages:                                # in order; a stage applies at one site
+          - site: mlp.out.hook_in
+            tokens: all                        # all | last | prompt | generated | {positions: [...]} | {slice: "-4:"}
+            ops:                               # in order; each sees the previous op's output
+              - {op: add, target: {set: chess}, value: {dose: 0.8}}
+              - {op: add, target: {set: openings}, value: {doses: {15: {4041: 0.5}}}}
+              - {op: reject, operand: concept, params: {fraction: 1.0}}
+        sampling: {temperature: 0.7}
+        evidence: {examples: [...]}
+
+The standalone ``kind: recipe`` document, written before books and recipes merged (the body above with a header and a
+``book``), is retired: only ``python -m venngram.migrate`` reads it, and writes its book with the recipe as a treatment
+named by the recipe (:mod:`venngram.migrate`).
 
 **Ops are declared specs** (:mod:`venngram.ops`): this module validates a recipe against them and composes recipes; it
 never executes an op. Applying a recipe belongs to the consumer (e.g. interpretune steers, finetuning-scheduler tunes a
@@ -121,10 +120,10 @@ different recipes at one site must commute (the same summing or multiplying op, 
 composition must state ``order: listed``. ``weights`` and ``gradients`` ops compose the same way, section by section
 (:func:`compose_weights`).
 
-**Versions**: schema 2 is written, schema 3 when the recipe has ``weights``, schema 4 when it has ``gradients``
-or a ``readout``, or schema 5 when an op targets a graph;
-schema 1 (one ``method`` and its
-``treatments``) is read through :func:`migrate` with a deprecation warning.
+**Versions**: a treatment is read at the recipe schema its sections need: 2, 3 when it has ``weights``, 4 when it has
+``gradients`` or a ``readout``, or 5 when an op targets a graph (the book's own schema says the same, see
+:mod:`venngram.book`). A retired recipe document at schema 1 (one ``method`` and its ``treatments``) is rewritten
+through :func:`migrate`.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -134,8 +133,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
 from venngram.book import _states_readout, AddressBook
@@ -148,10 +145,10 @@ from venngram.readouts import READOUTS
 from venngram.resolve import gradient_of
 from venngram.units import _sha256 as _sha256_file
 
-#: The recipe document schema this code writes.
+#: The recipe schema of a treatment without ``weights``, ``gradients``, a ``readout`` or a graph target.
 RECIPE_SCHEMA_VERSION = 2
 
-#: The recipe schemas this code reads (schema 1 through :func:`migrate`).
+#: The recipe schemas this code reads (schema 1, of a retired recipe document, through :func:`migrate`).
 RECIPE_WINDOW = (1, 5)
 
 #: The first recipe schema with a ``weights`` section (a key an older reader would pass over silently).
@@ -410,7 +407,7 @@ class Stage:
 
 @dataclass(frozen=True)
 class Recipe:
-    """A treatment document (see the module docstring). Use :meth:`from_mapping` or :meth:`from_file`."""
+    """A treatment over its book (see the module docstring). A book's loader reads one with :meth:`treatment`."""
 
     name: str
     model_id: str
@@ -436,7 +433,10 @@ class Recipe:
     @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>",
                      base_dir: str | Path | None = None) -> "Recipe":
-        """Read a recipe document (schema 2, or schema 1 through :func:`migrate`), refusing a malformed one by name.
+        """Read a recipe body with its header (``schema_version``, ``kind``, ``name``) and its ``book`` (an
+        :class:`~venngram.book.AddressBook`, a path relative to ``base_dir``, or a book mapping), refusing a malformed
+        one by name. :meth:`treatment` reads a book's treatment through it, and :mod:`venngram.migrate` a retired
+        recipe document (schema 1 through :func:`migrate`, with a deprecation warning).
 
         Raises:
             AddressError: If a key is missing or malformed, an op is unknown or misused (an operand of the wrong kind, a
@@ -536,19 +536,10 @@ class Recipe:
             doc.pop(key)
         return doc
 
-    def as_book(self) -> AddressBook:
-        """The book this recipe treats, carrying it as a treatment (named by the recipe) beside any it had."""
-        return replace(self.book, treatments={**self.book.treatments, self.name: self})
-
-    @classmethod
-    def from_file(cls, path: str | Path) -> "Recipe":
-        """Read a recipe document from YAML (loading runs no code)."""
-        path = Path(path)
-        with open(path, encoding="utf-8") as fh:
-            return cls.from_mapping(yaml.safe_load(fh), source=str(path), base_dir=path.parent)
-
     def to_mapping(self) -> dict[str, Any]:
-        """The recipe as a schema 2 document (3 when it has ``weights``, 4 when it has ``gradients``)."""
+        """The treatment body plus a header (``schema_version``, ``kind: recipe``, ``name``) and the ``book`` it was
+        read with; :meth:`to_treatment` drops the header and the book. The schema is the one its sections need (see
+        the module docstring)."""
         doc: dict[str, Any] = {
             "schema_version": _schema(weights=bool(self.weights), gradients=bool(self.gradients),
                                       readout=self.readout is not None or any(s.readout for s in self.stages),
@@ -1303,30 +1294,12 @@ class Composition:
         return compose_weights(self.recipes, ordered=self.ordered, section="gradients")
 
 
-def load_recipe(path: str | Path) -> Recipe | Composition:
-    """A recipe document, or a composition (``compose: [a.yaml, b.yaml]``, optional ``order: listed``)."""
-    path = Path(path)
-    with open(path, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh)
-    if isinstance(doc, Mapping) and "compose" in doc:
-        _check_header({**doc, "kind": doc.get("kind", "recipe")}, str(path))
-        parts = doc["compose"]
-        if not isinstance(parts, list) or not parts or not all(isinstance(p, str) for p in parts):
-            raise AddressError(f"{path}: `compose` lists recipe paths.")
-        order = doc.get("order")
-        if order not in (None, "listed"):
-            raise AddressError(f"{path}: `order` is `listed` or absent, got {order!r}.")
-        return Composition(tuple(Recipe.from_file(path.parent / p) for p in parts), ordered=order == "listed")
-    return Recipe.from_mapping(doc, source=str(path), base_dir=path.parent)
-
-
 __all__ = [
     "BoundOp",
     "compose",
     "compose_weights",
     "ComposedStage",
     "Composition",
-    "load_recipe",
     "migrate",
     "Op",
     "Operand",

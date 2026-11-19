@@ -7,7 +7,7 @@ from venngram import ParamSpace, select
 from venngram.errors import AddressError
 from venngram.operands import read_operand, write_operands
 from venngram.ops import check_support, OPS, OpSpec, register_op, Support
-from venngram.recipe import compose, load_recipe, migrate, Recipe, RecipeSchemaWarning
+from venngram.recipe import compose, Composition, migrate, Recipe, RecipeSchemaWarning
 
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
 
@@ -251,10 +251,12 @@ def test_prompt_and_generated_scopes_read_migrate_and_need_support(apply_to, sco
 def test_operands_round_trip_through_a_sidecar(tmp_path):
     sha = write_operands(tmp_path / "dirs.safetensors", {"concept": ([0.5, -1.0, 2.0, 0.0], [4])})
     assert read_operand(tmp_path / "dirs.safetensors", "concept", sha256=sha) == ((0.5, -1.0, 2.0, 0.0), (4,))
-    doc = recipe_doc([{"site": "s", "ops": [{"op": "reject", "operand": "concept"}]}], operands={
-        "concept": {"file": "dirs.safetensors", "key": "concept", "sha256": sha, "shape": [4], "basis": "unfolded"}})
-    (tmp_path / "r.yaml").write_text(yaml.safe_dump(doc))
-    recipe = load_recipe(tmp_path / "r.yaml")
+    from venngram.book import AddressBook
+
+    body = {"model": MODEL, "stages": [{"site": "s", "ops": [{"op": "reject", "operand": "concept"}]}], "operands": {
+        "concept": {"file": "dirs.safetensors", "key": "concept", "sha256": sha, "shape": [4], "basis": "unfolded"}}}
+    (tmp_path / "b.yaml").write_text(yaml.safe_dump({**book_doc({"chess": {13: [7956]}}), "treatments": {"r": body}}))
+    recipe = AddressBook.from_file(tmp_path / "b.yaml").treatments["r"]
     assert recipe.operands["concept"].load(recipe.base_dir) == ((0.5, -1.0, 2.0, 0.0), (4,))
     with pytest.raises(AddressError, match="sha256 differs"):
         write_operands(tmp_path / "dirs.safetensors", {"concept": ([1.0, 1.0, 1.0, 1.0], [4])})
@@ -299,13 +301,15 @@ def test_same_op_recipes_merge_and_non_commuting_ops_need_an_order():
         compose([a, r("add", {(1, 1): 1.0}, "x", revision="other")])
 
 
-def test_a_composition_document_loads_its_parts_in_order(tmp_path):
-    for name, op in (("a", "add"), ("b", "scale")):
-        (tmp_path / f"{name}.yaml").write_text(yaml.safe_dump(r(op, {(15, 1): 2.0}, name).to_mapping()))
-    (tmp_path / "both.yaml").write_text(yaml.safe_dump({"schema_version": 2, "compose": ["a.yaml", "b.yaml"],
-                                                         "order": "listed"}))
-    (stage,) = load_recipe(tmp_path / "both.yaml").stages()
+def test_a_books_treatments_compose_in_the_order_given():
+    from venngram.book import AddressBook
+
+    treatments = {name: r(op, {(15, 1): 2.0}, name).to_treatment() for name, op in (("a", "add"), ("b", "scale"))}
+    book = AddressBook.from_mapping({**book_doc({"s0": {15: [1]}}), "treatments": treatments})
+    (stage,) = Composition((book.treatments["a"], book.treatments["b"]), ordered=True).stages()
     assert [b.op.op for b in stage.ops] == ["add", "scale"]
+    with pytest.raises(AddressError, match="does not commute"):
+        Composition((book.treatments["a"], book.treatments["b"])).stages()
 
 
 def test_a_new_op_is_registered_as_a_spec():
@@ -371,8 +375,15 @@ def test_a_treatment_is_refused_by_name_when_it_carries_a_header_or_names_no_set
         AddressBook.from_mapping({**base, "treatments": []})
 
 
-def test_a_recipe_document_reads_as_its_book_with_one_treatment():
-    recipe = Recipe.from_mapping(recipe_doc([add("chess", {"dose": 0.5})], name="legacy"))
-    book = recipe.as_book()
-    assert set(book.treatments) == {"legacy"} and book.treatments["legacy"] is recipe
-    assert set(book.sets()) == {"chess"} and recipe.book.treatments == {}
+def test_a_recipe_document_is_read_only_by_migrate_as_its_book_with_one_treatment():
+    import venngram.recipe
+    from venngram.book import AddressBook
+    from venngram.migrate import migrate as migrate_document
+
+    assert not hasattr(Recipe, "from_file") and not hasattr(Recipe, "as_book")
+    assert not hasattr(venngram.recipe, "load_recipe")
+    doc = recipe_doc([add("chess", {"dose": 0.5})], name="legacy")
+    migrated, _ = migrate_document(doc)
+    book = AddressBook.from_mapping(migrated)
+    assert set(book.treatments) == {"legacy"} and set(book.sets()) == {"chess"}
+    assert book.treatments["legacy"].stages == Recipe.from_mapping(doc).stages

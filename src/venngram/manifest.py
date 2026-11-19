@@ -22,17 +22,22 @@ A directory of venngram documents (a Hub repository, a bucket prefix, a local fo
     documents:
       - {kind: address_book, path: books/chess.yaml, schema_version: 1, sha256: ..., needs: [books/units.safetensors]}
       - {kind: units, path: books/units.safetensors, sha256: ...}
-      - {kind: recipe, path: recipes/chess.yaml, schema_version: 1, sha256: ...,
-         needs: [books/chess.yaml, books/units.safetensors]}
+      - {kind: address_book, path: books/steer.yaml, schema_version: 3, sha256: ...,
+         needs: [books/chess.yaml, books/units.safetensors, patches/edit.yaml, patches/edit.safetensors]}
+      - {kind: weight_patch, path: patches/edit.yaml, schema_version: 1, sha256: ..., needs: [patches/edit.safetensors]}
+      - {kind: weight_delta, path: patches/edit.safetensors, sha256: ...}
     layout: {address_book: "books/{name}.yaml"}   # optional: how a writer names new documents of a kind
 
 **Readers use the manifest only**, never a path convention. Every document is listed with its kind, its own schema
-version, the sha256 of its content and the files it needs (an address book's sidecars and imported books, a recipe's
-book), so a store fetches exactly a document and what it needs, and a layout can change without breaking a reader.
+version, the sha256 of its content and the files it needs (an address book's sidecars, imported books and graphs, and
+the weight patches its treatments name), so a store fetches exactly a document and what it needs, and a layout can
+change without breaking a reader.
 
 **Versions.** A manifest schema outside :data:`MANIFEST_WINDOW`, and a ``requires.venngram`` this version does not
 satisfy, are refused by name. A document of an unknown ``kind`` is skipped with a warning (kept in
-:attr:`Manifest.skipped`), so an older reader still uses the documents it understands.
+:attr:`Manifest.skipped`), so an older reader still uses the documents it understands. A retired kind is skipped the
+same way, and its warning names what replaces it: a ``recipe`` is now a treatment in its book, which
+``python -m venngram.migrate`` writes from the recipe document.
 
 :func:`build_manifest` writes one for a directory: it hashes each document and finds what it needs.
 
@@ -64,11 +69,15 @@ MANIFEST_WINDOW = (1, 1)
 #: registry index; ``rules`` holds an architecture family's verification and drafting rules
 #: (:mod:`venngram.maps.rules`); ``support_record`` is what a consumer honours, or a format adapter offers
 #: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's recipe ops
-#: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a recipe's weight patch (:mod:`venngram.patches`), and
+#: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a treatment's weight patch (:mod:`venngram.patches`), and
 #: ``weight_delta`` its sidecar, read through the patch; ``graph_subset`` is a graph subset a book names
 #: (:mod:`venngram.graphs`), and ``graph_table`` its table sidecar, read through the graph.
-KINDS = ("address_book", "recipe", "component_map", "rules", "verification_record", "units", "index", "support_record",
+KINDS = ("address_book", "component_map", "rules", "verification_record", "units", "index", "support_record",
          "op_specs", "weight_patch", "weight_delta", "graph_subset", "graph_table")
+
+#: Kinds an earlier version listed and this one no longer reads, with what to do about a document of one.
+_RETIRED = {"recipe": "a treatment is written in its book now; run `python -m venngram.migrate` on the document to "
+                      "write its book with the recipe as a treatment"}
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
@@ -142,6 +151,10 @@ class Manifest:
             seen.add(entry.path)
             if entry.kind in KINDS:
                 known.append(entry)
+            elif entry.kind in _RETIRED:
+                warnings.warn(f"{source}: skipping `{entry.path}` of retired kind `{entry.kind}`: "
+                              f"{_RETIRED[entry.kind]}.", UnknownKindWarning, stacklevel=2)
+                skipped.append(entry)
             else:
                 warnings.warn(f"{source}: skipping `{entry.path}` of unknown kind `{entry.kind}` (this venngram "
                               f"knows {', '.join(KINDS)}).", UnknownKindWarning, stacklevel=2)
@@ -320,7 +333,7 @@ def _graph_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
 
 
 def _operand_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
-    """The weight patches a recipe's (or a treatment's) operands name, with their sidecars."""
+    """The weight patches a treatment's operands name, with their sidecars."""
     out: list[tuple[str, Path]] = []
     for operand in ((doc.get("operands") or {}).values() if isinstance(doc, Mapping) else ()):
         if isinstance(operand, Mapping) and isinstance(operand.get("patch"), str):
@@ -334,22 +347,6 @@ def _patch_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
         else []
 
 
-def _recipe_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
-    if not isinstance(doc, Mapping):
-        return []
-    if isinstance(doc.get("compose"), list):
-        out: list[tuple[str, Path]] = []
-        for part in doc["compose"]:
-            path = base / str(part)
-            out += [("recipe", path), *_recipe_needs(_read_yaml(path), path.parent)]
-        return out
-    book = doc.get("book")
-    if isinstance(book, str):
-        path = base / book
-        return [("address_book", path), *_book_needs(_read_yaml(path), path.parent), *_operand_needs(doc, base)]
-    return [*_book_needs(book, base), *_operand_needs(doc, base)]
-
-
 def _read_yaml(path: Path) -> Any:
     if not path.is_file():
         raise StoreError(f"`{path}` is named by a document but is not a file.")
@@ -357,23 +354,26 @@ def _read_yaml(path: Path) -> Any:
         return yaml.safe_load(fh)
 
 
-_NEEDS = {"address_book": _book_needs, "recipe": _recipe_needs, "weight_patch": _patch_needs,
-          "graph_subset": _graph_needs}
+_NEEDS = {"address_book": _book_needs, "weight_patch": _patch_needs, "graph_subset": _graph_needs}
 
 
 def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, requires: Mapping[str, str] | None = None,
                    layout: Mapping[str, str] | None = None) -> Manifest:
     """A manifest for ``documents`` (``(kind, path)`` pairs, paths relative to ``root``).
 
-    Each document is hashed, its schema version read, and the files it needs (an address book's sidecars and relative
-    imports, a recipe's book) found and listed too, as ``units`` and ``address_book`` entries.
+    Each document is hashed, its schema version read, and the files it needs (an address book's sidecars, relative
+    imports, graphs and its treatments' weight patches) found and listed too, each as an entry of its own kind.
 
     Raises:
-        StoreError: If a document or a file it needs is missing or outside ``root``.
+        StoreError: If a document or a file it needs is missing or outside ``root``, or a document is of a retired
+            kind (a manifest listing it would only be skipped by its readers).
     """
     root = Path(root).resolve()
     entries: dict[str, DocumentEntry] = {}
     todo = [(kind, root / path) for kind, path in documents]
+    for kind, path in todo:
+        if kind in _RETIRED:
+            raise StoreError(f"`{path}` is of retired kind `{kind}`: {_RETIRED[kind]}, and list that book.")
     while todo:
         kind, path = todo.pop(0)
         rel = _inside(path, root)

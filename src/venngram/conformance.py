@@ -15,9 +15,10 @@ Document Conformance
 
 Checks a published directory of venngram documents from the outside, the way a reader meets it: fetch its manifest by
 reference at one revision, load every document through its kind's loader (which validates it against the core schema
-and checks every file it needs by sha256), and check each recipe and address book against consumers' support records
-(:class:`venngram.support.SupportRecord`: a book's sets against a record's ``tuning`` section, its treatments and any
-recipe against its ``steering`` section), so a refusal surfaces before any consumer runs the document.
+and checks every file it needs by sha256), and check each address book against consumers' support records
+(:class:`venngram.support.SupportRecord`: a book's sets against a record's ``tuning`` section, its treatments against
+its ``steering`` section, or its ``circuits`` section for ops on graph subsets), so a refusal surfaces before any
+consumer runs the document.
 
 .. code-block:: bash
 
@@ -26,12 +27,12 @@ recipe against its ``steering`` section), so a refusal surfaces before any consu
 
 A location is ``<store>:<ref>[@<revision>]`` (a document reference without its path). ``--support`` takes a
 ``support_record`` file or a document reference to one, and may repeat. The command exits non-zero when a document
-fails to load or a recipe or book asks for something a given consumer does not honour. It is meant to run in a format
+fails to load or a book asks for something a given consumer does not honour. It is meant to run in a format
 adapter's CI and on a schedule over published example repositories.
 
-Kinds that are read through another document (``units`` sidecars, through the book that names them) or that have no
-loader yet are listed, not loaded. (Conformance of a tunable view to the tuning protocol is a different check:
-:mod:`venngram.tuning.conformance`.)
+Kinds that are read through another document (``units`` sidecars, through the book that names them), that have no
+loader yet, or that are retired (``recipe``, which the manifest skips with a warning) are listed, not loaded.
+(Conformance of a tunable view to the tuning protocol is a different check: :mod:`venngram.tuning.conformance`.)
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -48,8 +49,7 @@ from venngram.support import as_record, SupportRecord
 
 @dataclass(frozen=True)
 class DocumentResult:
-    """One document's outcome: whether it loaded and, for a recipe or a book, each consumer's refusals by consumer
-    name."""
+    """One document's outcome: whether it loaded and, for a book, each consumer's refusals by consumer name."""
 
     path: str
     kind: str
@@ -107,8 +107,8 @@ def parse_location(text: str) -> tuple[str, str, str | None]:
 
 
 def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) -> ConformanceReport:
-    """Fetch the manifest at ``location``, load every document at that one revision, and check every recipe and
-    address book against each of ``supports`` (a :class:`venngram.ops.Support` checks recipes only).
+    """Fetch the manifest at ``location``, load every document at that one revision, and check every address book
+    against each of ``supports`` (a :class:`venngram.ops.Support` checks a book's treatments only).
 
     Raises:
         VenngramError: If the location is malformed or its manifest cannot be fetched or read (a document that fails
@@ -129,9 +129,7 @@ def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) ->
             results.append(DocumentResult(entry.path, entry.kind, error=f"{type(err).__name__}: {err}"))
             continue
         refusals = {}
-        if entry.kind == "recipe":
-            refusals = {(s.name or f"support {i}"): tuple(s.check_recipe(doc)) for i, s in enumerate(records)}
-        elif entry.kind == "address_book":
+        if entry.kind == "address_book":
             # a consumer judges what it offers a contract for: a tuning consumer the sets, a steering consumer (or a
             # circuits consumer, for treatments over graphs) the book's treatments; one that offers none does not judge
             for i, s in enumerate(records):
@@ -162,10 +160,10 @@ def read_support(text: str) -> SupportRecord:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m venngram.conformance",
                                      description="Load every document a published venngram manifest lists, and check "
-                                                 "its recipes and books against consumers' support records.")
+                                                 "its books against consumers' support records.")
     parser.add_argument("locations", nargs="+", help="<store>:<ref>[@<revision>], one or more")
     parser.add_argument("--support", action="append", default=[], metavar="FILE_OR_REFERENCE",
-                        help="a support_record to check every recipe and book against (repeatable)")
+                        help="a support_record to check every book against (repeatable)")
     args = parser.parse_args(argv)
     try:
         supports = [read_support(s) for s in args.support]

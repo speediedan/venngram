@@ -122,9 +122,9 @@ gives $o + \mathrm{sg}(x - o)$, so the forward value is $x$ and the gradient rea
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
 a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
 records" below), and `check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
-do not commute unless the composition gives an order. A `kind: recipe` document naming its book (the form written
-before books and recipes merged) is still read, and `Recipe.as_book` turns it into its book with one treatment; schema 1
-recipes are read through `migrate`. Applying a treatment is the consumer's; treatments written in another tool's format
+do not commute unless the composition gives an order. The standalone `kind: recipe` document (the form written before
+books and recipes merged) is retired: `python -m venngram.migrate` rewrites one as its book, carrying the recipe as a
+treatment named by the recipe. Applying a treatment is the consumer's; treatments written in another tool's format
 are read by an adapter outside venngram's core.
 
 ### Graph subsets
@@ -166,15 +166,16 @@ what it applies in its support record's `circuits.subsets` section.
 ### Sharing documents: manifests and stores
 
 A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
-each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars and imports, a recipe's
-book). A **document reference** names one document wherever it lives:
+each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports and graphs, and
+the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
+names `python -m venngram.migrate`. A **document reference** names one document wherever it lives:
 `<store>:<ref>[@<revision>]:<path>[#<sha256>]`, for example
 `hub-model:speediedan/venngram-maps@3f1e...:maps/Qwen3ForCausalLM.yaml`.
 
 ```python
 from venngram.store import load, publish
 
-publish("hub-dataset", "me/my-sets", "./sets", documents=[("recipe", "recipes/chess.yaml")])
+publish("hub-dataset", "me/my-sets", "./sets", documents=[("address_book", "books/chess.yaml")])
 book = load("hub-dataset:me/my-sets:books/chess.yaml")
 ```
 
@@ -188,10 +189,9 @@ documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
 reader meets it: every listed document is fetched at one revision and loaded by its kind, every book's sets are
-checked against each support record's `tuning` section, and its treatments (and any recipe) against its `steering`
-section, or, for ops on graph subsets, its `circuits` section. It exits non-zero when a
-document fails to load or a recipe or book asks for more than a given record honours, so a format adapter's CI, or a
-scheduled job over published examples, can run it.
+checked against each support record's `tuning` section, and its treatments against its `steering` section, or, for
+ops on graph subsets, its `circuits` section. It exits non-zero when a document fails to load or a book asks for more
+than a given record honours, so a format adapter's CI, or a scheduled job over published examples, can run it.
 
 ### Support records
 
@@ -233,7 +233,7 @@ A **map source** derives a component map from something that knows an architectu
 with it), bundled rule documents for transformer and state-space blocks, or any a family publishes (the `draft`
 section of a `kind: rules` document). What no rule names becomes a `draft.*` row for a person or an agent to confirm, and
 `draft_with_model` asks a model the caller chooses to complete the draft, then checks it against the model; a **format** translates documents
-another tool writes into books and recipes, for tools that do not integrate venngram themselves. Both are found by
+another tool writes into books and their treatments, for tools that do not integrate venngram themselves. Both are found by
 entry point (`venngram.map_sources`, `venngram.formats`) or registered in process, and record their name and version as
 provenance. A format's translation is written to a directory (`venngram.sources.write_translation`) and published like
 any other documents. A manifest can list an installable format as data (a support record's `formats` section, naming
@@ -425,7 +425,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
 | address book | 1 to 7 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction | ignored at the top level |
-| recipe | 1 to 5 | 2, 3 when it has `weights`, 4 when it has `gradients` or a `readout`, 5 when an op targets a graph | refused in `method` and in an op's parameters |
+| recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 6 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
@@ -440,7 +440,7 @@ always does, since a reader that skipped it would resolve the wrong thing silent
 any new key bumps it.
 
 **Too new, too old, malformed.** Each is refused by name, with its own message. A document newer than the reader is a
-`venngram.NewerSchemaError` (a `ValueError`; for books and recipes also an `AddressError`), so code that serves
+`venngram.NewerSchemaError` (a `ValueError`; for books and retired recipes also an `AddressError`), so code that serves
 documents from shared places can tell it apart from a broken one. Registry lookups do exactly that: a registry may hold
 documents written for a newer venngram, and a lookup passes over them with a warning and serves the best one it reads,
 while a malformed document of a schema it reads still fails. Each index row records its document's schema, so a newer
@@ -453,8 +453,8 @@ warning on every module says; it may change in any 0.x release. A consumer pins 
 (`venngram>=0.1,<0.2`), declares what it honours in its own support record, and checks published documents with
 `python -m venngram.conformance`.
 
-**Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
-reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
+**Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema (a
+retired recipe to its book, with the recipe as a treatment) and reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
 
 **Deprecation.** One cycle for a document schema, an API name or a vocabulary name (`venngram.deprecation`): a name
 deprecated in `0.N` warns (a `VenngramDeprecationWarning`) through `0.N` and is refused in `0.N+1`, by name and with
