@@ -59,8 +59,8 @@ version; a key that changes what a set selects does. Schema 2 adds the ``of`` ad
 book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
 ``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
 ``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
-adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, and schema 7
-layer sets relative to the depth (``0.25d:0.75d``).
+adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
+layer sets relative to the depth (``0.25d:0.75d``), and schema 8 the model pins in ``requires``.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -68,6 +68,27 @@ indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names th
 names, ``tl`` for TransformerLens names); a consumer calls :meth:`AddressBook.check_requires` with its view's scheme,
 and a book written in another vocabulary is refused by name rather than matching the wrong tensors. A book that uses
 only vocabulary-neutral fields (``role``, ``layers``, ``component``) need not declare one.
+
+**What a book was written against is pinned.** A book that names latent models (``module:latent_models.sae``,
+``role: latent:sae``) selects the same tensors wherever it loads, but it means the same thing only on the base model and
+the dictionaries it was written for. Its ``requires`` records them (schema 8):
+
+.. code-block:: yaml
+
+    requires:
+      base_model: {id: google/gemma-2-2b, revision: c5ebcd4}
+      latent_models:
+        sae:
+          release: {sae_lens: gemma-scope-2b-pt-res, id: layer_12/width_16k/average_l0_82}
+          frames: {weekday: "3"}           # the version of each frame the book's units are read in
+        bsf_l17:
+          release: {hub: org/bsf-l17, revision: 9ab1f0e}
+
+A ``release`` is compared key by key, so any dictionary source can be pinned; a ``hub`` release gives its
+``revision``, since a repository alone follows its latest snapshot. ``frames`` is given only where a frame is declared.
+A consumer calls :meth:`AddressBook.check_pins` with what it loaded, and the book is refused with every entry that
+differs named (:class:`venngram.errors.PinMismatchError`). Pins bind through imports, and a book whose imports pin the
+same model differently is refused when it loads.
 
 **Portability is declared.** A ``checkpoint`` book carries unit indices meaningful in one checkpoint only, so it must
 pin ``applies_to.models`` with an ``id`` and a ``revision`` (and may give the ``basis`` its units were found in); it is
@@ -89,11 +110,11 @@ from pathlib import Path
 from typing import Any
 
 from venngram.address import Expr, parse, references, rename_refs, terms
-from venngram.errors import AddressError, NewerAddressSchemaError, VenngramError
+from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 7)
+SCHEMA_WINDOW = (1, 8)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -107,6 +128,9 @@ GRAPHS_SCHEMA = 5
 AXIS_SCHEMA = 6
 #: The first schema whose layer sets may give a position as a fraction of the depth (``layers: 0.25d:0.75d``).
 DEPTH_SCHEMA = 7
+#: The first schema whose ``requires`` may pin the models a book was written against (``base_model``,
+#: ``latent_models``): an older venngram would pass over them silently.
+PINS_SCHEMA = 8
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -218,6 +242,19 @@ class AddressBook:
         if scheme is not None and (not isinstance(scheme, str) or not scheme):
             raise AddressError(f"{source}: `requires.naming_scheme` is a view's naming scheme, a non-empty string"
                                f" such as `physical` or `tl`, got {scheme!r}.")
+        requires.update(_pins(requires, source))
+        pinned = sorted(k for k in PIN_KEYS if k in requires)
+        if pinned and inline and "schema_version" not in doc:
+            version = max(version, PINS_SCHEMA)
+        if pinned and version < PINS_SCHEMA:
+            raise AddressError(f"{source}: `requires` pins {pinned}, which needs address book schema {PINS_SCHEMA}, "
+                               f"not {version}: an older venngram would pass over them silently.")
+        if portability == "checkpoint" and "base_model" in requires:
+            base = requires["base_model"]
+            if not any(m["id"] == base["id"] and str(m["revision"]) == base["revision"]
+                       for m in applies_to["models"]):
+                raise AddressError(f"{source}: `requires.base_model` is {base['id']}@{base['revision']}, which is not "
+                                   "among the checkpoint's pinned `applies_to.models`.")
         graphs = _graphs(doc.get("graphs"), source, base_dir) if doc.get("graphs") is not None else {}
         if graphs and inline and "schema_version" not in doc:
             version = GRAPHS_SCHEMA
@@ -289,6 +326,7 @@ class AddressBook:
                 raise AddressError(f"{source}: set `{set_name}` references {named}, which "
                                    f"no set or import defines (known: {', '.join(sorted('@' + k for k in known))}).")
         book._check_cycles()
+        book.pins()  # refuses imports that pin one model differently
         if doc.get("treatments") is not None:
             object.__setattr__(book, "treatments", _treatments(doc["treatments"], book, source, base_dir))
         return book
@@ -378,6 +416,86 @@ class AddressBook:
         for book in self.imports.values():
             book.check_requires(naming_scheme=naming_scheme)
 
+    def pins(self) -> dict[str, Any]:
+        """The model pins this book and every book it imports declare, merged (``base_model``, ``latent_models``).
+
+        Raises:
+            AddressError: If two of them pin the same model differently, so that no model satisfies both.
+        """
+        out: dict[str, Any] = {}
+        by: dict[str, str] = {}
+        for who, pins in self._pin_sources("the book"):
+            if "base_model" in pins:
+                if "base_model" in out and out["base_model"] != pins["base_model"]:
+                    raise AddressError(f"{self.source}: {by['base_model']} pins the base model "
+                                       f"{_model(out['base_model'])} and {who} pins {_model(pins['base_model'])}, so "
+                                       "no model satisfies both.")
+                out["base_model"] = pins["base_model"]
+                by.setdefault("base_model", who)
+            for name, pin in pins.get("latent_models", {}).items():
+                latents = out.setdefault("latent_models", {})
+                if name in latents and latents[name] != pin:
+                    raise AddressError(f"{self.source}: {by[name]} pins latent model `{name}` as {latents[name]} and "
+                                       f"{who} as {pin}, so no model satisfies both.")
+                latents[name] = pin
+                by.setdefault(name, who)
+        return out
+
+    def _pin_sources(self, label: str) -> list[tuple[str, dict[str, Any]]]:
+        own = {k: self.requires[k] for k in PIN_KEYS if k in self.requires}
+        out = [(label, own)] if own else []
+        for ns, book in self.imports.items():
+            out.extend(book._pin_sources(f"import `{ns}`" if label == "the book" else f"{label}'s import `{ns}`"))
+        return out
+
+    def check_pins(self, *, base_model: Mapping[str, Any] | None = None,
+                   latent_models: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+        """Refuse a loaded model that differs from what this book, or any book it imports, was written against.
+
+        Args:
+            base_model: The loaded base model, ``{id, revision}`` (``None`` skips the check).
+            latent_models: The loaded latent models by name, each ``{release: {...}, frames: {<frame>: <version>}}``
+                in the form a book pins them (``None`` skips the check). A pinned latent model missing here, a pinned
+                release key it does not report, and a pinned frame it does not declare all differ.
+
+        Raises:
+            PinMismatchError: If anything differs, naming every entry that does (its
+                :attr:`~venngram.errors.PinMismatchError.entries`).
+        """
+        pins = self.pins()
+        out: list[tuple[str, str]] = []
+        want = pins.get("base_model")
+        if want is not None and base_model is not None:
+            got = {k: None if base_model.get(k) is None else str(base_model.get(k)) for k in ("id", "revision")}
+            if got != want:
+                out.append(("requires.base_model", f"written against {_model(want)}, the loaded model is "
+                                                   f"{got['id']}@{got['revision']}"))
+        if latent_models is not None:
+            for name, pin in pins.get("latent_models", {}).items():
+                entry = f"requires.latent_models.{name}"
+                loaded = latent_models.get(name)
+                if loaded is None:
+                    out.append((entry, f"the book names latent model `{name}`, which is not loaded"))
+                    continue
+                release = loaded.get("release") or {}
+                for key, value in pin["release"].items():
+                    got = release.get(key)
+                    if got is None or str(got) != value:
+                        out.append((f"{entry}.release.{key}", f"pinned `{value}`, loaded "
+                                                              f"{'nothing' if got is None else f'`{got}`'}"))
+                frames = loaded.get("frames") or {}
+                for frame, version in pin.get("frames", {}).items():
+                    got = frames.get(frame)
+                    if got is None:
+                        out.append((f"{entry}.frames.{frame}", f"pinned version `{version}`, and the loaded latent "
+                                                               "model declares no such frame"))
+                    elif str(got) != version:
+                        out.append((f"{entry}.frames.{frame}", f"pinned version `{version}`, loaded `{got}`"))
+        if out:
+            lines = "; ".join(f"`{entry}`: {why}" for entry, why in out)
+            raise PinMismatchError(f"{self.source}: the loaded models differ from what the book was written against: "
+                                   f"{lines}.", entries=tuple(entry for entry, _ in out))
+
     def check_applies(self, *, architecture: str | None = None, model_id: str | None = None,
                       revision: str | None = None, basis: str | None = None) -> None:
         """Refuse a model this book does not apply to.
@@ -400,6 +518,64 @@ class AddressBook:
                 return
         pins = ", ".join(f"{m['id']}@{m['revision']}" for m in self.applies_to["models"])
         raise AddressError(f"{self.source}: a checkpoint book applies only to {pins}, not {model_id}@{revision}.")
+
+
+#: The ``requires`` keys that pin the models a book was written against.
+PIN_KEYS = ("base_model", "latent_models")
+_PIN_VALUE = (str, int)
+
+
+def _model(pin: Mapping[str, str]) -> str:
+    return f"{pin['id']}@{pin['revision']}"
+
+
+def _pin_value(value: Any, where: str, source: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, _PIN_VALUE) or not str(value).strip():
+        raise AddressError(f"{source}: `{where}` is a non-empty string, got {value!r}.")
+    return str(value)
+
+
+def _pins(requires: Mapping[str, Any], source: str) -> dict[str, Any]:
+    """``requires``' model pins, checked and with every value a string."""
+    out: dict[str, Any] = {}
+    base = requires.get("base_model")
+    if base is not None:
+        if not isinstance(base, Mapping) or set(base) != {"id", "revision"}:
+            raise AddressError(f"{source}: `requires.base_model` is {{id, revision}}, got {base!r}.")
+        out["base_model"] = {k: _pin_value(base[k], f"requires.base_model.{k}", source) for k in ("id", "revision")}
+    latents = requires.get("latent_models")
+    if latents is None:
+        return out
+    if not isinstance(latents, Mapping) or not latents:
+        raise AddressError(f"{source}: `requires.latent_models` maps a latent model's name to its pin "
+                           "{release, frames}.")
+    if base is None:
+        raise AddressError(f"{source}: `requires.latent_models` needs `requires.base_model`: a dictionary means "
+                           "something only on the model it was trained against.")
+    pins = {}
+    for name, pin in latents.items():
+        at = f"requires.latent_models.{name}"
+        if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
+            raise AddressError(f"{source}: {name!r} is not a valid latent model name (letters, digits, `_` and `-`).")
+        if not isinstance(pin, Mapping) or "release" not in pin or set(pin) - {"release", "frames"}:
+            raise AddressError(f"{source}: `{at}` is {{release, frames}} (`frames` optional), got {pin!r}.")
+        release = pin["release"]
+        if not isinstance(release, Mapping) or not release:
+            raise AddressError(f"{source}: `{at}.release` is a non-empty mapping, such as {{sae_lens: <release>, id: "
+                               "<id>}} or {hub: <repository>, revision: <revision>}.")
+        rel = {str(k): _pin_value(v, f"{at}.release.{k}", source) for k, v in release.items()}
+        if "hub" in rel and "revision" not in rel:
+            raise AddressError(f"{source}: `{at}.release` names the Hub repository {rel['hub']} with no `revision`: "
+                               "a repository alone follows its latest snapshot, which pins nothing.")
+        entry: dict[str, Any] = {"release": rel}
+        frames = pin.get("frames")
+        if frames is not None:
+            if not isinstance(frames, Mapping) or not frames:
+                raise AddressError(f"{source}: `{at}.frames` maps a frame's name to its exact version.")
+            entry["frames"] = {str(k): _pin_value(v, f"{at}.frames.{k}", source) for k, v in frames.items()}
+        pins[name] = entry
+    out["latent_models"] = pins
+    return out
 
 
 def _states_readout(body: Mapping[str, Any]) -> bool:

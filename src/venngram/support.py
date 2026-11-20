@@ -67,13 +67,13 @@ from typing import Any
 import yaml
 
 from venngram.address import FIELDS, references, TARGETS, terms
-from venngram.book import AddressBook, PORTABILITY, STRUCTURE_LEVELS
+from venngram.book import AddressBook, PIN_KEYS, PORTABILITY, STRUCTURE_LEVELS
 from venngram.errors import NewerSchemaError
 from venngram.ops import check_support, PARAM_TARGETS, Support
 from venngram.resolve import GRADIENT_FORMS, gradient_forms
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 6)
+SCHEMA_WINDOW = (1, 7)
 #: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
 OF_SCHEMA = 3
 #: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
@@ -84,6 +84,8 @@ PARAM_SCHEMA = 4
 GRADIENTS_SCHEMA = 5
 #: The first schema whose ``circuits`` section may declare ``subsets`` (the graph subset treatments it applies).
 SUBSETS_SCHEMA = 6
+#: The first schema whose ``tuning`` section may declare ``pins`` (that it checks a book's model pins).
+PINS_SCHEMA = 7
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -134,6 +136,9 @@ class TuningSupport:
             conjunctions with unit sets). None by default.
         structure: The ``requires.structure`` levels it provides.
         portability: The book portabilities it accepts.
+        pins: Whether it checks the models a book pins in its ``requires`` (``base_model``, ``latent_models``)
+            against the ones it loaded, with :meth:`venngram.AddressBook.check_pins`. A book that pins them is refused
+            by a consumer that does not (schema 7).
     """
 
     fields: frozenset[str] = frozenset(f for f in FIELDS if f not in ("of", "axis"))
@@ -143,6 +148,7 @@ class TuningSupport:
     structure: frozenset[str] = frozenset(STRUCTURE_LEVELS)
     portability: frozenset[str] = frozenset(PORTABILITY)
     gradients: frozenset[str] = frozenset()
+    pins: bool = False
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>") -> "TuningSupport":
@@ -158,8 +164,11 @@ class TuningSupport:
         units = doc.get("units", "none") if isinstance(doc, Mapping) else None
         if units not in UNIT_PATTERNS:
             raise ValueError(f"{source}: `units` is one of {list(UNIT_PATTERNS)}, got {units!r}.")
-        rest = {k: v for k, v in doc.items() if k != "units"} if isinstance(doc, Mapping) else doc
-        return cls(**_read_fields(rest, source, spec), units=units)
+        pins = doc.get("pins", False) if isinstance(doc, Mapping) else False
+        if not isinstance(pins, bool):
+            raise ValueError(f"{source}: `pins` is true or false, got {pins!r}.")
+        rest = {k: v for k, v in doc.items() if k not in ("units", "pins")} if isinstance(doc, Mapping) else doc
+        return cls(**_read_fields(rest, source, spec), units=units, pins=pins)
 
     def to_mapping(self) -> dict[str, Any]:
         out: dict[str, Any] = {"fields": [f for f in FIELDS if f in self.fields],
@@ -170,6 +179,8 @@ class TuningSupport:
         out["portability"] = [p for p in PORTABILITY if p in self.portability]
         if self.gradients:
             out["gradients"] = [g for g in GRADIENT_FORMS if g in self.gradients]
+        if self.pins:
+            out["pins"] = True
         return out
 
     def check_book(self, book: AddressBook, *, sets: Collection[str] | None = None) -> list[str]:
@@ -195,6 +206,11 @@ class TuningSupport:
             out.append(f"{where}: it requires `{structure}` structure, which this consumer does not provide")
         if book.portability not in self.portability:
             out.append(f"{where}: `{book.portability}` books are not accepted")
+        pinned = [k for k in PIN_KEYS if k in book.requires]
+        if pinned and not self.pins:
+            named = ", ".join(f"`requires.{k}`" for k in pinned)
+            out.append(f"{where}: it pins the models it was written against ({named}), which this consumer does not "
+                       "check (`pins: false`)")
         every = book.sets()
         for set_name, expr in book.own_sets.items():
             if sets is not None and set_name not in sets:
@@ -574,6 +590,9 @@ class SupportRecord:
                 if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
                     raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
                                      "venngram would refuse the record by name rather than pass over it.")
+                if kind == "tuning" and isinstance(body, Mapping) and "pins" in body and version < PINS_SCHEMA:
+                    raise ValueError(f"{where}: `pins` needs support record schema {PINS_SCHEMA}, not {version}: an "
+                                     "older venngram would refuse the record by name rather than pass over it.")
                 keys = {"tuning": ("gradients",), "steering": ("gradient_ops", "readouts")}.get(kind, ())
                 for key in keys:
                     if isinstance(body, Mapping) and key in body and version < GRADIENTS_SCHEMA:
@@ -623,7 +642,8 @@ class SupportRecord:
     def to_mapping(self) -> dict[str, Any]:
         """The record as a schema 2 document, or the first schema its declarations need: 3 when its steering section
         declares ``of``, 4 a parameter target, 5 when its tuning section declares ``gradients`` or its steering
-        section ``gradient_ops`` or ``readouts`` (skipped sections are written back as they were read)."""
+        section ``gradient_ops`` or ``readouts``, 6 when its circuits section declares ``subsets``, 7 when its tuning
+        section declares ``pins`` (skipped sections are written back as they were read)."""
         sections: dict[str, Any] = {}
         for kind, contract in self.sections.items():
             if isinstance(contract, Support):
@@ -638,7 +658,9 @@ class SupportRecord:
         needs_gradients = any(isinstance(c, TuningSupport) and c.gradients for c in self.sections.values()) or any(
             c.gradient_ops or c.readouts for c in steering)
         needs_subsets = any(isinstance(c, CircuitSupport) and c.subsets is not None for c in self.sections.values())
-        version = SUBSETS_SCHEMA if needs_subsets else GRADIENTS_SCHEMA if needs_gradients else \
+        needs_pins = any(isinstance(c, TuningSupport) and c.pins for c in self.sections.values())
+        version = PINS_SCHEMA if needs_pins else SUBSETS_SCHEMA if needs_subsets else \
+            GRADIENTS_SCHEMA if needs_gradients else \
             PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
             OF_SCHEMA if needs_of else SCHEMA_VERSION
         out: dict[str, Any] = {"schema_version": version, "kind": "support_record"}
@@ -724,6 +746,7 @@ __all__ = [
     "CircuitSupport",
     "CORE_SECTIONS",
     "FormatSupport",
+    "PINS_SCHEMA",
     "register_support_section",
     "SCHEMA_VERSION",
     "SCHEMA_WINDOW",

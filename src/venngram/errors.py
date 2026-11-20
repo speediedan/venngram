@@ -37,6 +37,19 @@ class AddressError(VenngramError):
     """Raised when an address, an address book or a reference is malformed."""
 
 
+class PinMismatchError(AddressError):
+    """The loaded models differ from what an address book pins in its ``requires``.
+
+    Attributes:
+        entries: Each pin that differs, as its path in the book (``requires.base_model``,
+            ``requires.latent_models.<name>.release.<key>``, ``requires.latent_models.<name>.frames.<frame>``).
+    """
+
+    def __init__(self, message: str, *, entries: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.entries = entries
+
+
 class StoreError(VenngramError):
     """Raised when a manifest, a document reference or a store refuses: a malformed or unlisted document, a content
     hash that does not match, or a store that cannot provide what a reference names."""
@@ -106,4 +119,4 @@ class AddressUnresolvable(VenngramError):
 
 
 __all__ = ["AddressError", "AddressUnresolvable", "CacheMissError", "NewerAddressSchemaError", "NewerSchemaError",
-           "Refusal", "RoleError", "StoreError", "VenngramError"]
+           "PinMismatchError", "Refusal", "RoleError", "StoreError", "VenngramError"]
