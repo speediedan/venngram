@@ -40,8 +40,8 @@ An address is a record whose fields intersect:
 | `component`, `stack` | architecture-neutral components and block stacks (needs a vocabulary provider) | `attn.q` |
 | `point` | an activation site | `resid_post` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, and maps a site is read through | `sae`, `jlens` |
-| `units` | indices along a target's unit axis | `[431, 1007]` |
-| `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates, and each disjunct gives its own mask) | `grad` |
+| `units` | indices along a target's unit axis; on a tensor's gradient, an element mask instead (`{elements: {file, key, sha256}}`, a sidecar bitmask of the tensor's exact shape; book schema 9, checkpoint books only) | `[431, 1007]` |
+| `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates). Masks combine exactly as their sets do: a union unites them, an intersection intersects them and a difference subtracts them, along one dimension or element by element; masks along two dimensions are refused | `grad` |
 | `axis` | which dimension of a tensor's gradient its `units` index: `unit` (the component's unit axis, from the map's measured layout, so one address selects an MLP's neurons on a linear and on a transposed weight alike) or a physical dimension; resolved by `gradient_selections` (book schema 6), which `gradient_masks`, a first-axis mask, refuses rather than drop | `unit`, `1` |
 
 The string form writes each field as `<field>:<value>`:
@@ -113,7 +113,10 @@ A `units` value may name a sidecar instead of listing indices:
 `units: {file: units.safetensors, key: L15, sha256: ...}`, flat or per layer. A sidecar is a safetensors file holding a
 sorted index array or a packed bitmask per set, read with the standard library (no `torch`, no pickle). A changed file,
 or a set written for another axis width, is refused. `venngram.units.units_value` keeps small sets inline and writes
-large ones to a sidecar.
+large ones to a sidecar. A sidecar may also hold an **element mask** (`venngram.units.ElementMask`, sidecar schema 2): a
+packed bit per element of one tensor of a recorded shape, named on a tensor's gradient as
+`units: {elements: {file, key, sha256}}` and refused on a tensor of another shape. It keeps individual weights (a sparse
+fine-tuning or lottery-ticket mask), so only a `checkpoint` book carries one.
 
 A book may carry **treatments**: what is done to its sets for one model, by name, under its `treatments` section, so a
 selection and what is done to it travel together in one document. A treatment (a **recipe**, `venngram.recipe.Recipe`)
@@ -234,8 +237,9 @@ The core sections are `steering` (a book's treatments), `tuning` (address books 
 `circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
 a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
 gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
-of a value part and a gradient part, `union-masks`, a union of gradient conjunctions with unit sets, and `unit-axis` and
-`physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`). Its `pins: true` (schema 7) says it
+of a value part and a gradient part, `union-masks`, a union of gradient conjunctions with unit sets, `unit-axis` and
+`physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`), `mask-algebra`, an intersection or a
+difference of masks, and `element-masks`, an element mask. Its `pins: true` (schema 7) says it
 checks the models a book pins (`AddressBook.check_pins`); a pinned book is refused by a consumer that does not. A
 `steering`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
@@ -448,7 +452,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 8 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models` | ignored at the top level |
+| address book | 1 to 9 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 7 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |

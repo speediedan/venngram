@@ -82,15 +82,17 @@ def test_a_mask_follows_references_into_a_book(model):
     assert set(gradient_masks("@q_grad", space_of(model), sets, widths=widths(model)).values()) == {(3,)}
 
 
-@pytest.mark.parametrize("address, match", [
-    (f"(({Q} & units:[0]) | role:adapter) & layers:-1: & of:grad", "sits under a union or a difference"),
-    (f"role:base & of:grad - ({Q} & units:[0])", "sits under a union or a difference"),
-    (f"{Q} & units:[0] & units:[1] & of:grad", "intersects `units:"),
-    (f"{Q} & units:[0]", "needs an `of: grad` address"),
-])
-def test_unit_sets_that_cannot_form_one_mask_are_refused(model, address, match):
-    with pytest.raises(AddressUnresolvable, match=match):
-        gradient_masks(address, space_of(model), widths=widths(model))
+def test_unit_sets_combine_exactly_under_intersections_and_differences(model):
+    space, w = space_of(model), widths(model)
+    nested = gradient_masks(f"(({Q} & units:[0]) | role:adapter) & layers:-1: & of:grad", space, widths=w)
+    assert nested["layers.5.attn.q_proj.weight"] == (0,)
+    assert all(v == tuple(range(w[n])) for n, v in nested.items() if n != "layers.5.attn.q_proj.weight")
+    rest = gradient_masks(f"role:base & of:grad - ({Q} & units:[0])", space, widths=w)
+    assert rest["layers.4.attn.q_proj.weight"] == rest["layers.5.attn.q_proj.weight"] == (1, 2, 3)
+    assert gradient_masks(f"{Q} & units:[0] & units:[1] & of:grad", space, widths=w) == {
+        "layers.4.attn.q_proj.weight": (), "layers.5.attn.q_proj.weight": ()}
+    with pytest.raises(AddressUnresolvable, match="needs an `of: grad` address"):
+        gradient_masks(f"{Q} & units:[0]", space, widths=w)
 
 
 K = "role:base & module:k_proj & leaf:weight & layers:-1:"

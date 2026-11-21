@@ -85,7 +85,7 @@ from typing import Any, Union
 
 from venngram.errors import AddressError
 from venngram.roles import parse_selector
-from venngram.units import SidecarRef
+from venngram.units import ElementMask, SidecarRef
 
 FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "features", "subspace", "space", "leaf",
           "units", "of", "axis")
@@ -96,9 +96,12 @@ MODIFIERS = ("optional", "expect")
 TARGETS = ("param", "site", "feature", "subspace")
 _PREFIX = re.compile(r"^(%s):" % "|".join(FIELDS))
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*")
+#: A ``{...}`` value nested up to three deep: a per-layer unit set, a sidecar reference, and a per-layer element mask
+#: (``{12: {elements: {file: ..., key: ..., sha256: ...}}}``).
+_BRACES = r"\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}"
 _TOKEN = re.compile(
     r"\s*(?:(?P<op>[&|()]|-(?=\s))|(?P<ref>@[A-Za-z_][A-Za-z0-9_.-]*)"
-    r"|(?P<term>(?:%s):(?:\"(?:[^\"\\]|\\.)*\"|\[[^\]]*\]|\{[^{}]*\}|[^\s&|()]+)))" % "|".join(FIELDS))
+    r"|(?P<term>(?:%s):(?:\"(?:[^\"\\]|\\.)*\"|\[[^\]]*\]|%s|[^\s&|()]+)))" % ("|".join(FIELDS), _BRACES))
 _PRECEDENCE = {"|": 1, "-": 2, "&": 3}
 _SLICE = re.compile(r"^(-?\d+)?:(-?\d+)?$")
 #: A fraction of a stack's depth: a decimal in [0, 1] with the suffix ``d`` (``0.25d``, ``1d``).
@@ -257,6 +260,10 @@ class UnitSet:
     """Indices along a target's unit axis: a list or a slice, for every selected layer or per layer. A large set may
     instead name a sidecar file (``{file, key, sha256}``, :mod:`venngram.units`), alone or as one layer's value.
 
+    An **element mask** (``{elements: {file, key, sha256}}``, alone or per layer) keeps individual elements of a tensor
+    of one exact shape instead of indices along an axis (:class:`venngram.units.ElementMask`); only a tensor's gradient
+    takes one (``of: grad``, resolved by :func:`venngram.resolve.gradient_selections`).
+
     >>> UnitSet.parse("[431, 1007]").for_layer(12, 4096)
     (431, 1007)
     >>> UnitSet.parse({12: [431], 14: "8:10"}).for_layer(14, 4096)
@@ -268,6 +275,8 @@ class UnitSet:
     per_layer: tuple[tuple[int, LayerSet], ...] | None = None
     sidecars: tuple[tuple[int | None, SidecarRef, int], ...] = ()
     """The sidecar references this set was read from: (layer, or ``None`` for every layer; reference; axis length)."""
+    element_masks: tuple[tuple[int | None, SidecarRef, ElementMask], ...] = ()
+    """For an element mask: (layer, or ``None`` for every layer; reference; mask)."""
 
     def __repr__(self) -> str:
         return f"UnitSet({self.spec!r})"
@@ -286,13 +295,21 @@ class UnitSet:
         if isinstance(raw, Mapping) and "file" in raw:  # one sidecar set for every selected layer
             ref, indices, axis = cls._sidecar(raw)
             return cls(spec=repr(ref.mapping()), flat=indices, sidecars=((None, ref, axis),))
+        if isinstance(raw, Mapping) and "elements" in raw:  # one element mask for every selected layer
+            ref, mask = cls._elements(raw)
+            return cls(spec=repr({"elements": ref.mapping()}), element_masks=((None, ref, mask),))
         if isinstance(raw, Mapping):
             if not raw:
                 raise AddressError("A per-layer unit set must name at least one layer.")
-            per, sidecars, specs = [], [], []
+            per, sidecars, specs, masks = [], [], [], []
             for layer, units in raw.items():
                 if not isinstance(layer, int) or isinstance(layer, bool):
                     raise AddressError(f"A per-layer unit set is keyed by layer index, got {layer!r}.")
+                if isinstance(units, Mapping) and "elements" in units:
+                    ref, mask = cls._elements(units)
+                    masks.append((layer, ref, mask))
+                    specs.append(f"{layer}: {{'elements': {ref.mapping()!r}}}")
+                    continue
                 if isinstance(units, Mapping):
                     ref, indices, axis = cls._sidecar(units)
                     sidecars.append((layer, ref, axis))
@@ -301,7 +318,13 @@ class UnitSet:
                     indices = cls._indices(units)
                     specs.append(f"{layer}: {indices.spec}")
                 per.append((layer, indices))
-            return cls(spec="{" + ", ".join(specs) + "}", per_layer=tuple(per), sidecars=tuple(sidecars))
+            spec = "{" + ", ".join(specs) + "}"
+            if masks and per:
+                raise AddressError(f"A per-layer unit set gives either unit indices or element masks, not both: "
+                                   f"{spec}.")
+            if masks:
+                return cls(spec=spec, element_masks=tuple(masks))
+            return cls(spec=spec, per_layer=tuple(per), sidecars=tuple(sidecars))
         flat = cls._indices(raw)
         return cls(spec=flat.spec, flat=flat)
 
@@ -310,6 +333,13 @@ class UnitSet:
         ref = SidecarRef.parse(raw)
         units, axis = ref.load()
         return ref, LayerSet(spec=f"<{len(units)} units of {ref.file}:{ref.key}>", indices=units), axis
+
+    @staticmethod
+    def _elements(raw: Mapping[str, Any]) -> tuple[SidecarRef, ElementMask]:
+        if set(raw) != {"elements"} or not isinstance(raw["elements"], Mapping):
+            raise AddressError(f"An element mask is `{{elements: {{file, key, sha256}}}}`, got {dict(raw)!r}.")
+        ref = SidecarRef.parse(raw["elements"])
+        return ref, ref.load_elements()
 
     @staticmethod
     def _indices(raw: Any) -> LayerSet:
@@ -328,14 +358,42 @@ class UnitSet:
     @property
     def layers(self) -> tuple[int, ...] | None:
         """The layers a per-layer unit set names, or ``None`` for a flat one."""
+        if self.element_masks:
+            layers = [k for k, _, _ in self.element_masks]
+            return None if None in layers else tuple(k for k in layers if k is not None)
         return None if self.per_layer is None else tuple(k for k, _ in self.per_layer)
+
+    @property
+    def is_elements(self) -> bool:
+        """Whether this is an element mask rather than indices along an axis."""
+        return bool(self.element_masks)
+
+    def elements_for_layer(self, layer: int | None, shape: tuple[int, ...]) -> ElementMask:
+        """The element mask at ``layer`` for a tensor of ``shape`` (keeping nothing at a layer the set does not name).
+
+        Raises:
+            AddressError: If this is not an element mask, or the mask was written for a tensor of another shape.
+        """
+        if not self.element_masks:
+            raise AddressError(f"`units:{self.spec}` holds unit indices, not an element mask.")
+        for at, ref, mask in self.element_masks:
+            if at is None or at == layer:
+                if mask.shape != tuple(shape):
+                    raise AddressError(f"The element mask {ref.file}:{ref.key} is for a tensor of shape {mask.shape}, "
+                                       f"but the tensor at layer {layer} has shape {tuple(shape)}.")
+                return mask
+        return ElementMask(tuple(shape))
 
     def for_layer(self, layer: int | None, width: int) -> tuple[int, ...]:
         """The unit indices at ``layer`` along an axis of ``width`` units (empty for a layer the set does not name).
 
         Raises:
-            AddressError: If a sidecar set for ``layer`` was written for an axis of another width.
+            AddressError: If a sidecar set for ``layer`` was written for an axis of another width, or this is an element
+                mask, which keeps elements rather than indices along one axis.
         """
+        if self.element_masks:
+            raise AddressError(f"`units:{self.spec}` is an element mask: it keeps individual elements of one tensor's "
+                               "gradient, not indices along an axis.")
         for at, ref, axis in self.sidecars:
             if (at is None or at == layer) and axis != width:
                 raise AddressError(f"The sidecar unit set {ref.file}:{ref.key} indexes an axis of {axis} units, but "
@@ -421,6 +479,13 @@ class Term:
         if self.axis is not None and (self.units is None or self.target != "param"):
             raise AddressError(f"`axis:{self.axis}` says which dimension of a tensor's gradient its units index, so it "
                                "needs `units` and a tensor target (no `point`, `features` or `subspace`).")
+        if self.units is not None and self.units.is_elements:
+            if self.target != "param":
+                raise AddressError("An element mask keeps elements of a tensor's gradient, so it needs a tensor target "
+                                   "(no `point`, `features` or `subspace`).")
+            if self.axis is not None:
+                raise AddressError(f"An element mask covers every dimension of its tensor, so it takes no "
+                                   f"`axis:{self.axis}`.")
 
     @property
     def target(self) -> str:

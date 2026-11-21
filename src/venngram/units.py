@@ -28,7 +28,12 @@ file's metadata with the axis length it indexes:
 
 - ``indices``: a sorted, unique ``I32`` index array (sparse sets);
 - ``bitmask``: a packed ``U8`` mask, one bit per unit of the axis: unit ``j`` is bit ``j % 8`` of byte ``j // 8``
-  (little bit order; dense sets).
+  (little bit order; dense sets);
+- ``elements`` (sidecar schema 2): an element mask, a packed ``U8`` mask of one bit per element of a tensor of the
+  ``shape`` recorded beside it, elements in row-major order (:class:`ElementMask`). It keeps individual weights'
+  gradients, so it is named as ``units: {elements: {file, key, sha256}}`` and refused on a tensor of another shape.
+
+A file holding no element mask is written at schema 1, so an older venngram still reads it.
 
 A reference must carry the file's ``sha256``, so it cites exactly one content wherever the file is stored, and a
 changed file is refused rather than silently re-read. The axis length is read from the header before any data, so a
@@ -53,12 +58,16 @@ from typing import Any
 from venngram.errors import AddressError
 
 #: The sidecar format's schema, recorded in each file's metadata and read within a window.
-SIDECAR_SCHEMA_VERSION = 1
+SIDECAR_SCHEMA_VERSION = 2
+#: The first sidecar schema that may hold an element mask (form ``elements``).
+ELEMENTS_SIDECAR_SCHEMA = 2
 
 #: Below this many units per layer, :func:`units_value` writes a set inline rather than to a sidecar.
 INLINE_THRESHOLD = 512
 
 FORMS = ("indices", "bitmask")
+#: The forms a sidecar set may take: unit sets (:data:`FORMS`) and element masks.
+ALL_FORMS = (*FORMS, "elements")
 _ROOT: ContextVar[Path | None] = ContextVar("venngram_sidecar_root", default=None)
 
 
@@ -108,6 +117,91 @@ class SidecarRef:
         """The set's sorted unit indices and the axis length they index."""
         return read_units(self.path(), self.key, sha256=self.sha256)
 
+    def load_elements(self) -> "ElementMask":
+        """The element mask stored under this reference."""
+        return read_elements(self.path(), self.key, sha256=self.sha256)
+
+
+@dataclass(frozen=True)
+class ElementMask:
+    """Which elements of one tensor's gradient are kept: a bit per element of ``shape``, in row-major order (element
+    ``i`` of the flattened tensor is bit ``i`` of ``bits``). Masks of one shape unite, intersect and subtract exactly.
+
+    >>> m = ElementMask.from_indices((2, 3), [0, 4])
+    >>> m.indices(), m.count, (m | ElementMask.from_indices((2, 3), [5])).indices()
+    ((0, 4), 2, (0, 4, 5))
+    """
+
+    shape: tuple[int, ...]
+    bits: int = 0
+
+    def __post_init__(self) -> None:
+        shape = tuple(int(d) for d in self.shape)
+        if not shape or any(d < 0 for d in shape):
+            raise ValueError(f"an element mask's shape is a non-empty tuple of non-negative sizes, got {self.shape!r}")
+        if self.bits < 0 or self.bits >> self.size:
+            raise ValueError(f"an element mask of shape {shape} keeps elements outside it")
+        object.__setattr__(self, "shape", shape)
+
+    @property
+    def size(self) -> int:
+        """The number of elements of ``shape``."""
+        out = 1
+        for d in self.shape:
+            out *= d
+        return out
+
+    @property
+    def count(self) -> int:
+        """The number of kept elements."""
+        return bin(self.bits).count("1")
+
+    @classmethod
+    def from_indices(cls, shape: Sequence[int], indices: Sequence[int]) -> "ElementMask":
+        """The mask keeping the elements at ``indices`` of the flattened tensor."""
+        bits = 0
+        for i in indices:
+            bits |= 1 << int(i)
+        return cls(tuple(shape), bits)
+
+    @classmethod
+    def full(cls, shape: Sequence[int]) -> "ElementMask":
+        """The mask keeping every element."""
+        mask = cls(tuple(shape))
+        return cls(mask.shape, (1 << mask.size) - 1)
+
+    def indices(self) -> tuple[int, ...]:
+        """The kept elements' indices in the flattened tensor, ascending."""
+        bits, out, i = self.bits, [], 0
+        while bits:
+            if bits & 1:
+                out.append(i)
+            bits >>= 1
+            i += 1
+        return tuple(out)
+
+    def to_bytes(self) -> bytes:
+        """The packed mask, one bit per element in row-major order, little bit order (element ``j`` is bit ``j % 8`` of
+        byte ``j // 8``), as a sidecar stores it."""
+        return self.bits.to_bytes((self.size + 7) // 8, "little")
+
+    def _same(self, other: "ElementMask") -> None:
+        if not isinstance(other, ElementMask) or other.shape != self.shape:
+            raise ValueError(f"element masks combine only at one shape, not {self.shape} and "
+                             f"{getattr(other, 'shape', other)}")
+
+    def __or__(self, other: "ElementMask") -> "ElementMask":
+        self._same(other)
+        return ElementMask(self.shape, self.bits | other.bits)
+
+    def __and__(self, other: "ElementMask") -> "ElementMask":
+        self._same(other)
+        return ElementMask(self.shape, self.bits & other.bits)
+
+    def __sub__(self, other: "ElementMask") -> "ElementMask":
+        self._same(other)
+        return ElementMask(self.shape, self.bits & ~other.bits)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -142,14 +236,8 @@ def _header(path: Path) -> tuple[dict[str, Any], dict[str, Any], int]:
     return header, sets, 8 + n
 
 
-def read_units(path: str | Path, key: str, *, sha256: str | None = None) -> tuple[tuple[int, ...], int]:
-    """The unit indices stored under ``key`` in a sidecar, and the axis length they index.
-
-    Raises:
-        AddressError: If the file's hash differs from ``sha256``, the key is absent, or the stored set is malformed
-            (unsorted, repeated or out-of-range indices; a mask of the wrong length or with bits past the axis).
-    """
-    path = Path(path)
+def _entry(path: Path, key: str, sha256: str | None) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    """The header entry, the venngram metadata and the data of the set stored under ``key``."""
     if not path.is_file():
         raise AddressError(f"Sidecar unit set {path} does not exist.")
     if sha256 is not None and _sha256(path) != sha256.lower():
@@ -159,14 +247,31 @@ def read_units(path: str | Path, key: str, *, sha256: str | None = None) -> tupl
     if key not in header or key not in sets:
         raise AddressError(f"{path}: no unit set `{key}`; it holds {sorted(k for k in header if k in sets)}.")
     entry, info = header[key], sets[key]
-    form, axis = info.get("form"), info.get("axis")
-    if form not in FORMS or not isinstance(axis, int) or axis < 0:
-        raise AddressError(f"{path}: set `{key}` has form {form!r} and axis {axis!r}; expected one of {FORMS} and a "
-                           "non-negative axis.")
+    if info.get("form") not in ALL_FORMS:
+        raise AddressError(f"{path}: set `{key}` has form {info.get('form')!r}; expected one of {ALL_FORMS}.")
     lo, hi = entry["data_offsets"]
     with open(path, "rb") as fh:
         fh.seek(start + lo)
         data = fh.read(hi - lo)
+    return entry, info, data
+
+
+def read_units(path: str | Path, key: str, *, sha256: str | None = None) -> tuple[tuple[int, ...], int]:
+    """The unit indices stored under ``key`` in a sidecar, and the axis length they index.
+
+    Raises:
+        AddressError: If the file's hash differs from ``sha256``, the key is absent or holds an element mask, or the
+            stored set is malformed (unsorted, repeated or out-of-range indices; a mask of the wrong length or with bits
+            past the axis).
+    """
+    path = Path(path)
+    entry, info, data = _entry(path, key, sha256)
+    form, axis = info.get("form"), info.get("axis")
+    if form == "elements":
+        raise AddressError(f"{path}: set `{key}` is an element mask, not a unit set: name it as "
+                           "`units: {elements: {file, key, sha256}}`.")
+    if not isinstance(axis, int) or axis < 0:
+        raise AddressError(f"{path}: set `{key}` has axis {axis!r}; expected a non-negative axis length.")
     if form == "indices":
         if entry["dtype"] != "I32" or len(data) % 4:
             raise AddressError(f"{path}: set `{key}` is `indices`, which is stored as I32, not {entry['dtype']}.")
@@ -185,11 +290,38 @@ def read_units(path: str | Path, key: str, *, sha256: str | None = None) -> tupl
     return tuple(8 * i + j for i, byte in enumerate(data) if byte for j in range(8) if byte >> j & 1), axis
 
 
-def write_units(path: str | Path, sets: Mapping[str, tuple[Sequence[int], int]], *, form: str = "auto") -> str:
-    """Write sets (key -> (unit indices, axis length)) to a sidecar and return its sha256.
+def read_elements(path: str | Path, key: str, *, sha256: str | None = None) -> ElementMask:
+    """The element mask stored under ``key`` in a sidecar.
 
-    ``form`` is ``indices``, ``bitmask``, or ``auto``: per set, whichever is smaller (a mask takes one byte per eight
-    units of the axis, an index array four bytes per unit).
+    Raises:
+        AddressError: If the file's hash differs from ``sha256``, the key is absent or holds a unit set, or the stored
+            mask is malformed (a shape that is not a list of non-negative sizes, data of the wrong length, or bits past
+            the tensor's last element).
+    """
+    path = Path(path)
+    entry, info, data = _entry(path, key, sha256)
+    if info.get("form") != "elements":
+        raise AddressError(f"{path}: set `{key}` is a unit set, not an element mask: name it as "
+                           "`units: {file, key, sha256}`.")
+    shape = info.get("shape")
+    if not isinstance(shape, list) or not shape or not all(isinstance(d, int) and d >= 0 for d in shape):
+        raise AddressError(f"{path}: element mask `{key}` has shape {shape!r}; expected a list of non-negative sizes.")
+    size = ElementMask(tuple(shape)).size
+    if entry["dtype"] != "U8" or len(data) != (size + 7) // 8:
+        raise AddressError(f"{path}: element mask `{key}` of shape {tuple(shape)} is {(size + 7) // 8} U8 bytes.")
+    bits = int.from_bytes(data, "little")
+    if bits >> size:
+        raise AddressError(f"{path}: element mask `{key}` sets bits past its {size} elements.")
+    return ElementMask(tuple(shape), bits)
+
+
+def write_units(path: str | Path, sets: Mapping[str, "tuple[Sequence[int], int] | ElementMask"], *,
+                form: str = "auto") -> str:
+    """Write sets (key -> (unit indices, axis length), or key -> an :class:`ElementMask`) to a sidecar and return its
+    sha256. A file holding an element mask is sidecar schema 2; any other, schema 1.
+
+    ``form`` is ``indices``, ``bitmask``, or ``auto``: per unit set, whichever is smaller (a mask takes one byte per
+    eight units of the axis, an index array four bytes per unit). An element mask is always stored packed.
     """
     if form not in (*FORMS, "auto"):
         raise ValueError(f"form must be one of {FORMS} or 'auto', got {form!r}")
@@ -197,7 +329,15 @@ def write_units(path: str | Path, sets: Mapping[str, tuple[Sequence[int], int]],
     info: dict[str, Any] = {}
     blobs: list[bytes] = []
     offset = 0
-    for key, (units, axis) in sets.items():
+    for key, value in sets.items():
+        if isinstance(value, ElementMask):
+            blob = value.to_bytes()
+            header[key] = {"dtype": "U8", "shape": [len(blob)], "data_offsets": [offset, offset + len(blob)]}
+            info[key] = {"form": "elements", "shape": list(value.shape), "bitorder": "little", "order": "row-major"}
+            blobs.append(blob)
+            offset += len(blob)
+            continue
+        units, axis = value
         units = sorted(set(int(u) for u in units))
         if units and (units[0] < 0 or units[-1] >= axis):
             raise ValueError(f"set {key!r}: units must lie in [0, {axis})")
@@ -216,7 +356,8 @@ def write_units(path: str | Path, sets: Mapping[str, tuple[Sequence[int], int]],
         info[key] = {"form": chosen, "axis": axis, **({"bitorder": "little"} if chosen == "bitmask" else {})}
         blobs.append(blob)
         offset += len(blob)
-    header["__metadata__"] = {"venngram.schema_version": str(SIDECAR_SCHEMA_VERSION),
+    version = ELEMENTS_SIDECAR_SCHEMA if any(i["form"] == "elements" for i in info.values()) else 1
+    header["__metadata__"] = {"venngram.schema_version": str(version),
                               "venngram.sets": json.dumps(info, sort_keys=True)}
     raw = json.dumps(header, separators=(",", ":")).encode()
     raw += b" " * (-len(raw) % 8)  # safetensors aligns the data to eight bytes
@@ -249,8 +390,12 @@ def units_value(units: Mapping[int, Sequence[int]] | Sequence[int], axis: int, p
 
 
 __all__ = [
+    "ALL_FORMS",
+    "ElementMask",
+    "ELEMENTS_SIDECAR_SCHEMA",
     "FORMS",
     "INLINE_THRESHOLD",
+    "read_elements",
     "read_units",
     "SIDECAR_SCHEMA_VERSION",
     "SidecarRef",
