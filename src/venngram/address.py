@@ -40,9 +40,9 @@ units      an index set along the target's unit axis: a list, a slice, or per   
            layer
 of         what the consumer acts on: ``value`` (the default) or ``grad``, the     ``grad``
            gradient of what the rest of the address selects
-axis       the dimension of a tensor's gradient its ``units`` index: ``unit`` (the  ``unit``, ``1``
-           component's unit axis, from the map's layout) or a physical dimension;
-           unset, a gradient mask runs along the first dimension
+axis       the dimension of a tensor's gradient its ``units`` index: ``unit``      ``unit``, ``1``
+           (the component's unit axis, from the map's layout) or a physical
+           dimension; unset, a gradient mask runs along the first dimension
 =========  ======================================================================  ===============================
 
 The string form:
