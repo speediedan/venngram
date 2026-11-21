@@ -27,7 +27,7 @@ The subpackage imports ``torch``, the standard library and :mod:`venngram`'s own
 .. warning:: This is an experimental API and may change in a future release.
 """
 from .conformance import ConformanceCase, ConformanceError, ConformanceReport, ViewConformance
-from .errors import TunableViewError, Unresolvable
+from .errors import RoleKeyError, TunableViewError, Unresolvable
 from venngram.roles import ROLE_KINDS
 from .views import (as_view, BoundView, CanonicalView, resolve_view, TunableSupport, TunableView, TunableViewExtras,
                     VIEW_ATTR, ViewDefaults)
@@ -41,6 +41,7 @@ __all__ = [
     "ConformanceReport",
     "resolve_view",
     "ROLE_KINDS",
+    "RoleKeyError",
     "TunableSupport",
     "TunableView",
     "TunableViewError",
