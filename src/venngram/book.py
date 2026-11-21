@@ -60,7 +60,8 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 ``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
 ``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
-layer sets relative to the depth (``0.25d:0.75d``), and schema 8 the model pins in ``requires``.
+layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, and schema 9 element
+masks (``units: {elements: ...}``).
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -92,7 +93,8 @@ same model differently is refused when it loads.
 
 **Portability is declared.** A ``checkpoint`` book carries unit indices meaningful in one checkpoint only, so it must
 pin ``applies_to.models`` with an ``id`` and a ``revision`` (and may give the ``basis`` its units were found in); it is
-refused against any other model.
+refused against any other model. An element mask keeps individual weights of one checkpoint's tensors, so a book whose
+sets use one is a ``checkpoint`` book.
 
 **References.** ``@<set>`` resolves within the book, ``@<import>.<set>`` within an import. Every reference is checked
 when the book loads, and cycles are refused, naming the cycle.
@@ -114,7 +116,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchEr
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 8)
+SCHEMA_WINDOW = (1, 9)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -131,6 +133,8 @@ DEPTH_SCHEMA = 7
 #: The first schema whose ``requires`` may pin the models a book was written against (``base_model``,
 #: ``latent_models``): an older venngram would pass over them silently.
 PINS_SCHEMA = 8
+#: The first schema whose sets may use an element mask (``units: {elements: {file, key, sha256}}``).
+ELEMENTS_SCHEMA = 9
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -285,6 +289,18 @@ class AddressBook:
                             if any(t.layers is not None and t.layers.depth_relative for t in terms(expr)))
         if uses_depth and inline and "schema_version" not in doc:
             version = max(version, DEPTH_SCHEMA)
+        uses_elements = sorted(n for n, expr in own.items()
+                               if any(t.units is not None and t.units.is_elements for t in terms(expr)))
+        if uses_elements and inline and "schema_version" not in doc:
+            version = max(version, ELEMENTS_SCHEMA)
+        if uses_elements and version < ELEMENTS_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_elements} use an element mask, which needs address book "
+                               f"schema {ELEMENTS_SCHEMA}, not {version}: an older venngram would refuse it by name "
+                               "rather than pass over it.")
+        if uses_elements and portability != "checkpoint":
+            raise AddressError(f"{source}: the sets {uses_elements} use an element mask, which keeps individual "
+                               "weights of one checkpoint's tensors, so the book is `portability: checkpoint` and pins "
+                               "its model in `applies_to.models`.")
         if uses_depth and version < DEPTH_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_depth} give layers as a fraction of the depth, which needs "
                                f"address book schema {DEPTH_SCHEMA}, not {version}: an older venngram would refuse it "

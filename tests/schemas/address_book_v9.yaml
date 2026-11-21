@@ -1,0 +1,14 @@
+# Golden fixture: an address book at schema 9, as published. Never edit it (or its sidecar,
+# address_book_v9_elements.safetensors); add a fixture for a new schema instead.
+schema_version: 9
+name: golden
+portability: checkpoint
+applies_to:
+  models: [{id: org/tiny, revision: abc123}]
+sets:
+  q_weights:
+    module: q_proj
+    leaf: weight
+    layers: '5'
+    of: grad
+    units: {elements: {file: address_book_v9_elements.safetensors, key: q5, sha256: b15e10733fb849c9e188bf6d928285ad31e4181cd5929f5dd3075acff1988c42}}
