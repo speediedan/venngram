@@ -91,19 +91,26 @@ from typing import Any
 import yaml
 
 from venngram.address import OF
+from venngram.paths import paths, WAYPOINT_KINDS, waypoint_kinds
 
 #: The ``op_specs`` document schemas this code reads.
-OP_SPECS_WINDOW = (1, 2)
+OP_SPECS_WINDOW = (1, 3)
 
 #: The first ``op_specs`` schema whose declarations may name a parameter target or a ``delta`` operand.
 PARAM_OP_SPECS_SCHEMA = 2
+#: The first ``op_specs`` schema whose declarations may name a path target or a parameter's ``choices``.
+PATH_OP_SPECS_SCHEMA = 3
 
 OPERAND_KINDS = ("none", "vector", "pair", "subspace", "delta")
 #: What an op may act on at a site: the whole activation, a set's units, a latent space's features.
 ACTIVATION_TARGETS = ("activation", "units", "features")
 #: What an op in a recipe's ``weights`` section may act on: a whole tensor, or units of it along its unit axis.
 PARAM_TARGETS = ("param", "param_units")
-TARGETS = ACTIVATION_TARGETS + PARAM_TARGETS
+#: What a path op (a treatment's ``gradients`` section) acts on: the routes of a path set (:mod:`venngram.paths`).
+PATH_TARGETS = ("path",)
+TARGETS = ACTIVATION_TARGETS + PARAM_TARGETS + PATH_TARGETS
+#: The targets an op on values or their gradients may act on (every target but a path's routes).
+VALUE_TARGETS = ACTIVATION_TARGETS + PARAM_TARGETS
 TOKEN_SCOPES = ("all", "last", "prompt", "generated", "positions", "slice")
 VALUE_SOURCES = ("dose", "doses", "from")
 COMPOSITION = ("sum", "product", "max", "min", "ordered")
@@ -118,6 +125,8 @@ class ParamSpec:
     type: builtins.type = float
     required: bool = False
     range: tuple[float, float] | None = None
+    choices: tuple[str, ...] | None = None
+    """For a ``str`` parameter, the values it may take (any when ``None``)."""
 
 
 @dataclass(frozen=True)
@@ -146,18 +155,22 @@ class OpSpec:
 
 
 _FRACTION = ParamSpec(float, False, (0.0, math.inf))  # above 1 over-projects (over-rejection keeps going past zero)
+#: How a path op treats parallel routes between consecutive waypoints: on each route, or on their sum or mean.
+_REDUCE = ParamSpec(str, False, choices=("each", "sum", "mean"))
 
 #: The registered ops, by name.
 OPS: dict[str, OpSpec] = {spec.name: spec for spec in (
-    OpSpec("replace", ("none", "vector", "delta"), targets=TARGETS),
-    OpSpec("add", ("none", "vector", "delta"), targets=TARGETS, composition="sum"),
-    OpSpec("scale", ("none",), targets=TARGETS, value="required", composition="product"),
+    OpSpec("replace", ("none", "vector", "delta"), targets=VALUE_TARGETS),
+    OpSpec("add", ("none", "vector", "delta"), targets=VALUE_TARGETS, composition="sum"),
+    OpSpec("scale", ("none",), targets=VALUE_TARGETS, value="required", composition="product"),
     OpSpec("project", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation", "param"), "none"),
     OpSpec("reject", ("vector", "subspace"), {"fraction": _FRACTION}, ("basis",), ("activation", "param"), "none"),
     OpSpec("patch", ("pair",), {}, ("basis",), ("activation",), "none"),
     OpSpec("clamp", ("vector", "subspace"), {"min": ParamSpec(), "max": ParamSpec()}, ("basis",), ("activation",),
            "none", at_least_one_of=("min", "max")),
     OpSpec("replace_with_error", ("none", "vector"), of=("value",)),
+    OpSpec("stop", ("none",), {"reduce": _REDUCE}, (), PATH_TARGETS, "none", of=("grad",)),
+    OpSpec("route", ("none",), {"reduce": _REDUCE}, (), PATH_TARGETS, "none", of=("grad",)),
 )}
 
 #: The ops venngram defines; a document may not redeclare one.
@@ -358,11 +371,16 @@ def op_spec_from_mapping(raw: Any, *, source: str = "<inline>") -> OpSpec:
     params: dict[str, ParamSpec] = {}
     raw_params = raw.get("params") or {}
     if not isinstance(raw_params, Mapping):
-        raise ValueError(f"{where}: `params` maps a parameter's name to {{type, required, range}}.")
+        raise ValueError(f"{where}: `params` maps a parameter's name to {{type, required, range, choices}}.")
     for pname, p in raw_params.items():
         p = p or {}
-        if not isinstance(p, Mapping) or set(p) - {"type", "required", "range"}:
-            raise ValueError(f"{where}: parameter `{pname}` is {{type, required, range}}, got {p!r}.")
+        if not isinstance(p, Mapping) or set(p) - {"type", "required", "range", "choices"}:
+            raise ValueError(f"{where}: parameter `{pname}` is {{type, required, range, choices}}, got {p!r}.")
+        choices = p.get("choices")
+        if choices is not None and (p.get("type") != "str" or not isinstance(choices, list) or not choices
+                                    or not all(isinstance(c, str) for c in choices)):
+            raise ValueError(f"{where}: parameter `{pname}`'s `choices` is a non-empty list of names, for a `str` "
+                             f"parameter, got {choices!r}.")
         ptype = p.get("type", "float")
         if ptype not in _PARAM_TYPES:
             raise ValueError(f"{where}: parameter `{pname}` has type {ptype!r}; known: {list(_PARAM_TYPES)}.")
@@ -371,7 +389,8 @@ def op_spec_from_mapping(raw: Any, *, source: str = "<inline>") -> OpSpec:
                                     and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in rng)):
             raise ValueError(f"{where}: parameter `{pname}`'s `range` is [low, high], got {rng!r}.")
         params[str(pname)] = ParamSpec(_PARAM_TYPES[ptype], bool(p.get("required", False)),
-                                       (float(rng[0]), float(rng[1])) if rng is not None else None)
+                                       (float(rng[0]), float(rng[1])) if rng is not None else None,
+                                       tuple(choices) if choices is not None else None)
     for key in ("value", "composition"):
         if key in raw and not isinstance(raw[key], str):
             raise ValueError(f"{where}: `{key}` is a name, got {raw[key]!r}.")
@@ -393,7 +412,8 @@ def op_spec_to_mapping(spec: OpSpec) -> dict[str, Any]:
             raise ValueError(f"op {spec.name!r}: parameter `{name}` has type {p.type.__name__}, which a document "
                              f"cannot carry (known: {list(_PARAM_TYPES)}).")
         params[name] = {"type": type_names[p.type], "required": p.required,
-                        **({"range": list(p.range)} if p.range is not None else {})}
+                        **({"range": list(p.range)} if p.range is not None else {}),
+                        **({"choices": list(p.choices)} if p.choices is not None else {})}
     return {"name": spec.name, "operand": list(spec.operand), "params": params, "requires": list(spec.requires),
             "targets": list(spec.targets), "value": spec.value, "token_override": spec.token_override,
             "composition": spec.composition, "at_least_one_of": list(spec.at_least_one_of), "of": list(spec.of)}
@@ -403,10 +423,16 @@ def _needs_param_schema(spec: OpSpec) -> bool:
     return bool(set(spec.targets) & set(PARAM_TARGETS)) or "delta" in spec.operand
 
 
+def _needs_path_schema(spec: OpSpec) -> bool:
+    return bool(set(spec.targets) & set(PATH_TARGETS)) or any(p.choices is not None for p in spec.params.values())
+
+
 def write_op_specs(specs: Sequence[OpSpec], *, name: str, description: str | None = None) -> dict[str, Any]:
-    """An ``op_specs`` document declaring ``specs``, for a consumer to publish the ops it registered: schema 1, or 2
-    when a declaration names a parameter target or a ``delta`` operand."""
-    version = PARAM_OP_SPECS_SCHEMA if any(_needs_param_schema(s) for s in specs) else 1
+    """An ``op_specs`` document declaring ``specs``, for a consumer to publish the ops it registered: schema 1, 2 when a
+    declaration names a parameter target or a ``delta`` operand, or 3 when one names a path target or a parameter's
+    ``choices``."""
+    version = PATH_OP_SPECS_SCHEMA if any(_needs_path_schema(s) for s in specs) else \
+        PARAM_OP_SPECS_SCHEMA if any(_needs_param_schema(s) for s in specs) else 1
     doc: dict[str, Any] = {"schema_version": version, "kind": "op_specs", "name": name}
     if description is not None:
         doc["description"] = description
@@ -461,6 +487,10 @@ def read_op_specs(doc: Any, *, source: str = "<inline>", register: bool = True) 
         if version < PARAM_OP_SPECS_SCHEMA and _needs_param_schema(spec):
             raise ValueError(f"{source}: op `{spec.name}` names a parameter target or a `delta` operand, which needs "
                              f"op_specs schema {PARAM_OP_SPECS_SCHEMA}, not {version}: an older venngram would refuse "
+                             "it by name rather than pass over it.")
+        if version < PATH_OP_SPECS_SCHEMA and _needs_path_schema(spec):
+            raise ValueError(f"{source}: op `{spec.name}` names a path target or a parameter's `choices`, which needs "
+                             f"op_specs schema {PATH_OP_SPECS_SCHEMA}, not {version}: an older venngram would refuse "
                              "it by name rather than pass over it.")
         if spec.name in seen:
             raise ValueError(f"{source}: declares `{spec.name}` twice.")
@@ -544,7 +574,8 @@ class Support:
     A parameter target (``param``, ``param_units``: a recipe's ``weights`` section) is declared in ``targets`` of a
     schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a recipe's
     ``gradients`` section, on targets it declares), and ``readouts`` the reductions it computes a readout with
-    (:mod:`venngram.readouts`), in a schema 5 record; none of either by default.
+    (:mod:`venngram.readouts`), in a schema 5 record; none of either by default. ``routes`` lists the path waypoint
+    kinds its route resolver places (:mod:`venngram.paths`), in a schema 8 record; none by default.
     """
 
     ops: frozenset[str]
@@ -558,6 +589,9 @@ class Support:
     of: frozenset[str] = frozenset({"value"})
     gradient_ops: frozenset[str] = frozenset()
     readouts: frozenset[str] = frozenset()
+    routes: frozenset[str] = frozenset()
+    """The waypoint kinds its route resolver places (:data:`venngram.paths.WAYPOINT_KINDS`: ``address``,
+    ``graph_nodes``, ``anchor``); a path op on a path using another is refused. None by default."""
 
     def site_ok(self, site: str) -> bool:
         if self.sites is None:
@@ -608,7 +642,7 @@ class Support:
 _SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "tokens": TOKEN_SCOPES,
                                                       "values": VALUE_SOURCES, "transforms": None, "sites": None,
                                                       "bases": None, "of": OF, "gradient_ops": None,
-                                                      "readouts": None}
+                                                      "readouts": None, "routes": WAYPOINT_KINDS}
 _GLOB = re.compile(r"[*?\[]")
 
 
@@ -629,6 +663,13 @@ def check_support(recipe: Any, support: Support) -> list[str]:
                        f"{sorted(support.gradient_ops)})")
         if op.target_kind(recipe.book) not in support.targets:
             out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
+        if op.target_kind(recipe.book) == "path":
+            sets = recipe.book.sets()
+            used = frozenset().union(*(waypoint_kinds(p) for p in paths(sets[op.target], sets)))
+            if used - support.routes:
+                out.append(f"{at}: its path uses the waypoint kinds {sorted(used - support.routes)}, which this "
+                           f"consumer's route resolver does not place (`routes`: {sorted(support.routes)})")
+            continue
         out += _value_and_operand(op, recipe, support, at)
     for where, readout in [("readout", getattr(recipe, "readout", None))] + [
             (f"stage {i} ({s.site}) readout", s.readout) for i, s in enumerate(recipe.stages)]:
@@ -692,6 +733,8 @@ __all__ = [
     "OpCase",
     "OpSpec",
     "PARAM_OP_SPECS_SCHEMA",
+    "PATH_OP_SPECS_SCHEMA",
+    "PATH_TARGETS",
     "PARAM_TARGETS",
     "ParamSpec",
     "read_op_specs",
@@ -699,6 +742,7 @@ __all__ = [
     "register_transform",
     "Support",
     "TARGETS",
+    "VALUE_TARGETS",
     "TOKEN_SCOPES",
     "Transform",
     "TransformCase",
