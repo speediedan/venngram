@@ -85,6 +85,28 @@ book = AddressBook.from_file("qwen3.yaml")
 select("@rest", space, book.sets())
 ```
 
+A book that names latent models means the same thing only on the base model and the dictionaries it was written
+against, so its `requires` pins them (schema 8): the base model's `id` and `revision`, each latent model's dictionary
+`release` (compared key by key: `{sae_lens: <release>, id: <id>}`, or `{hub: <repository>, revision: <revision>}`) and,
+where a frame is declared, the exact version of each frame its units are read in:
+
+```yaml
+requires:
+  base_model: {id: google/gemma-2-2b, revision: c5ebcd4}
+  latent_models:
+    sae:
+      release: {sae_lens: gemma-scope-2b-pt-res, id: layer_12/width_16k/average_l0_82}
+      frames: {weekday: "3"}
+```
+
+The consumer reports what it loaded, in the same form, and the book is refused with every entry that differs named
+(`PinMismatchError.entries`):
+
+```python
+book.check_pins(base_model={"id": "google/gemma-2-2b", "revision": "c5ebcd4"},
+                latent_models={"sae": {"release": {...}, "frames": {"weekday": "3"}}})
+```
+
 ### Large unit sets and treatments
 
 A `units` value may name a sidecar instead of listing indices:
@@ -213,7 +235,9 @@ The core sections are `steering` (a book's treatments), `tuning` (address books 
 a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
 gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
 of a value part and a gradient part, `union-masks`, a union of gradient conjunctions with unit sets, and `unit-axis` and
-`physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`). A `steering`
+`physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`). Its `pins: true` (schema 7) says it
+checks the models a book pins (`AddressBook.check_pins`); a pinned book is refused by a consumer that does not. A
+`steering`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
 section), and its `readouts` the reductions it computes a readout with. A `circuits` section's `subsets` (schema 6)
 declares the treatments over graph subsets it applies: the ops, the anchors it resolves, the featurizer kinds it
@@ -424,9 +448,9 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 7 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction | ignored at the top level |
+| address book | 1 to 8 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models` | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
-| support record | 1 to 6 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets` | refused; an unknown *section* is skipped with a warning |
+| support record | 1 to 7 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |

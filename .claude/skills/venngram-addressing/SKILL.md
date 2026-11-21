@@ -73,6 +73,10 @@ sets:
   declares it: `requires: {naming_scheme: tl}`. A consumer calls `book.check_requires(naming_scheme=...)` with its
   view's scheme, and a mismatched book is refused by name instead of matching the wrong tensors. Books of `role`,
   `layers` and `component` sets are vocabulary-neutral and declare none.
+- A book that names latent models pins what they were trained against in `requires` (schema 8): `base_model: {id,
+  revision}` and, per latent model, its dictionary `release` (`{sae_lens: <release>, id: <id>}` or `{hub: <repo>,
+  revision: <rev>}`) and the exact `frames` versions its units are read in. A consumer calls
+  `book.check_pins(base_model=..., latent_models=...)` with what it loaded, and a mismatch is refused naming each entry.
 - **Keep run parameters out of books.** Doses, learning rates and intervention strengths belong in the consumer's
   configuration. A book names sets, nothing else.
 - In finetuning-scheduler, a schedule's top-level `addresses:` key names a book file (relative to the schedule) or
