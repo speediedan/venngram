@@ -60,8 +60,8 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 ``weights`` section (ops on parameters), and schema 4 a ``gradients`` section (ops on parameter gradients) or a
 ``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
-layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, and schema 9 element
-masks (``units: {elements: ...}``).
+layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, schema 9 element
+masks (``units: {elements: ...}``), and schema 10 paths (``path: [...]``, :mod:`venngram.paths`).
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -111,12 +111,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from venngram.address import Expr, parse, references, rename_refs, terms
+from venngram.address import _contains_path, And, Expr, Guarded, Minus, Or, parse, references, rename_refs, terms
+from venngram.address import Path as PathExpr
 from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchError, VenngramError
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 9)
+SCHEMA_WINDOW = (1, 10)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -135,6 +136,8 @@ DEPTH_SCHEMA = 7
 PINS_SCHEMA = 8
 #: The first schema whose sets may use an element mask (``units: {elements: {file, key, sha256}}``).
 ELEMENTS_SCHEMA = 9
+#: The first schema whose sets may be paths (``path: [...]``, :mod:`venngram.paths`).
+PATHS_SCHEMA = 10
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -301,6 +304,14 @@ class AddressBook:
             raise AddressError(f"{source}: the sets {uses_elements} use an element mask, which keeps individual "
                                "weights of one checkpoint's tensors, so the book is `portability: checkpoint` and pins "
                                "its model in `applies_to.models`.")
+        uses_paths = sorted(n for n, expr in own.items() if _contains_path(expr))
+        if uses_paths and inline and "schema_version" not in doc:
+            version = max(version, PATHS_SCHEMA)
+        if uses_paths and version < PATHS_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_paths} are paths, which need address book schema "
+                               f"{PATHS_SCHEMA}, not {version}: an older venngram would refuse them by name rather "
+                               "than pass over them.")
+        _check_graph_waypoints(own, graphs, portability, source)
         if uses_depth and version < DEPTH_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_depth} give layers as a fraction of the depth, which needs "
                                f"address book schema {DEPTH_SCHEMA}, not {version}: an older venngram would refuse it "
@@ -592,6 +603,42 @@ def _pins(requires: Mapping[str, Any], source: str) -> dict[str, Any]:
         pins[name] = entry
     out["latent_models"] = pins
     return out
+
+
+def _check_graph_waypoints(own: Mapping[str, Expr], graphs: Mapping[str, Any], portability: str, source: str) -> None:
+    """Refuse a path waypoint naming a graph the book does not carry or a node its graph lacks, and a book with graph
+    waypoints that is not a checkpoint book (a graph subset's nodes belong to one checkpoint)."""
+    used = []
+    for set_name, expr in own.items():
+        for path in _paths_in(expr):
+            for w in path.waypoints:
+                if w.graph is None:
+                    continue
+                used.append(set_name)
+                if w.graph not in graphs:
+                    raise AddressError(f"{source}: set `{set_name}` has a waypoint in graph `{w.graph}`, which the "
+                                       f"book's `graphs` does not name (graphs: {sorted(graphs)}).")
+                ids = {n.id for n in graphs[w.graph].nodes}
+                missing = [n for n in w.nodes if n not in ids]
+                if missing:
+                    raise AddressError(f"{source}: set `{set_name}` names nodes {missing}, which graph `{w.graph}` "
+                                       "does not have.")
+    if used and portability != "checkpoint":
+        raise AddressError(f"{source}: the sets {sorted(set(used))} route through a graph subset's nodes, which belong "
+                           "to one checkpoint, so the book is `portability: checkpoint` and pins its model in "
+                           "`applies_to.models`.")
+
+
+def _paths_in(expr: Expr) -> list[PathExpr]:
+    if isinstance(expr, PathExpr):
+        return [expr]
+    if isinstance(expr, Guarded):
+        return _paths_in(expr.expr)
+    if isinstance(expr, Minus):
+        return _paths_in(expr.left) + _paths_in(expr.right)
+    if isinstance(expr, (And, Or)):
+        return [p for i in expr.items for p in _paths_in(i)]
+    return []
 
 
 def _states_readout(body: Mapping[str, Any]) -> bool:

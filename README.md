@@ -43,6 +43,7 @@ An address is a record whose fields intersect:
 | `units` | indices along a target's unit axis; on a tensor's gradient, an element mask instead (`{elements: {file, key, sha256}}`, a sidecar bitmask of the tensor's exact shape; book schema 9, checkpoint books only) | `[431, 1007]` |
 | `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates). Masks combine exactly as their sets do: a union unites them, an intersection intersects them and a difference subtracts them, along one dimension or element by element; masks along two dimensions are refused | `grad` |
 | `axis` | which dimension of a tensor's gradient its `units` index: `unit` (the component's unit axis, from the map's measured layout, so one address selects an MLP's neurons on a linear and on a transposed weight alike) or a physical dimension; resolved by `gradient_selections` (book schema 6), which `gradient_masks`, a first-axis mask, refuses rather than drop | `unit`, `1` |
+| `path` | the routes a gradient takes between ordered waypoints, each an address (optionally with a graph-subset `anchor` for its token positions) or a graph subset's nodes (`{graph, nodes}`); mapping form only, its own target kind; paths unite, other algebra over them is refused; a treatment's `gradients` section acts on it with `stop` or `route`, whose `reduce` (`each`, `sum`, `mean`) says how parallel routes combine; a consumer's route resolver places it (`venngram.paths`; book schema 10, a graph waypoint makes a checkpoint book) | `{path: [{component: embed}, "@heads", {component: unembed}]}` |
 
 The string form writes each field as `<field>:<value>`:
 
@@ -243,7 +244,9 @@ difference of masks, and `element-masks`, an element mask. Its `pins: true` (sch
 checks the models a book pins (`AddressBook.check_pins`); a pinned book is refused by a consumer that does not. A
 `steering`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
-section), and its `readouts` the reductions it computes a readout with. A `circuits` section's `subsets` (schema 6)
+section), and its `readouts` the reductions it computes a readout with. Its `routes` (schema 8) lists the path
+waypoint kinds its route resolver places (`address`, `graph_nodes`, `anchor`), for the `stop` and `route` ops on a
+`path` target. A `circuits` section's `subsets` (schema 6)
 declares the treatments over graph subsets it applies: the ops, the anchors it resolves, the featurizer kinds it
 places, scalar or vector values, the columns and transforms, and whether it applies a restriction; reading graphs alone
 is not permission to apply them. A section a record omits is a contract its
@@ -452,12 +455,12 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 5 | 5 | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 9 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask | ignored at the top level |
+| address book | 1 to 10 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
-| support record | 1 to 7 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins` | refused; an unknown *section* is skipped with a warning |
+| support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
-| op declarations (`op_specs`) | 1 to 2 | 1, or 2 when a declaration names a parameter target or a `delta` operand | refused |
+| op declarations (`op_specs`) | 1 to 3 | 1, 2 when a declaration names a parameter target or a `delta` operand, or 3 when one names a path target or a parameter's `choices` | refused |
 | weight patch | 1 | 1 | refused |
 | manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
 | registry index header | 1 | 1 | |

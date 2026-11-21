@@ -135,12 +135,14 @@ from pathlib import Path
 from typing import Any
 
 from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
+from venngram.address import Path as PathExpr
 from venngram.book import _states_readout, AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
-from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError
+from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError, VenngramError
 from venngram.graphs import GRAPH_TRANSFORMS
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
+from venngram.paths import is_path, paths
 from venngram.readouts import READOUTS
 from venngram.resolve import gradient_of
 from venngram.units import _sha256 as _sha256_file
@@ -304,6 +306,8 @@ class Op:
         or ``param_units``; for a graph target, ``graph_nodes`` or (with ``outside``) ``graph_complement``."""
         if self.graph is not None:
             return "graph_complement" if self.outside is not None else "graph_nodes"
+        if self.gradients and self.target is not None and is_path(book.sets()[self.target], book.sets()):
+            return "path"
         if self.weights or self.gradients:
             return "param_units" if _names_units(book.sets(), self.target) else "param"
         if self.target is None:
@@ -679,6 +683,8 @@ def _params(raw: Any, specs: Mapping[str, Any], where: str) -> dict[str, Any]:
             raise AddressError(f"{where}: param `{name}` is a {ps.type.__name__}, got {value!r}.")
         if ps.range is not None and not ps.range[0] <= value <= ps.range[1]:
             raise AddressError(f"{where}: param `{name}` lies in [{ps.range[0]}, {ps.range[1]}], got {value!r}.")
+        if ps.choices is not None and value not in ps.choices:
+            raise AddressError(f"{where}: param `{name}` is one of {list(ps.choices)}, got {value!r}.")
         out[name] = float(value) if ps.type is float else value
     return out
 
@@ -761,6 +767,15 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
             raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}) and contains only `set`, "
                                f"got {t!r}.")
         term = sets[t["set"]]
+        if is_path(term, sets):
+            if section != "gradients":
+                raise AddressError(f"{where}: target set `{t['set']}` is a path; a path is acted on in a treatment's "
+                                   "`gradients` section (`stop`, `route`).")
+            try:
+                paths(term, sets)
+            except VenngramError as err:
+                raise AddressError(f"{where}: target set `{t['set']}`: {err}") from err
+            return _path_op(raw, name, spec, where, t["set"], book)
         axes = [to_string(x) for x in _leaf_terms(sets, t["set"]) if x.axis is not None]
         if axes:
             raise AddressError(f"{where}: target set `{t['set']}` names an `axis` ({axes[0]}); a recipe's unit targets "
@@ -822,6 +837,20 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
             raise AddressError(f"{where}: cannot override its stage's `tokens`.")
         tokens = _tokens(raw["tokens"], where)
     return Op(name, target, operand, params, value, tokens, weights, gradients)
+
+
+def _path_op(raw: Mapping[str, Any], name: str, spec: OpSpec, where: str, target: str, book: AddressBook) -> Op:
+    """Read a ``gradients`` op whose target is a path set."""
+    if "path" not in spec.targets:
+        raise AddressError(f"{where}: acts on {list(spec.targets)}, not `path`.")
+    for key in ("operand", "value"):
+        if key in raw:
+            raise AddressError(f"{where}: a path op takes no `{key}`; what it does along the routes is the op itself.")
+    if "tokens" in raw and _tokens(raw["tokens"], where).kind != "all":
+        raise AddressError(f"{where}: a `gradients` op acts on a step's accumulated gradient, so its token scope is "
+                           "`all`; a path's token positions are its waypoints' anchors.")
+    params = _params(raw.get("params") or {}, spec.params, where)
+    return Op(name, target, None, params, None, None, False, True)
 
 
 def _graph_op(raw: Mapping[str, Any], name: str, where: str, book: AddressBook) -> Op:
@@ -1120,6 +1149,8 @@ class _UnitSets:
             return out
         if isinstance(expr, Term):
             return self.term(expr)
+        if isinstance(expr, PathExpr):
+            raise self.refuse("is a path, not a set of units")
         if isinstance(expr, Minus):
             layers = _layer_filter(expr.right)
             left = self.run(expr.left)

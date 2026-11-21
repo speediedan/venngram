@@ -42,14 +42,17 @@ def test_every_published_schema_has_a_fixture():
                                                             "support_record_v2", "support_record_v3",
                                                             "support_record_v4", "support_record_v5",
                                                             "support_record_v6", "support_record_v7",
+                                                            "support_record_v8",
                                                             "graph_subset_v1",
                                                             "address_book_v1",
                                                             "address_book_v2", "address_book_v3",
                                                             "address_book_v4", "address_book_v5",
                                                             "address_book_v6", "address_book_v7",
                                                             "address_book_v8", "address_book_v9",
+                                                            "address_book_v10",
                                                             "rules_v2",
-                                                            "op_specs_v1", "op_specs_v2", "weight_patch_v1"} == names
+                                                            "op_specs_v1", "op_specs_v2", "op_specs_v3",
+                                                            "weight_patch_v1"} == names
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

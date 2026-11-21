@@ -113,7 +113,7 @@ def test_declarations_round_trip_through_the_writer():
 
 
 @pytest.mark.parametrize("change, error, match", [
-    (lambda d: d.update(schema_version=3), NewerSchemaError, "op_specs schema 3 is newer"),
+    (lambda d: d.update(schema_version=4), NewerSchemaError, "op_specs schema 4 is newer"),
     (lambda d: d.update(kind="ops"), ValueError, "is `kind: op_specs`"),
     (lambda d: d.update(ops=[]), ValueError, "non-empty list"),
     (lambda d: d.update(extra=1), ValueError, r"unknown keys \['extra'\]"),

@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from venngram.address import And, Expr, Guarded, Minus, Or, parse, Ref, references, Term, terms, to_string
+from venngram.address import And, Expr, Guarded, Minus, Or, parse, Path, Ref, references, Term, terms, to_string
 from venngram.errors import AddressError, AddressUnresolvable, Refusal
 from venngram.roles import selector_matches
 from venngram.units import ElementMask
@@ -185,6 +185,9 @@ class _Evaluator:
         return []
 
     def run(self, expr: Expr) -> list[str]:
+        if isinstance(expr, Path):
+            return self.refuse(f"`{to_string(expr)}` is a path, which a consumer's route resolver places "
+                               "(`venngram.paths`), not a set of tensors")
         if isinstance(expr, Term):
             return self.term(expr)
         if isinstance(expr, Ref):
@@ -202,6 +205,8 @@ class _Evaluator:
 
     def whole(self, expr: Expr, stack: tuple[str, ...] = ()) -> set[str]:
         """The tensors whose whole gradient ``expr`` keeps (selected by no unit set), for a masked evaluation."""
+        if isinstance(expr, Path):
+            return set()
         if isinstance(expr, Term):
             return set(self.term(expr)) if expr.units is None else set()
         if isinstance(expr, Ref):
@@ -437,7 +442,7 @@ def _mask_terms(expr: Expr, sets: Mapping[str, Any]) -> tuple[list[Term], list[s
         elif isinstance(e, Minus):
             walk(e.left, conjunctive, stack)
             walk(e.right, False, stack)
-        else:
+        elif isinstance(e, Or):
             for i in e.items:
                 walk(i, False, stack)
 
@@ -530,6 +535,8 @@ class _Masks:
         """Each tensor of ``within`` that ``e`` selects, with what ``e`` keeps of its gradient. ``within`` is what the
         enclosing expression selects, so a lone ``units`` term (which selects every tensor) is resolved only on the
         tensors its conjunction narrows it to."""
+        if isinstance(e, Path):
+            return {}
         if isinstance(e, Term):
             names = [n for n in self.ev.term(e) if n in within]
             return {n: _WHOLE if e.units is None else self.term(e, n) for n in names}

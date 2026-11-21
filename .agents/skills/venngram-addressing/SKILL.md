@@ -37,6 +37,7 @@ tighter than `|`, and parentheses group. Operators are delimited by spaces, so v
 | `units` | indices along a target's unit axis (neurons, features); on a tensor's gradient, an element mask instead: `{elements: {file, key, sha256}}`, a sidecar bitmask of the tensor's exact shape (book schema 9, checkpoint books only) | `units:[431, 1007]` |
 | `of` | `grad` acts on the gradient of what the rest selects (never filters; book schema 2); with `units` on tensors, a gradient mask, and masks combine exactly as their sets do (union, intersection, difference) along one dimension or element by element; a union's disjuncts may differ (`split_of` gives the value and gradient parts) | `of:grad` |
 | `axis` | which dimension of a gradient the term's `units` index: `unit` (the component's unit axis, from the map's layout) or a physical dimension; unset, the first dimension (book schema 6; resolve with `gradient_selections`) | `axis:unit` |
+| `path` | routes between ordered waypoints (addresses, optionally anchored to tokens, or `{graph, nodes}`), acted on by a treatment's `stop` or `route` gradient op and placed by the consumer's route resolver (mapping form only; book schema 10; `venngram.paths`) | `{path: ["component:embed", "@heads", "component:unembed"]}` |
 
 Examples, on a four-block model with a LoRA pair under each block's `q_proj`:
 

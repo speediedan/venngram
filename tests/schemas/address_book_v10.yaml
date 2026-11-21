@@ -1,0 +1,24 @@
+# Golden fixture: an address book at schema 10, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 10
+name: golden
+sets:
+  heads:
+    component: attn.*
+    layers: 0.5d:0.75d
+  premise_to_answer:
+    path:
+    - component: embed
+      anchor: {kind: token_match, token_ids: [5, 9]}
+    - '@heads'
+    - component: unembed
+      anchor: {kind: from_end, offset: 0}
+treatments:
+  cut:
+    model: {id: example/model, revision: pinned}
+    gradients:
+    - op: stop
+      target: {set: premise_to_answer}
+    - op: route
+      target: {set: premise_to_answer}
+      params: {reduce: sum}

@@ -66,6 +66,19 @@ difference whose terms disagree on it is refused when it is resolved, since it h
 (:func:`venngram.resolve.gradient_masks`), taken from each disjunct of a union and united per tensor. A book that uses
 ``of`` is address book schema 2.
 
+A **path** (``path: [...]``, mapping form only) names the routes a gradient takes between ordered **waypoints**: each
+an address (optionally with an ``anchor`` placing its token positions, :class:`venngram.graphs.Anchor`) or a selection
+of a graph subset's nodes (``{graph: <name>, nodes: [...]}``). Every route between consecutive waypoints is part of the
+path, parallel routes included; what is done along it, and how parallel routes combine, is the treatment op's
+(:mod:`venngram.paths`). Paths unite; an intersection or a difference of paths is refused when it is resolved.
+
+.. code-block:: yaml
+
+    path:
+      - {component: embed, anchor: {kind: token_match, token_ids: [5, 9]}}
+      - {component: "attn.*", layers: "0.5d:0.75d"}
+      - {graph: reasoning, nodes: [f0, f3]}
+
 >>> parse("role:adapter & layers:-4:")
 Term(role='adapter', layers=LayerSet('-4:'))
 >>> to_string(parse({"role": "adapter", "exclude": "@top"}))
@@ -84,6 +97,7 @@ from fractions import Fraction
 from typing import Any, Union
 
 from venngram.errors import AddressError
+from venngram.graphs import Anchor
 from venngram.roles import parse_selector
 from venngram.units import ElementMask, SidecarRef
 
@@ -505,6 +519,35 @@ class Term:
 
 
 @dataclass(frozen=True)
+class Waypoint:
+    """One stop of a :class:`Path`: an ``address`` (with an optional ``anchor`` placing its token positions), or the
+    ``nodes`` of the book's graph subset ``graph``."""
+
+    address: "Expr | None" = None
+    graph: str | None = None
+    nodes: tuple[str, ...] = ()
+    anchor: Anchor | None = None
+
+    def to_mapping(self) -> Any:
+        """The waypoint as a book stores it."""
+        if self.graph is not None:
+            out: dict[str, Any] = {"graph": self.graph, "nodes": list(self.nodes)}
+        else:
+            inner = to_mapping(self.address)  # type: ignore[arg-type]
+            out = dict(inner) if isinstance(inner, dict) else {"all": [inner]}
+        if self.anchor is not None:
+            out["anchor"] = self.anchor.to_mapping()
+        return out
+
+
+@dataclass(frozen=True)
+class Path:
+    """The routes between ordered waypoints (see the module docs); an address of its own target kind, ``path``."""
+
+    waypoints: tuple[Waypoint, ...]
+
+
+@dataclass(frozen=True)
 class Ref:
     """A reference to a named set (``@top``, ``@lora.top``)."""
 
@@ -547,7 +590,7 @@ class Guarded:
     expect: int | None = None
 
 
-Expr = Union[Term, Ref, And, Or, Minus, Guarded]
+Expr = Union[Term, Ref, And, Or, Minus, Guarded, Path]
 
 
 def is_address(entry: Any) -> bool:
@@ -665,7 +708,59 @@ def _entries(raw: Any, key: str) -> tuple[Expr, ...]:
     return tuple(parse(i) for i in items)
 
 
+def _waypoint(raw: Any, i: int) -> Waypoint:
+    where = f"path waypoint {i}"
+    if isinstance(raw, str):
+        address = parse(raw)
+        anchor = None
+    elif isinstance(raw, Mapping) and "graph" in raw:
+        unknown = sorted(set(raw) - {"graph", "nodes", "anchor"})
+        nodes = raw.get("nodes")
+        good_nodes = isinstance(nodes, list) and bool(nodes) and all(isinstance(n, str) and n for n in nodes) \
+            and len(set(nodes)) == len(nodes)
+        if unknown or not isinstance(raw["graph"], str) or not raw["graph"] or not good_nodes:
+            raise AddressError(f"The {where} selects a graph subset's nodes as {{graph, nodes, anchor}}, with `nodes` "
+                               f"a non-empty list of distinct node ids, got {dict(raw)!r}.")
+        anchor = Anchor.from_mapping(raw["anchor"], where) if "anchor" in raw else None
+        return Waypoint(graph=raw["graph"], nodes=tuple(nodes or ()), anchor=anchor)
+    elif isinstance(raw, Mapping):
+        anchor = Anchor.from_mapping(raw["anchor"], where) if "anchor" in raw else None
+        address = parse({k: v for k, v in raw.items() if k != "anchor"})
+    else:
+        raise AddressError(f"A {where} is an address or {{graph, nodes}}, got {raw!r}.")
+    if _contains_path(address):
+        raise AddressError(f"The {where} is itself a path; a waypoint is an address or a graph subset's nodes.")
+    stated = sorted({f for t in terms(address) for f in ("of", "axis") if getattr(t, f) is not None})
+    if stated:
+        raise AddressError(f"The {where} sets {stated}: a waypoint names where a route passes, and what is done to the "
+                           "gradient along it is the treatment op's.")
+    return Waypoint(address=address, anchor=anchor)
+
+
+def _path(raw: Any) -> Path:
+    if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+        raise AddressError(f"A `path` lists at least two waypoints in order, got {raw!r}.")
+    return Path(tuple(_waypoint(w, i) for i, w in enumerate(raw)))
+
+
+def _contains_path(expr: Expr) -> bool:
+    if isinstance(expr, Path):
+        return True
+    if isinstance(expr, Guarded):
+        return _contains_path(expr.expr)
+    if isinstance(expr, Minus):
+        return _contains_path(expr.left) or _contains_path(expr.right)
+    if isinstance(expr, (And, Or)):
+        return any(_contains_path(i) for i in expr.items)
+    return False
+
+
 def _from_mapping(raw: Mapping[str, Any]) -> Expr:
+    if "path" in raw:
+        if set(raw) != {"path"}:
+            raise AddressError(f"A path is `{{path: [...]}}` alone, got the keys {sorted(raw)}: compose paths with "
+                               "`any`, or name one in a book's set.")
+        return _path(raw["path"])
     unknown = [k for k in raw if k not in FIELDS + COMBINATORS + MODIFIERS]
     if unknown:
         raise AddressError(f"Unknown address keys {unknown}: the fields are {', '.join(FIELDS)}, the combinators "
@@ -701,7 +796,7 @@ def parse(entry: Any) -> Expr:
         AddressError: If ``entry`` is not a valid address. A bare name or regex is not an address: in an address, a
             regex is written ``name:"..."``.
     """
-    if isinstance(entry, (Term, Ref, And, Or, Minus, Guarded)):
+    if isinstance(entry, (Term, Ref, And, Or, Minus, Guarded, Path)):
         return entry
     if isinstance(entry, Mapping):
         return _from_mapping(entry)
@@ -721,10 +816,18 @@ def _value_string(name: str, value: Any) -> str:
     return str(value)
 
 
+def _waypoint_string(w: Waypoint) -> str:
+    out = f"{w.graph}:[{', '.join(w.nodes)}]" if w.graph is not None else to_string(w.address, 4)  # type: ignore
+    return out + (f" @ {w.anchor.kind}" if w.anchor is not None else "")
+
+
 def to_string(expr: Expr, _parent: int = 0) -> str:
-    """The string form of ``expr`` (``optional`` and ``expect`` have no string form and are dropped)."""
+    """The string form of ``expr`` (``optional`` and ``expect`` have no string form and are dropped). A path has only
+    a mapping form: its string describes it (``path(<waypoint> -> <waypoint>)``) and does not parse."""
     if isinstance(expr, Guarded):
         return to_string(expr.expr, _parent)
+    if isinstance(expr, Path):
+        return "path(" + " -> ".join(_waypoint_string(w) for w in expr.waypoints) + ")"
     if isinstance(expr, Term):
         terms = [f"{k}:{_value_string(k, v)}" for k, v in expr.set_fields().items()]
         out, prec = " & ".join(terms), (_PRECEDENCE["&"] if len(terms) > 1 else 4)
@@ -758,6 +861,8 @@ def to_mapping(expr: Expr) -> Any:
     """The canonical (mapping) form of ``expr``: what an address book stores. A reference stays a ``@`` string."""
     if isinstance(expr, Ref):
         return f"@{expr.name}"
+    if isinstance(expr, Path):
+        return {"path": [w.to_mapping() for w in expr.waypoints]}
     if isinstance(expr, Term):
         return {k: _mapping_value(k, v) for k, v in expr.set_fields().items()}
     if isinstance(expr, Guarded):
@@ -798,6 +903,10 @@ def references(expr: Expr) -> list[str]:
         elif isinstance(e, (And, Or)):
             for i in e.items:
                 walk(i)
+        elif isinstance(e, Path):
+            for w in e.waypoints:
+                if w.address is not None:
+                    walk(w.address)
 
     walk(expr)
     return out
@@ -813,11 +922,15 @@ def rename_refs(expr: Expr, rename: Callable[[str], str]) -> Expr:
         return Minus(rename_refs(expr.left, rename), rename_refs(expr.right, rename))
     if isinstance(expr, (And, Or)):
         return type(expr)(tuple(rename_refs(i, rename) for i in expr.items))
+    if isinstance(expr, Path):
+        return Path(tuple(Waypoint(rename_refs(w.address, rename), anchor=w.anchor) if w.address is not None else w
+                          for w in expr.waypoints))
     return expr
 
 
 def terms(expr: Expr) -> list[Term]:
-    """Every term in ``expr`` (references are not followed)."""
+    """Every term in ``expr`` (references are not followed, and a path's waypoints are its own: see
+    :func:`venngram.paths.paths`)."""
     if isinstance(expr, Term):
         return [expr]
     if isinstance(expr, Guarded):
@@ -846,6 +959,7 @@ __all__ = [
     "Minus",
     "MODIFIERS",
     "Or",
+    "Path",
     "parse",
     "Ref",
     "references",
@@ -857,4 +971,5 @@ __all__ = [
     "to_mapping",
     "to_string",
     "UnitSet",
+    "Waypoint",
 ]

@@ -1,0 +1,14 @@
+# Golden fixture: an op specs document at schema 3, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 3
+kind: op_specs
+name: golden-path-ops
+ops:
+- name: golden_detour
+  operand: [none]
+  params:
+    how: {type: str, required: false, choices: [each, sum]}
+  targets: [path]
+  value: none
+  composition: ordered
+  of: [grad]

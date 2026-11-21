@@ -73,7 +73,7 @@ from venngram.ops import check_support, PARAM_TARGETS, Support
 from venngram.resolve import GRADIENT_FORMS, gradient_forms
 
 SCHEMA_VERSION = 2
-SCHEMA_WINDOW = (1, 7)
+SCHEMA_WINDOW = (1, 8)
 #: The first schema whose ``steering`` section may declare ``of`` (a key older readers refuse).
 OF_SCHEMA = 3
 #: The first schema whose ``steering`` section may declare a parameter target (``param``, ``param_units``).
@@ -86,6 +86,8 @@ GRADIENTS_SCHEMA = 5
 SUBSETS_SCHEMA = 6
 #: The first schema whose ``tuning`` section may declare ``pins`` (that it checks a book's model pins).
 PINS_SCHEMA = 7
+#: The first schema whose ``steering`` section may declare ``routes`` (the path waypoint kinds it places).
+ROUTES_SCHEMA = 8
 CORE_SECTIONS = ("steering", "tuning", "circuits", "formats")
 UNIT_PATTERNS = ("none", "unit-adapter")
 _EXTENSION_NAME = re.compile(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+")
@@ -590,6 +592,9 @@ class SupportRecord:
                 if kind == "steering" and isinstance(body, Mapping) and "of" in body and version < OF_SCHEMA:
                     raise ValueError(f"{where}: `of` needs support record schema {OF_SCHEMA}, not {version}: an older "
                                      "venngram would refuse the record by name rather than pass over it.")
+                if kind == "steering" and isinstance(body, Mapping) and "routes" in body and version < ROUTES_SCHEMA:
+                    raise ValueError(f"{where}: `routes` needs support record schema {ROUTES_SCHEMA}, not {version}: "
+                                     "an older venngram would refuse the record by name rather than pass over it.")
                 if kind == "tuning" and isinstance(body, Mapping) and "pins" in body and version < PINS_SCHEMA:
                     raise ValueError(f"{where}: `pins` needs support record schema {PINS_SCHEMA}, not {version}: an "
                                      "older venngram would refuse the record by name rather than pass over it.")
@@ -643,7 +648,8 @@ class SupportRecord:
         """The record as a schema 2 document, or the first schema its declarations need: 3 when its steering section
         declares ``of``, 4 a parameter target, 5 when its tuning section declares ``gradients`` or its steering
         section ``gradient_ops`` or ``readouts``, 6 when its circuits section declares ``subsets``, 7 when its tuning
-        section declares ``pins`` (skipped sections are written back as they were read)."""
+        section declares ``pins``, 8 when its steering section declares ``routes`` (skipped sections are written back as
+        they were read)."""
         sections: dict[str, Any] = {}
         for kind, contract in self.sections.items():
             if isinstance(contract, Support):
@@ -659,7 +665,9 @@ class SupportRecord:
             c.gradient_ops or c.readouts for c in steering)
         needs_subsets = any(isinstance(c, CircuitSupport) and c.subsets is not None for c in self.sections.values())
         needs_pins = any(isinstance(c, TuningSupport) and c.pins for c in self.sections.values())
-        version = PINS_SCHEMA if needs_pins else SUBSETS_SCHEMA if needs_subsets else \
+        needs_routes = any(c.routes for c in steering)
+        version = ROUTES_SCHEMA if needs_routes else PINS_SCHEMA if needs_pins else \
+            SUBSETS_SCHEMA if needs_subsets else \
             GRADIENTS_SCHEMA if needs_gradients else \
             PARAM_SCHEMA if any(c.targets & set(PARAM_TARGETS) for c in steering) else \
             OF_SCHEMA if needs_of else SCHEMA_VERSION
@@ -729,6 +737,8 @@ def _steering_mapping(s: Support) -> dict[str, Any]:
         out["gradient_ops"] = sorted(s.gradient_ops)
     if s.readouts:
         out["readouts"] = sorted(s.readouts)
+    if s.routes:
+        out["routes"] = sorted(s.routes)
     return out
 
 
@@ -747,6 +757,7 @@ __all__ = [
     "CORE_SECTIONS",
     "FormatSupport",
     "PINS_SCHEMA",
+    "ROUTES_SCHEMA",
     "register_support_section",
     "SCHEMA_VERSION",
     "SCHEMA_WINDOW",
