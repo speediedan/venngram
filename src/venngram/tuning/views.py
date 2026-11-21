@@ -52,7 +52,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from torch import nn, Tensor
 
-from .errors import TunableViewError, Unresolvable
+from .errors import RoleKeyError, TunableViewError, Unresolvable
 from venngram.physical import PhysicalStructure
 from venngram.resolve import StructureProvider
 from venngram.deprecation import deprecated
@@ -186,9 +186,10 @@ def expand_roles(roles: Mapping[str, Any], names: Sequence[str], structure: Stru
             :class:`~venngram.book.AddressBook` (its :meth:`~venngram.book.AddressBook.sets`).
 
     Raises:
-        TunableViewError: If a key is neither a tensor name nor a valid role, an address states a ``role`` term,
-            does not resolve or selects nothing, or two role addresses give one tensor different roles and no name
-            entry settles it.
+        RoleKeyError: If a key is neither a tensor name nor a valid role (a :class:`~venngram.errors.RoleError` and a
+            :class:`TunableViewError` both).
+        TunableViewError: If an address states a ``role`` term, does not resolve or selects nothing, or two role
+            addresses give one tensor different roles and no name entry settles it.
     """
     from venngram.address import parse, terms, to_string
     from venngram.resolve import ParamSpace, select
@@ -205,7 +206,7 @@ def expand_roles(roles: Mapping[str, Any], names: Sequence[str], structure: Stru
         try:
             parse_role(role)
         except ValueError as err:
-            raise TunableViewError(f"The role key {role!r} names neither a parameter nor a buffer of the module, and "
+            raise RoleKeyError(f"The role key {role!r} names neither a parameter nor a buffer of the module, and "
                                    f"is not a role either: {err}") from None
         try:
             expr = parse(address)
@@ -557,8 +558,9 @@ class CanonicalView(ViewDefaults):
         sets: Named sets the role addresses may reference: a mapping, or an address book.
 
     Raises:
-        TunableViewError: If a role is invalid, a role key names neither a tensor nor a role, or a role address does
-            not resolve or gives a tensor two roles.
+        RoleKeyError: If a role key names neither a tensor nor a role (a :class:`~venngram.errors.RoleError` and a
+            :class:`TunableViewError` both).
+        TunableViewError: If a role is invalid, or a role address does not resolve or gives a tensor two roles.
     """
 
     def __init__(self, root: nn.Module, roles: Mapping[str, Any] | None = None, *, sets: Any = None,

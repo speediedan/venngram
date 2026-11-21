@@ -17,7 +17,8 @@ from venngram import AddressBook, ParamSpace
 from venngram.maps import from_document
 from venngram.maps.view import MappedView
 from venngram.tuning.conformance import ConformanceError, role_address_case
-from venngram.tuning.errors import TunableViewError
+from venngram.errors import RoleError
+from venngram.tuning.errors import RoleKeyError, TunableViewError
 from venngram.tuning.views import CanonicalView
 
 
@@ -95,6 +96,16 @@ def test_an_address_may_reference_a_books_sets():
 def test_malformed_role_addresses_are_refused_by_name(roles, match):
     with pytest.raises(TunableViewError, match=match):
         mapped(roles)
+
+
+@pytest.mark.parametrize("key", ["layers.9.attn.weight", "frobnicate:x"])
+def test_a_key_naming_neither_a_tensor_nor_a_role_is_a_role_error_too(key):
+    # before roles could be assigned by address, a key naming no tensor raised RoleError; it still does
+    with pytest.raises(RoleKeyError) as raised:
+        mapped({key: "adapter:x" if "." in key else "leaf:lora_*"})
+    assert isinstance(raised.value, RoleError) and isinstance(raised.value, TunableViewError)
+    with pytest.raises(RoleError, match="neither a parameter nor a buffer"):
+        CanonicalView(nn.Linear(2, 2), roles={"0.missing": "fitted"})
 
 
 def test_the_conformance_case_compares_address_roles_with_the_names_they_expand_to():

@@ -13,19 +13,27 @@ r"""
 Tunable View Errors
 ^^^^^^^^^^^^^^^^^^^
 
-The errors the tunable view protocol raises. Both are :class:`~venngram.errors.VenngramError` (so ``ValueError``)
-subclasses. A consumer may translate them into its
+The errors the tunable view protocol raises. Each is a :class:`~venngram.errors.VenngramError` (so ``ValueError``)
+subclass. A consumer may translate them into its
 own error types at its boundary (Fine-Tuning Scheduler raises its ``FTSConfigurationError`` for them).
 
 .. warning:: This is an experimental API and may change in a future release.
 """
 from collections.abc import Sequence
 
-from venngram.errors import VenngramError
+from venngram.errors import RoleError, VenngramError
 
 
 class TunableViewError(VenngramError):
     """Raised when a view, a role or a role selector does not satisfy the protocol."""
+
+
+class RoleKeyError(RoleError, TunableViewError):
+    """Raised when a role key names neither a parameter or buffer of the module nor a role.
+
+    It is both a :class:`~venngram.errors.RoleError`, what a key naming no tensor has always raised, and a
+    :class:`TunableViewError`, what a malformed role address raises, so a consumer catching either still catches it.
+    """
 
 
 class Unresolvable(TunableViewError):
@@ -43,4 +51,4 @@ class Unresolvable(TunableViewError):
         super().__init__(f"{msg} {detail}" if detail else msg)
 
 
-__all__ = ["TunableViewError", "Unresolvable"]
+__all__ = ["RoleKeyError", "TunableViewError", "Unresolvable"]
