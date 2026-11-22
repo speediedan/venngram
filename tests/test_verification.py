@@ -4,14 +4,19 @@ import dataclasses
 import pytest
 import torch
 import yaml
+from torch import nn
 from test_maps import CONFIGS, SAMPLED_ARCHITECTURES, tiny
 from test_maps_any_architecture import HYBRID, Hybrid
 
+from venngram import AddressBook, ParamSpace
+from venngram.address import parse, to_mapping, to_string
+from venngram.errors import AddressError, AddressUnresolvable
 from venngram.maps import component_map_for, from_document
 from venngram.maps.schema import ComponentEntry
 from venngram.maps.drafter import map_document
 from venngram.maps.structure import MapStructure
-from venngram.maps.verification import main, tiny_config, verify, with_layouts
+from venngram.maps.verification import check_unit_blocks, main, tiny_config, verify, with_layouts
+from venngram.resolve import gradient_masks, gradient_selections, GradientSelection
 
 pytest.importorskip("transformers")
 
@@ -149,11 +154,11 @@ def seed_document(architecture):
 def test_the_builder_records_measured_layouts_and_a_tensor_names_its_unit_dimension(architecture, neurons):
     model = tiny(architecture)
     doc = with_layouts(seed_document(architecture), model)
-    assert doc["schema_version"] == 5 and doc["components"]["embed"]["layout"] == "in_out"
+    assert doc["schema_version"] == 6 and doc["components"]["embed"]["layout"] == "in_out"
     assert "layout" not in doc["components"]["blocks.{i}.ln1"]  # a vector has one axis, so nothing to record
     cmap = from_document(doc)
-    written = map_document(cmap)  # the map builder writes the layouts back, at schema 5
-    assert written["schema_version"] == 5 and from_document(written).components == cmap.components
+    written = map_document(cmap)
+    assert written["schema_version"] == 6 and from_document(written).components == cmap.components
     layout = verify(model, cmap, order=False).check("layout")
     assert layout.status == "passed" and layout.note.endswith("layouts checked")
     structure = MapStructure(model, cmap)
@@ -197,3 +202,76 @@ def test_a_recorded_layout_is_checked_and_needs_schema_5():
     with pytest.raises(ValueError, match="one of \\['out_in', 'in_out'\\]"):
         from_document({**doc, "components": {"embed": {"module": "model.embed_tokens", "kind": "embed",
                                                        "layout": "rows"}}})
+
+
+@pytest.mark.parametrize("architecture, axis", [("LlamaForCausalLM", 1), ("GPT2LMHeadModel", 0)])
+def test_head_addresses_expand_along_measured_projection_axes(architecture, axis):
+    model = tiny(architecture)
+    seed = seed_document(architecture)
+    cmap = from_document(with_layouts(seed, model))
+    shapes = {n: tuple(p.shape) for n, p in model.named_parameters()}
+    space = ParamSpace(list(shapes), structure=MapStructure(model, cmap))
+    projection = f"{cmap.module_for('attn.o', 1)}.weight"
+    target = "component:attn.o & layers:1 & leaf:weight & of:grad"
+    heads = f"{target} & units:{{heads:[1,3]}}"
+    coords = f"{target} & axis:unit & units:[4,5,6,7,12,13,14,15]"
+    expected = {projection: GradientSelection(axis, (4, 5, 6, 7, 12, 13, 14, 15))}
+    assert gradient_selections(heads, space, shapes=shapes) == expected
+    assert gradient_selections(coords, space, shapes=shapes) == expected
+    assert gradient_selections(f"{target} & axis:unit & units:6:10", space, shapes=shapes) == {
+        projection: GradientSelection(axis, (6, 7, 8, 9))}
+    with pytest.raises(AddressUnresolvable, match="4 heads"):
+        gradient_selections(f"{target} & units:{{heads:[4]}}", space, shapes=shapes)
+    with pytest.raises(AddressUnresolvable, match="gradient_selections"):
+        gradient_masks(heads, space, widths={n: s[0] for n, s in shapes.items()})
+    legacy = ParamSpace(list(shapes), structure=MapStructure(model, from_document(seed)))
+    with pytest.raises(AddressUnresolvable, match="unit_block"):
+        gradient_selections(heads, legacy, shapes=shapes)
+    assert gradient_selections(coords, legacy, shapes=shapes) == expected
+    assert verify(model, cmap, order=False).check("unit_block").status == "passed"
+    if architecture == "GPT2LMHeadModel":
+        assert cmap.unit_block_of("attn.qkv", 1) is None
+    else:
+        assert cmap.unit_block_of("attn.k", 1) == cmap.unit_block_of("attn.v", 1) == 4
+        key = f"{cmap.module_for('attn.k', 1)}.weight"
+        assert gradient_selections(heads.replace("attn.o", "attn.k").replace("[1,3]", "[1]"), space,
+                                   shapes=shapes) == {key: GradientSelection(0, (4, 5, 6, 7))}
+
+
+def test_unit_blocks_validate_width_and_grouping_independently():
+    model = tiny("LlamaForCausalLM")
+    doc = with_layouts(seed_document("LlamaForCausalLM"), model)
+    with pytest.raises(ValueError, match="unit_block.*schema-6"):
+        from_document({**doc, "schema_version": 5})
+    key_row = doc["components"]["blocks.{i}.attn.k"]
+    for invalid in (False, 0, -2, 4.0, None):
+        key_row["unit_block"] = invalid
+        with pytest.raises(ValueError, match="unit_block.*positive integer"):
+            from_document(doc)
+    key_row["unit_block"] = 3
+    check = check_unit_blocks(from_document(doc), model)
+    assert check.status == "failed" and any("width 8 cannot be divided" in str(p) for p in check.problems)
+    key_row["unit_block"] = 4
+    model.model.layers[0].self_attn.k_proj = nn.Linear(16, 12, bias=False, device="meta")
+    model.model.layers[0].self_attn.v_proj = nn.Linear(16, 12, bias=False, device="meta")
+    check = check_unit_blocks(from_document(doc), model)
+    assert check.status == "failed" and any("cannot be grouped" in str(p) for p in check.problems)
+
+
+def test_builder_can_measure_head_sizes_from_projection_widths_and_head_counts():
+    model = tiny("LlamaForCausalLM")
+    model.config.head_dim = None
+    for layer in model.model.layers:
+        del layer.self_attn.head_dim
+    cmap = from_document(with_layouts(seed_document("LlamaForCausalLM"), model))
+    assert [cmap.unit_block_of(f"attn.{p}", 0) for p in ("q", "k", "v", "o")] == [4, 4, 4, 4]
+
+
+@pytest.mark.parametrize("selection", [[1, 3], "-2:"])
+def test_head_qualifier_round_trips_and_requires_book_schema_11(selection):
+    expr = parse({"component": "attn.o", "units": {"heads": selection}, "of": "grad"})
+    assert parse(to_string(expr)) == parse(to_mapping(expr)) == expr
+    doc = {"schema_version": 10, "sets": {"heads": to_mapping(expr)}}
+    with pytest.raises(AddressError, match="schema 11"):
+        AddressBook.from_mapping(doc)
+    assert AddressBook.from_mapping({**doc, "schema_version": 11}).sets() == {"heads": expr}

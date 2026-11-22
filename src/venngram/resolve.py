@@ -472,12 +472,14 @@ def gradient_masks(address: Any, space: ParamSpace, sets: Mapping[str, Any] | No
             :func:`gradient_selections`.
     """
     expr = _grad_address(address, sets or {})
-    axes = sorted({str(t.axis) for d in _disjuncts(expr, sets or {}, lambda e: True)
-                   for t in _mask_terms(d, sets or {})[0] if t.axis is not None})
+    masks = [t for d in _disjuncts(expr, sets or {}, lambda e: True) for t in _mask_terms(d, sets or {})[0]]
+    axes = {str(t.axis) for t in masks if t.axis is not None}
+    if any(t.units is not None and t.units.heads is not None for t in masks):
+        axes.add("unit")
     if axes:
         raise AddressUnresolvable(to_string(expr), [Refusal(
-            f"`axis:{', '.join(axes)}` names the dimension a mask runs along, which a first-axis mask cannot carry: "
-            "resolve it with `venngram.resolve.gradient_selections`")])
+            f"`axis:{', '.join(sorted(axes))}` names the dimension a mask runs along, which a first-axis mask "
+            "cannot carry: resolve it with `venngram.resolve.gradient_selections`")])
     if "element-masks" in gradient_forms(expr, sets):
         raise AddressUnresolvable(to_string(expr), [Refusal(
             "an element mask keeps individual elements, which a first-axis mask cannot carry: resolve it with "
@@ -579,9 +581,7 @@ class _Masks:
         try:
             if units.is_elements:
                 return units.elements_for_layer(layer, shape)
-            if t.axis is None:
-                dim = 0
-            elif t.axis == "unit":
+            if t.axis == "unit" or units.heads is not None:
                 unit_dim = getattr(structure, "unit_dim", None)
                 found = unit_dim(n, len(shape)) if unit_dim is not None else Refusal(
                     "the structure provides no unit axes (a map's structure does)")
@@ -589,10 +589,12 @@ class _Masks:
                     return self.problem(f"`{n}`: `axis:unit` has no unit axis: {found.reason}")
                 dim = int(found)
             else:
-                dim = int(t.axis)
+                dim = int(t.axis) if t.axis is not None else 0
             if not 0 <= dim < len(shape):
                 return self.problem(f"`{n}` has {len(shape)} dimensions, so it has no dimension {dim}")
-            return _Axis(dim, frozenset(units.for_layer(layer, shape[dim])))
+            block_of = getattr(structure, "unit_block", None)
+            block = block_of(n) if units.heads is not None and block_of is not None else None
+            return _Axis(dim, frozenset(units.for_layer(layer, shape[dim], unit_block=block)))
         except AddressError as err:
             return self.problem(f"`{n}`: {err}")
 
@@ -648,7 +650,8 @@ def gradient_selections(address: Any, space: ParamSpace, sets: Mapping[str, Any]
     measured layout (:meth:`venngram.maps.structure.MapStructure.unit_dim`), so one address selects an MLP's neurons on
     a linear and on a transposed weight alike; an integer is that physical dimension; unset is the first dimension, as
     :func:`gradient_masks` reads it. An element mask (``units: {elements: ...}``) keeps individual elements of a tensor
-    of its exact shape. A tensor selected without a unit set keeps its whole gradient.
+    of its exact shape. A head selection (``units: {heads: [2, 5]}``) expands over the recorded unit axis using the
+    target row's ``unit_block``. A tensor selected without a unit set keeps its whole gradient.
 
     Masks combine exactly as their sets do: a union unites them, an intersection intersects them, and a difference
     subtracts the right side's mask from the left's (a right side keeping a tensor's whole gradient drops the tensor;
@@ -712,7 +715,7 @@ def gradient_forms(address: Any, sets: Mapping[str, Any] | None = None) -> froze
     if any(t.units is not None and t.units.is_elements for found in masks for t in found):
         out.add("element-masks")
     axes = {t.axis for found in masks for t in found if t.axis is not None}
-    if "unit" in axes:
+    if "unit" in axes or any(t.units is not None and t.units.heads is not None for found in masks for t in found):
         out.add("unit-axis")
     if any(isinstance(a, int) for a in axes):
         out.add("physical-axis")

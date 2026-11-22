@@ -1069,6 +1069,9 @@ def _term_units(expr: Term, name: str, source: str) -> list[tuple[int, int]]:
         raise AddressError(f"{source}: set `{name}` must be one address with `units`, or a composition of unit sets, "
                            "to carry doses.")
     units = expr.units
+    if units.heads is not None:
+        raise AddressError(f"{source}: set `{name}` selects whole heads, which need a component map to resolve. "
+                           "Doses need explicit coordinate indices.")
     if units.per_layer is not None:
         layers = [k for k, _ in units.per_layer]
     elif expr.layers is not None and expr.layers.indices is not None:

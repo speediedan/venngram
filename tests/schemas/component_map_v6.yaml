@@ -1,0 +1,5 @@
+schema_version: 6
+architecture: GoldenHeads
+components:
+  blocks.{i}: {module: "layers.{i}", kind: block}
+  blocks.{i}.attn.o: {module: "layers.{i}.attention.o", kind: linear, layout: out_in, unit_block: 4}

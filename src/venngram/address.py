@@ -273,6 +273,7 @@ class LayerSet:
 class UnitSet:
     """Indices along a target's unit axis: a list or a slice, for every selected layer or per layer. A large set may
     instead name a sidecar file (``{file, key, sha256}``, :mod:`venngram.units`), alone or as one layer's value.
+    ``{heads: [2, 5]}`` selects whole attention heads along the same unit axis, using the row's ``unit_block``.
 
     An **element mask** (``{elements: {file, key, sha256}}``, alone or per layer) keeps individual elements of a tensor
     of one exact shape instead of indices along an axis (:class:`venngram.units.ElementMask`); only a tensor's gradient
@@ -291,6 +292,8 @@ class UnitSet:
     """The sidecar references this set was read from: (layer, or ``None`` for every layer; reference; axis length)."""
     element_masks: tuple[tuple[int | None, SidecarRef, ElementMask], ...] = ()
     """For an element mask: (layer, or ``None`` for every layer; reference; mask)."""
+    heads: LayerSet | None = None
+    """Whole attention heads, expanded using the target row's recorded block size."""
 
     def __repr__(self) -> str:
         return f"UnitSet({self.spec!r})"
@@ -305,7 +308,14 @@ class UnitSet:
         if isinstance(raw, UnitSet):
             return raw
         if isinstance(raw, str) and raw.strip().startswith("{"):
-            raw = _literal(raw.strip(), "units")
+            text = raw.strip()
+            head_set = re.fullmatch(r"\{\s*heads\s*:\s*(.+)\}", text)
+            raw = {"heads": head_set[1]} if head_set else _literal(text, "units")
+        if isinstance(raw, Mapping) and "heads" in raw:
+            if set(raw) != {"heads"}:
+                raise AddressError(f"A head selection is `units: {{heads: [2, 5]}}`, got {dict(raw)!r}.")
+            heads = cls._indices(raw["heads"])
+            return cls(spec=f"{{heads: {heads.spec}}}", heads=heads)
         if isinstance(raw, Mapping) and "file" in raw:  # one sidecar set for every selected layer
             ref, indices, axis = cls._sidecar(raw)
             return cls(spec=repr(ref.mapping()), flat=indices, sidecars=((None, ref, axis),))
@@ -398,13 +408,24 @@ class UnitSet:
                 return mask
         return ElementMask(tuple(shape))
 
-    def for_layer(self, layer: int | None, width: int) -> tuple[int, ...]:
+    def for_layer(self, layer: int | None, width: int, *, unit_block: int | None = None) -> tuple[int, ...]:
         """The unit indices at ``layer`` along an axis of ``width`` units (empty for a layer the set does not name).
 
         Raises:
             AddressError: If a sidecar set for ``layer`` was written for an axis of another width, or this is an element
-                mask, which keeps elements rather than indices along one axis.
+                mask, or if whole heads cannot be resolved with the target row's ``unit_block``.
         """
+        if self.heads is not None:
+            if unit_block is None:
+                raise AddressError(f"`units:{self.spec}` needs the target row's `unit_block`.")
+            if type(unit_block) is not int or unit_block <= 0 or width <= 0 or width % unit_block:
+                raise AddressError(f"`units:{self.spec}` cannot divide unit-axis width {width} into heads of "
+                                   f"block size {unit_block!r}.")
+            try:
+                heads = self.heads.select(width // unit_block)
+            except AddressError as err:
+                raise AddressError(f"`units:{self.spec}` is outside the target's {width // unit_block} heads.") from err
+            return tuple(i for h in heads for i in range(h * unit_block, (h + 1) * unit_block))
         if self.element_masks:
             raise AddressError(f"`units:{self.spec}` is an element mask: it keeps individual elements of one tensor's "
                                "gradient, not indices along an axis.")
@@ -500,6 +521,10 @@ class Term:
             if self.axis is not None:
                 raise AddressError(f"An element mask covers every dimension of its tensor, so it takes no "
                                    f"`axis:{self.axis}`.")
+        if self.units is not None and self.units.heads is not None:
+            if self.target != "param" or self.axis not in (None, "unit"):
+                raise AddressError(f"`units:{self.units.spec}` needs a tensor target and its recorded unit axis "
+                                   "(`axis:unit`).")
 
     @property
     def target(self) -> str:
@@ -850,6 +875,8 @@ def _mapping_value(name: str, value: Any) -> Any:
             return value.spec
         return indices[0] if len(indices) == 1 else list(indices)
     if isinstance(value, UnitSet):
+        if value.heads is not None:
+            return {"heads": _mapping_value("layers", value.heads)}
         refs = {at: ref.mapping() for at, ref, _ in value.sidecars}
         if value.per_layer is not None:
             return {k: refs[k] if k in refs else _mapping_value("layers", v) for k, v in value.per_layer}

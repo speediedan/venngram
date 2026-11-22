@@ -32,6 +32,7 @@ component map       1 -> 2     ``facts`` is renamed ``properties``
 component map       2 -> 3     none (schema 3 adds ``optional`` rows)
 component map       3 -> 4     none (schema 4 adds the separate overlay shape)
 component map       4 -> 5     none (schema 5 adds per-row ``layout``, which the map builder measures)
+component map       5 -> 6     none (schema 6 adds per-row ``unit_block``, which the map builder measures)
 overlay map         4 -> 5     none (schema 5 adds templates)
 recipe              1 -> 2     one ``method`` and its ``treatments`` become one stage of ops
                                (:func:`venngram.recipe.migrate`)

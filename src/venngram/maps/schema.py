@@ -86,15 +86,22 @@ UNIT_SIDES: dict[str, str] = {
 #: records (:func:`~venngram.maps.verification.with_layouts`) and verification checks.
 LAYOUTS = ("out_in", "in_out")
 
+#: Attention projections with one contiguous block per head along their unit axis.
+ATTENTION_PROJECTIONS = ("attn.q", "attn.k", "attn.v", "attn.o")
+
 #: The schema this code writes and reads by default. An additive descriptive key (a property, an annotation) never
 #: bumps it, because readers ignore unknown keys of that class; an applicability key (one that changes which rows apply
 #: or how a row resolves, such as a per-row layer predicate or a second block stack) always does, because a reader that
 #: skipped one would resolve the wrong rows silently. 2 added ``kinds``, ``stacks`` and per-row ``layers``; 3 added
-#: per-row ``optional``; 5 added per-row ``layout`` (4 is the schema the overlay shape arrived with).
-COMPONENT_MAP_SCHEMA_VERSION = 5
+#: per-row ``optional``; 5 added per-row ``layout`` (4 is the schema the overlay shape arrived with);
+#: 6 added per-row ``unit_block``.
+COMPONENT_MAP_SCHEMA_VERSION = 6
 
 #: The first schema whose rows may carry ``layout`` (it says which tensor axis a unit index runs along).
 LAYOUT_SCHEMA_VERSION = 5
+
+#: The first schema whose rows may carry ``unit_block``.
+UNIT_BLOCK_SCHEMA_VERSION = 6
 
 #: The oldest schema this code reads. Published maps outlive the code that wrote them, so the reader accepts a window.
 COMPONENT_MAP_SCHEMA_MIN_READABLE = 1
@@ -197,6 +204,8 @@ class ComponentEntry:
     linear-attention layers alternate in a pattern that varies by model size). It must exist on at least one."""
     layout: str | None = None
     """How the module's two-dimensional weight lays out its sides (:data:`LAYOUTS`); ``None`` when not recorded."""
+    unit_block: int | None = None
+    """The number of consecutive unit-axis coordinates in one attention head, when recorded."""
 
 
 @dataclass(frozen=True)
@@ -285,6 +294,11 @@ class ComponentMap:
         """The recorded :data:`LAYOUTS` value of the row mapping ``component`` at ``layer``, or ``None``."""
         entry = self._entry(component, layer, stack)
         return entry.layout if entry is not None else None
+
+    def unit_block_of(self, component: str, layer: int | None, stack: str | None = None) -> int | None:
+        """The recorded attention head block size at ``layer`` in ``stack``, or ``None``."""
+        entry = self._entry(component, layer, stack)
+        return entry.unit_block if entry is not None else None
 
     def kind_of(self, component: str, layer: int | None, stack: str | None = None) -> str | None:
         """The component's kind, or ``None`` if unmapped there."""
@@ -429,9 +443,15 @@ def _rows(rows: Any, source: str, kinds: dict[str, KindSpec], stacks: dict[str, 
             raise ValueError(f"{where}: `layout` is a schema-{LAYOUT_SCHEMA_VERSION} key, one of {list(LAYOUTS)} (a "
                              "reader that skipped it would index a unit along the wrong axis); declare "
                              f"schema_version: {LAYOUT_SCHEMA_VERSION}")
-        # only `module`, `kind`, `layers`, `optional` and `layout` are read: a later schema may annotate rows here
+        unit_block = row.get("unit_block")
+        if "unit_block" in row:
+            if version < UNIT_BLOCK_SCHEMA_VERSION or type(unit_block) is not int or unit_block <= 0:
+                raise ValueError(f"{where}: `unit_block` is a schema-{UNIT_BLOCK_SCHEMA_VERSION} positive integer")
+            if layout is None:
+                raise ValueError(f"{where}: `unit_block` needs a recorded `layout`")
+        # A later schema may add descriptive row annotations, which this reader ignores.
         components[name] = ComponentEntry(module=row["module"], kind=row["kind"], layers=layers, optional=optional,
-                                          layout=layout)
+                                          layout=layout, unit_block=unit_block)
     return components
 
 
