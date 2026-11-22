@@ -307,6 +307,12 @@ class MapStructure:
                            "(component map schema 5, written by `venngram.maps.verification.with_layouts`)")
         return (0 if side == "out" else 1) if layout == "out_in" else (0 if side == "in" else 1)
 
+    def unit_block(self, name: str) -> int | None:
+        """The recorded head block size for a tensor on a map row's own module, if defined."""
+        owner, _, leaf = strip_wrappers(name).rpartition(".")
+        loc = self._table.get(owner) if leaf in ("weight", "bias") else None
+        return self.cmap.unit_block_of(loc.component, loc.layer, loc.stack) if loc and loc.component else None
+
     def depth(self, stack: str | None = None) -> int | Refusal:
         """The number of blocks in ``stack`` (the primary one when ``None``), or why it is unknown."""
         if self.refusal is not None:

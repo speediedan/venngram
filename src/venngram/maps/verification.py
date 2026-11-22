@@ -29,6 +29,9 @@ of the same architecture.
 - **layout**: every row's recorded ``layout`` (schema 5) is the one its module's weight has
   (:func:`measure_layout`). A row that records none is counted, not failed: a unit along its tensor's axis is then
   refused where it is asked for. :func:`with_layouts` records the measured layouts into a map document.
+- **unit_block**: when a map records head sizes (schema 6), each size divides its projection's unit-axis width
+  and agrees with the measured size where available. The query and output head counts must match, as must the key
+  and value head counts. Query heads must divide into equal groups over key/value heads.
 
 What the shapes and order checks expect is data, not code: a rule set (:mod:`~venngram.maps.rules`), layered from the
 bundled ``core`` set, the map's own ``verification:`` section and any the caller passes. So a map for an architecture
@@ -63,8 +66,9 @@ from venngram.__about__ import __version__
 from venngram.errors import NewerSchemaError
 from venngram.maps.check import check_map_against_model, MapProblem, stack_length, submodule
 from venngram.maps.rules import config_field, core_rules, evaluate, layered, RuleSet, Unstated
-from venngram.maps.schema import (component_map_for, ComponentMap, from_document, LAYOUT_SCHEMA_VERSION,
-                                  load_component_map, PRIMARY_STACK)
+from venngram.maps.schema import (ATTENTION_PROJECTIONS, component_map_for, ComponentMap, from_document,
+                                  LAYOUT_SCHEMA_VERSION, load_component_map, PRIMARY_STACK, UNIT_BLOCK_SCHEMA_VERSION,
+                                  UNIT_SIDES)
 from venngram.maps.structure import map_for, MapStructure
 from venngram.resolve import component_matches
 
@@ -250,8 +254,81 @@ def check_layout(cmap: ComponentMap, model: nn.Module) -> CheckResult:
     return CheckResult("layout", "failed" if problems else "passed", tuple(problems), note)
 
 
+def _unit_width(module: Any, component: str, layout: str | None) -> int | None:
+    side, weight = UNIT_SIDES.get(component), getattr(module, "weight", None)
+    if side is None or layout is None or not isinstance(weight, torch.Tensor) or weight.ndim != 2:
+        return None
+    return int(weight.shape[0 if layout.startswith(side) else 1])
+
+
+def _measure_unit_block(cmap: ComponentMap, model: nn.Module, key: str, layer: int | None,
+                        module: Any, width: int) -> int | None:
+    loc = cmap.key(key)
+    if loc.component not in ATTENTION_PROJECTIONS:
+        return None
+    attention = cmap.module_for("attn", layer, loc.stack)
+    if attention is None:
+        path = cmap.components[key].module
+        if layer is not None:
+            path = path.replace("{i}", str(layer))
+        attention = path.rpartition(".")[0]
+    owner = submodule(model, attention)
+    sources = (module, owner, getattr(owner, "config", None))
+    for obj in sources:
+        size = getattr(obj, "head_dim", None)
+        if type(size) is int and size > 0:
+            return size
+    names = (("num_key_value_heads", "num_kv_heads") if loc.component in ("attn.k", "attn.v")
+             else ("num_heads", "num_attention_heads", "n_head"))
+    for obj in sources:
+        for name in names:
+            count = getattr(obj, name, None)
+            if type(count) is int and count > 0:
+                return width // count if width > 0 and width % count == 0 else None
+    return None
+
+
+def check_unit_blocks(cmap: ComponentMap, model: nn.Module) -> CheckResult:
+    """Validate recorded head sizes, projection widths and grouped-query head counts."""
+    problems: list[MapProblem] = []
+    counts: dict[tuple[str | None, int | None], dict[str, tuple[str, int, int]]] = {}
+    checked = 0
+    for key, layer, module in _row_modules(cmap, model):
+        entry = cmap.components[key]
+        size = entry.unit_block
+        if size is None:
+            continue
+        checked += 1
+        loc = cmap.key(key)
+        width = _unit_width(module, loc.component, entry.layout)
+        if type(size) is not int or size <= 0 or width is None or width <= 0 or width % size:
+            problems.append(MapProblem(key, layer, f"unit-axis width {width} cannot be divided into `unit_block` "
+                                       f"of {size}"))
+            continue
+        measured = _measure_unit_block(cmap, model, key, layer, module, width)
+        if measured is not None and measured != size:
+            problems.append(MapProblem(key, layer, f"records `unit_block` {size}, but its measured size is {measured}"))
+        counts.setdefault((loc.stack, layer), {})[loc.component] = (key, width // size, size)
+    for (_stack, layer), projections in counts.items():
+        queries = [projections[c] for c in ("attn.q", "attn.o") if c in projections]
+        keys_values = [projections[c] for c in ("attn.k", "attn.v") if c in projections]
+        for pair in (queries, keys_values):
+            if len(pair) == 2 and pair[0][1:] != pair[1][1:]:
+                key, count, size = pair[0]
+                peer, peer_count, peer_size = pair[1]
+                problems.append(MapProblem(key, layer, f"its {count} heads of width {size} do not match "
+                                           f"{peer}'s {peer_count} heads of width {peer_size}"))
+        for key, query, q_size in queries:
+            for kv_key, kv, kv_size in keys_values:
+                if query % kv or q_size != kv_size:
+                    problems.append(MapProblem(key, layer, f"its {query} heads of width {q_size} cannot be grouped "
+                                               f"over {kv_key}'s {kv} heads of width {kv_size}"))
+    return CheckResult("unit_block", "failed" if problems else "passed", tuple(problems),
+                       f"{checked} head block sizes checked")
+
+
 def with_layouts(doc: Any, model: nn.Module, source: str = "<document>") -> dict[str, Any]:
-    """``doc`` (a component map document) with each row's measured :func:`measure_layout` recorded, at schema 5.
+    """``doc`` with measured weight layouts and attention head sizes recorded where they can be determined.
 
     This is how the map builder records layouts, so a published map never states one by hand. A row whose module has
     no measurable weight records none; a row whose layers disagree is refused, since one row has one layout.
@@ -261,19 +338,34 @@ def with_layouts(doc: Any, model: nn.Module, source: str = "<document>") -> dict
     """
     from venngram.migrate import migrate
 
-    out = migrate(doc, source=source)[0] if doc.get("schema_version", 0) < LAYOUT_SCHEMA_VERSION else copy.deepcopy(doc)
+    out = copy.deepcopy(doc)
+    if out.get("schema_version", 0) < LAYOUT_SCHEMA_VERSION:
+        out = migrate(out, source=source)[0]
     cmap = from_document(out, source)
     found: dict[str, set[str]] = {}
-    for key, _layer, module in _row_modules(cmap, model):
+    blocks: dict[str, set[int | None]] = {}
+    for key, layer, module in _row_modules(cmap, model):
         measured = measure_layout(module)
         if measured is not None:
             found.setdefault(key, set()).add(measured)
+        component = cmap.key(key).component
+        if component in ATTENTION_PROJECTIONS:
+            width = _unit_width(module, component, measured)
+            size = _measure_unit_block(cmap, model, key, layer, module, width) if width is not None else None
+            blocks.setdefault(key, set()).add(size)
     for key, layouts in found.items():
         if len(layouts) > 1:
             raise ValueError(f"{source}: component {key!r} measures layouts {sorted(layouts)} on different layers; "
                              "one row has one layout, so split it by `layers`")
         out["components"][key]["layout"] = layouts.pop()
     out["schema_version"] = max(out["schema_version"], LAYOUT_SCHEMA_VERSION)
+    for key, sizes in blocks.items():
+        known = sizes - {None}
+        if len(known) > 1:
+            raise ValueError(f"{source}: component {key!r} measures different `unit_block` sizes on different layers")
+        if None not in sizes:
+            out["components"][key]["unit_block"] = known.pop()
+            out["schema_version"] = UNIT_BLOCK_SCHEMA_VERSION
     from_document(out, source)
     return out
 
@@ -516,6 +608,8 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
         model = _build(config, arch, "meta")
     checks = [CheckResult("exists", *_status(check_map_against_model(cmap, model))), check_partition(cmap, model),
               check_shapes(cmap, model, config, ruleset), check_layout(cmap, model)]
+    if any(entry.unit_block is not None for entry in cmap.components.values()):
+        checks.append(check_unit_blocks(cmap, model))
     if order:
         checks.append(_order(cmap, target, config, arch, inputs, ruleset))
         if against is not None:
@@ -575,6 +669,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "check_against",
     "check_layout",
+    "check_unit_blocks",
     "check_order",
     "check_partition",
     "check_shapes",

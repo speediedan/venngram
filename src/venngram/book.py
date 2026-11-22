@@ -61,7 +61,8 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 ``readout`` (what a stage's gradients are taken of), each of which an older reader would pass over silently. Schema 5
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
 layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, schema 9 element
-masks (``units: {elements: ...}``), and schema 10 paths (``path: [...]``, :mod:`venngram.paths`).
+masks (``units: {elements: ...}``), schema 10 paths (``path: [...]``, :mod:`venngram.paths`), and schema 11 whole
+attention heads (``units: {heads: ...}``).
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -117,7 +118,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchEr
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 10)
+SCHEMA_WINDOW = (1, 11)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -138,6 +139,8 @@ PINS_SCHEMA = 8
 ELEMENTS_SCHEMA = 9
 #: The first schema whose sets may be paths (``path: [...]``, :mod:`venngram.paths`).
 PATHS_SCHEMA = 10
+#: The first schema whose sets may select whole heads (``units: {heads: ...}``).
+HEADS_SCHEMA = 11
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -311,6 +314,13 @@ class AddressBook:
             raise AddressError(f"{source}: the sets {uses_paths} are paths, which need address book schema "
                                f"{PATHS_SCHEMA}, not {version}: an older venngram would refuse them by name rather "
                                "than pass over them.")
+        uses_heads = sorted(n for n, expr in own.items()
+                            if any(t.units is not None and t.units.heads is not None for t in terms(expr)))
+        if uses_heads and inline and "schema_version" not in doc:
+            version = max(version, HEADS_SCHEMA)
+        if uses_heads and version < HEADS_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_heads} select whole heads, which needs address book "
+                               f"schema {HEADS_SCHEMA}.")
         _check_graph_waypoints(own, graphs, portability, source)
         if uses_depth and version < DEPTH_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_depth} give layers as a fraction of the depth, which needs "

@@ -60,7 +60,7 @@ from venngram.maps.check import check_map_against_model, MapProblem
 from venngram.maps.rules import refuse_newer_rules, Rules, RULES_SCHEMA_VERSION
 from venngram.maps.schema import (BUNDLED_KINDS, component_map_for, ComponentEntry, ComponentKey, ComponentMap,
                                   from_document, KindSpec, LAYOUT_SCHEMA_VERSION, registered_architectures,
-                                  VOCABULARY)
+                                  UNIT_BLOCK_SCHEMA_VERSION, VOCABULARY)
 from venngram.sources import SourceError
 
 
@@ -357,24 +357,41 @@ def _first(rules: Sequence[DraftingRules], scope: str, name: str, siblings: set[
 
 
 def map_document(cmap: ComponentMap, provenance: Any = None) -> dict[str, Any]:
-    """A component map as a schema 3 document (schema 5 when a row records its ``layout``; ``from_document`` reads it
-    back), with its ``properties`` (a draft's
+    """A component map as a document with its row applicability and measured fields, and its ``properties`` (a draft's
     ``draft`` flag and what it leaves unconfirmed among them) and, given the :class:`~venngram.sources.Provenance` that
     :func:`~venngram.sources.derive_map` returns, the source and version that derived it, which a registry index
     records for the map. Both are descriptive keys: a reader that does not know them ignores them."""
     declared = {k: {"output": v.output, "sublayer": v.sublayer} for k, v in cmap.kinds.items()
                 if k not in BUNDLED_KINDS}
     layouts = any(e.layout is not None for e in cmap.components.values())
-    doc: dict[str, Any] = {"schema_version": LAYOUT_SCHEMA_VERSION if layouts else 3, "architecture": cmap.architecture}
+    blocks = any(e.unit_block is not None for e in cmap.components.values())
+    version = UNIT_BLOCK_SCHEMA_VERSION if blocks else LAYOUT_SCHEMA_VERSION if layouts else 3
+    doc: dict[str, Any] = {"schema_version": version, "architecture": cmap.architecture}
     if provenance is not None:
         doc["provenance"] = provenance.to_mapping()
     if cmap.properties:
         doc["properties"] = dict(cmap.properties)
     if declared:
         doc["kinds"] = declared
-    doc["components"] = {k: {"module": e.module, "kind": e.kind, **({"optional": True} if e.optional else {}),
-                             **({"layout": e.layout} if e.layout is not None else {})}
-                         for k, e in cmap.components.items()}
+    if cmap.stacks:
+        doc["stacks"] = {name: {"module": template} for name, template in cmap.stacks.items()}
+    components = {}
+    for key, entry in cmap.components.items():
+        row: dict[str, Any] = {"module": entry.module, "kind": entry.kind}
+        if entry.optional:
+            row["optional"] = True
+        if entry.layers is not None:
+            layers = entry.layers.spec
+            if entry.layers.form == "range":
+                row["layers"] = f"{layers[0]}-{layers[1]}"
+            else:
+                row["layers"] = layers if isinstance(layers, str) else list(layers)
+        if entry.layout is not None:
+            row["layout"] = entry.layout
+        if entry.unit_block is not None:
+            row["unit_block"] = entry.unit_block
+        components[key] = row
+    doc["components"] = components
     return doc
 
 

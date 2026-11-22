@@ -1,0 +1,11 @@
+schema_version: 11
+name: attention-heads
+portability: family
+requires: {structure: vocabulary}
+sets:
+  selected_heads:
+    component: attn.o
+    layers: 12
+    leaf: weight
+    units: {heads: [2, 5]}
+    of: grad
