@@ -168,6 +168,51 @@ def test_two_mapped_models_under_one_root_are_refused_by_name():
     assert MapStructure(wrapper, component_map_for("GPT2LMHeadModel"), mount="absent").refusal is not None
 
 
+class _Forwarding(nn.Module):
+    """A wrapper that, like PEFT's ``PeftModel``, holds models deeper down and forwards the first one's ``config``."""
+
+    def __init__(self, **models: nn.Module) -> None:
+        super().__init__()
+        self.base_model = nn.Module()
+        for name, model in models.items():
+            self.base_model.add_module(name, model)
+
+    @property
+    def config(self):
+        return next(iter(self.base_model.children())).config
+
+
+def _pretrained(architecture: str) -> nn.Module:
+    model = tiny(architecture)
+    model.config.architectures = [architecture]  # as from_pretrained leaves it, so a forwarding wrapper reports it
+    return model
+
+
+def test_a_wrapper_forwarding_its_models_config_is_mounted_through_to_the_model():
+    plain = MappedView(_Wrapper(_Forwarding(model=tiny("LlamaForCausalLM")))).structure()
+    assert plain.mount == "model.base_model.model"  # found from the structure: the wrapper names no architecture
+    forwarded = MappedView(_Wrapper(_Forwarding(model=_pretrained("LlamaForCausalLM")))).structure()
+    assert (forwarded.mount, forwarded.refusal, forwarded.depth()) == ("model.base_model.model", None, 3)
+    assert forwarded.locate("model.base_model.model.model.layers.2.self_attn.q_proj.weight") == Location(
+        layer=2, component="attn.q")
+    # A mount the caller names is kept exactly, even where the map does not describe it.
+    named = MappedView(_Wrapper(_Forwarding(model=_pretrained("LlamaForCausalLM"))), mount="model").structure()
+    assert named.mount == "model" and named.refusal is not None
+    with pytest.raises(TunableViewError, match="name the one meant with `mount=`"):
+        MappedView(_Wrapper(_Forwarding(model=_pretrained("LlamaForCausalLM"), teacher=tiny("LlamaForCausalLM"))))
+
+
+def test_a_peft_wrapped_pretrained_model_is_mounted_at_the_model_it_wraps():
+    peft = pytest.importorskip("peft")
+    for architectures in (None, ["Qwen2ForCausalLM"]):
+        config = transformers.Qwen2Config(vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=4,
+                                          num_attention_heads=2, num_key_value_heads=1, architectures=architectures)
+        wrapped = peft.get_peft_model(transformers.Qwen2ForCausalLM(config),
+                                      peft.LoraConfig(r=2, target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM"))
+        structure = venngram_view(_Wrapper(wrapped)).structure()
+        assert (structure.mount, structure.refusal) == ("model.base_model.model", None), architectures
+
+
 def test_an_empty_mount_keeps_the_map_at_the_root():
     wrapper = _Wrapper(tiny("GPT2LMHeadModel"))
     assert isinstance(MapStructure(wrapper, component_map_for("GPT2LMHeadModel"), mount="").depth(), Refusal)

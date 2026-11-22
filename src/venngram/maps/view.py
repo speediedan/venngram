@@ -32,7 +32,7 @@ from torch import nn
 from venngram.maps.check import submodule
 from venngram.maps.overlay import OverlayMap, overlays_for
 from venngram.maps.schema import ComponentMap, known_architectures
-from venngram.maps.structure import find_mounts, map_for, MapStructure
+from venngram.maps.structure import _mount_of, detect_prefix, find_mounts, map_for, MapStructure
 from venngram.tuning.errors import TunableViewError
 from venngram.tuning.views import CanonicalView
 
@@ -58,7 +58,12 @@ def overlay_roles(root: nn.Module, overlays: Sequence[OverlayMap]) -> dict[str, 
 
 def _base_map(root: nn.Module, mount: str | None) -> tuple[ComponentMap, str | None]:
     """The base map for ``root``, or for the submodule it is mounted at: named by ``mount``, else ``root`` itself, else
-    the one outermost descendant some known map is written for."""
+    the one outermost descendant some known map is written for.
+
+    A descendant found that way can be a wrapper that only forwards its model's ``config`` (a PEFT ``PeftModel``
+    reports the wrapped model's ``config.architectures``), so when the map does not describe it, the mount is the
+    module inside it the map does describe (as :class:`~venngram.maps.structure.MapStructure` finds one under a
+    root). A mount the caller names is kept exactly."""
     if mount:
         target = submodule(root, mount)
         if target is None:
@@ -75,7 +80,15 @@ def _base_map(root: nn.Module, mount: str | None) -> tuple[ComponentMap, str | N
                                    "one this view describes with `mount=`.") from None
         if not mounts:
             raise
-        return map_for(root.get_submodule(mounts[0])), mounts[0]
+        found = root.get_submodule(mounts[0])
+        cmap = map_for(found)
+        if detect_prefix(found, cmap) is None:
+            inner, ambiguous = _mount_of(found, cmap)
+            if ambiguous is not None:
+                raise TunableViewError(f"{mounts[0]!r}: {ambiguous.reason}") from None
+            if inner is not None:
+                return cmap, f"{mounts[0]}.{inner}"
+        return cmap, mounts[0]
 
 
 def _split(root: nn.Module, maps: ComponentMap | OverlayMap | Sequence[ComponentMap | OverlayMap] | None,
