@@ -14,7 +14,7 @@ import yaml
 from conftest import adapter_roles
 
 from venngram import AddressBook, AddressError, diff_lock, make_lock, ParamSpace, register_uri_resolver, select
-from venngram.book import _URI_RESOLVERS
+from venngram.book import _URI_RESOLVERS, SCHEMA_WINDOW
 from venngram.physical import PhysicalStructure
 
 COMMON = {"schema_version": 1, "name": "common", "sets": {"top": {"role": "adapter", "layers": "-2:"},
@@ -49,7 +49,7 @@ def test_imports_are_namespaced_and_keep_their_own_references(model, tmp_path):
 
 @pytest.mark.parametrize("doc, match", [
     ({"name": "x", "sets": {"a": "role:adapter"}}, "`schema_version` is required"),
-    ({"schema_version": 11, "sets": {"a": "role:adapter"}}, "newer venngram"),
+    ({"schema_version": SCHEMA_WINDOW[1] + 1, "sets": {"a": "role:adapter"}}, "newer venngram"),
     ({"schema_version": 0, "sets": {"a": "role:adapter"}}, "older than"),
     ({"schema_version": 1, "sets": {}}, "non-empty mapping"),
     ({"schema_version": 1, "sets": {"a b": "role:adapter"}}, "not a valid set name"),
