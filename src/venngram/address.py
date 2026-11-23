@@ -31,6 +31,7 @@ layers     an index, a list, a half-open slice (negative indices count from the 
 stack      a block stack name (the primary stack when unset)                       ``vision``
 component  an architecture-neutral component (needs a vocabulary provider)         ``attn.q``, ``mlp.*``
 point      an activation point: makes the target a site                            ``resid_post``
+passes     the one-based execution pass of an activation point                     ``2``
 features   a latent model or an external feature id: makes the target its          ``sae``
            feature space
 subspace   a named basis at a site: makes the target a subspace                    ``entailment_dir``
@@ -101,8 +102,8 @@ from venngram.graphs import Anchor
 from venngram.roles import parse_selector
 from venngram.units import ElementMask, SidecarRef
 
-FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "features", "subspace", "space", "leaf",
-          "units", "of", "axis")
+FIELDS = ("role", "name", "module", "layers", "stack", "component", "point", "passes", "features", "subspace", "space",
+          "leaf", "units", "of", "axis")
 #: What an address's consumer acts on (the ``of`` field).
 OF = ("value", "grad")
 COMBINATORS = ("any", "all", "exclude")
@@ -446,6 +447,12 @@ def _check_field(name: str, value: Any) -> Any:
         return LayerSet.parse(value)
     if name == "units":
         return UnitSet.parse(value)
+    if name == "passes":
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            value = int(value)
+        if type(value) is not int or value < 1:
+            raise AddressError(f"`passes` selects a one-based execution pass, got {value!r}.")
+        return value
     if name == "of" and value not in OF:
         raise AddressError(f"The `of` field is {' or '.join(OF)}, got {value!r}.")
     if name == "axis":
@@ -483,6 +490,7 @@ class Term:
     stack: str | None = None
     component: str | None = None
     point: str | None = None
+    passes: int | None = None
     features: str | None = None
     subspace: str | None = None
     space: str | None = None
@@ -509,6 +517,9 @@ class Term:
         if self.features is not None and self.subspace is not None:
             raise AddressError("An address names `features` or a `subspace`, not both: a featurizer block's span is "
                                "reached from its `features` address.")
+        if self.passes is not None and self.target != "site":
+            raise AddressError(f"`passes:{self.passes}` needs an activation `point`. Shared parameters are selected "
+                               "by their weight layer.")
         if self.space is not None and self.point is None:
             raise AddressError(f"`space:{self.space}` reads a site through a linear map, so it needs a `point`.")
         if self.axis is not None and (self.units is None or self.target != "param"):

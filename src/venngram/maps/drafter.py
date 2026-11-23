@@ -59,6 +59,7 @@ from torch import nn
 from venngram.maps.check import check_map_against_model, MapProblem
 from venngram.maps.rules import refuse_newer_rules, Rules, RULES_SCHEMA_VERSION
 from venngram.maps.schema import (BUNDLED_KINDS, component_map_for, ComponentEntry, ComponentKey, ComponentMap,
+                                  EXECUTION_SCHEMA_VERSION,
                                   from_document, KindSpec, LAYOUT_SCHEMA_VERSION, registered_architectures,
                                   UNIT_BLOCK_SCHEMA_VERSION, VOCABULARY)
 from venngram.sources import SourceError
@@ -367,6 +368,9 @@ def map_document(cmap: ComponentMap, provenance: Any = None) -> dict[str, Any]:
     blocks = any(e.unit_block is not None for e in cmap.components.values())
     version = UNIT_BLOCK_SCHEMA_VERSION if blocks else LAYOUT_SCHEMA_VERSION if layouts else 3
     doc: dict[str, Any] = {"schema_version": version, "architecture": cmap.architecture}
+    if cmap.execution is not None:
+        doc["schema_version"] = EXECUTION_SCHEMA_VERSION
+        doc["execution"] = cmap.execution.to_mapping()
     if provenance is not None:
         doc["provenance"] = provenance.to_mapping()
     if cmap.properties:

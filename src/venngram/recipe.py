@@ -1065,6 +1065,8 @@ def _check_readouts(stages: Sequence[Stage], readout: Readout | None, book: Addr
 
 def _term_units(expr: Term, name: str, source: str) -> list[tuple[int, int]]:
     """The ``(layer, unit)`` pairs one address names, for an address whose layers and units are explicit."""
+    if expr.passes is not None:
+        raise AddressError(f"{source}: set `{name}` selects an execution pass, which needs a pass-aware consumer.")
     if expr.units is None:
         raise AddressError(f"{source}: set `{name}` must be one address with `units`, or a composition of unit sets, "
                            "to carry doses.")

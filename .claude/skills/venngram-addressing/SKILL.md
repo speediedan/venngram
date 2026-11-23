@@ -7,7 +7,7 @@ description: Compose, resolve and debug venngram addresses, the set-algebraic wa
 
 An **address** selects a slice of a model. Its fields intersect, and addresses combine by set algebra. Consumers
 such as finetuning-scheduler (schedules) and interpretune (steering and analysis) accept addresses wherever they
-accept names. Every result below comes from `references/examples.py`, which `tests/test_skill_examples.py` runs.
+accept names. The tensor examples come from `references/examples.py`, which `tests/test_skill_examples.py` runs.
 
 ## First: does this need an address?
 
@@ -33,6 +33,7 @@ tighter than `|`, and parentheses group. Operators are delimited by spaces, so v
 | `name` | a regex over tensor names, matched in full: the only regex field, and quoted | `name:"layers\.0\..*"` |
 | `component`, `stack` | architecture-neutral components and block stacks (need a vocabulary structure provider) | `component:attn.q` |
 | `point` | an activation site (steering), not tensors | `point:resid_post` |
+| `passes` | a one-based pass through a weight layer at a mapped activation site (book schema 12) | `passes:3` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, linear maps a site is read through | `features:sae` |
 | `units` | indices along a target's unit axis (neurons, features); on a tensor's gradient, an element mask instead: `{elements: {file, key, sha256}}`, a sidecar bitmask of the tensor's exact shape (book schema 9, checkpoint books only) | `units:[431, 1007]` |
 | `of` | `grad` acts on the gradient of what the rest selects (never filters; book schema 2); with `units` on tensors, a gradient mask, and masks combine exactly as their sets do (union, intersection, difference) along one dimension or element by element; a union's disjuncts may differ (`split_of` gives the value and gradient parts) | `of:grad` |
@@ -109,6 +110,19 @@ select("@rest", space, book.sets())            # with an AddressBook's sets
   map (`venngram.maps.known_architectures()`), as can a consumer's own view. Without one, fall back to
   `module:`, which is tied to the model's module names.
 - `parse(...)` and `to_string(...)` round-trip the two forms, which helps when composing an address in code.
+
+## Looped models
+
+Resolve `point:state.active & layers:12 & passes:3` with `cmap.execution.resolve(...)` on a verified schema 7 map.
+`layers` still identifies a weight layer. `passes` chooses one forward visit. With `passes` omitted, a point resolves
+to every call it has on the selected layers. Shared weights use the usual parameter address, such as
+`component:attn.q & layers:12`. Freeze or thaw the weight once even when it serves several passes.
+
+Use each result's `module`, `call_index`, `hook` and `path` to locate the activation. Call indices start at zero and
+count calls of that module. A gate that starts on pass two has call index zero there. A module reused across layers
+has a single call sequence. `ExecutionSite.read` follows the input or output path and can select a token on axis 1.
+See the [Inkling 2 Mini map](../../../registry/candidates/README.md) for a model with active blocks, completed blocks,
+and messages available only on later passes.
 
 ## Related
 

@@ -39,6 +39,7 @@ An address is a record whose fields intersect:
 | `leaf` | tensor-name suffixes | `lora_A.weight` |
 | `component`, `stack` | architecture-neutral components and block stacks (needs a vocabulary provider) | `attn.q` |
 | `point` | an activation site | `resid_post` |
+| `passes` | the one-based execution pass of an activation point (book schema 12) | `2` |
 | `features`, `subspace`, `space` | latent feature spaces, named bases, and maps a site is read through | `sae`, `jlens` |
 | `units` | indices along a target's unit axis, or whole attention heads (`{heads: [2, 5]}`, book schema 11); on a tensor's gradient, an element mask can select individual elements (`{elements: {file, key, sha256}}`, book schema 9, checkpoint books only) | `[431, 1007]` |
 | `of` | what the consumer acts on: `value` (default) or `grad`, the gradient of what the rest selects; it never filters, and with `units` on tensors it is a gradient mask over each tensor's first axis (a union's disjuncts may differ on it, giving a value part and a gradient part that `split_of` separates). Masks combine exactly as their sets do: a union unites them, an intersection intersects them and a difference subtracts them, along one dimension or element by element; masks along two dimensions are refused | `grad` |
@@ -384,6 +385,11 @@ In an address book at schema 11, `units:{heads:[2,5]}` selects whole heads. For 
 projection's recorded unit axis. The selection requires a row with `unit_block`. Coordinate lists, slices and
 sidecars under `units` still index individual coordinates, including slices that cross head boundaries.
 
+Schema 7 maps can declare an execution timeline and named sites. `point:state.active & layers:12 & passes:3`
+selects a visit to a weight layer. A resolved site gives the hook module, that module's call index and the path
+into its inputs or output. The [Inkling 2 Mini map](registry/candidates/README.md) shows how to address repeated
+attention and MoE layers with shared parameters.
+
 ```bash
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --record qwen3.yaml   # or venngram.maps.verify(config_or_model)
 python -m venngram.maps.verification Qwen/Qwen3-0.6B --against qwen3.yaml  # a later run must observe the same order
@@ -463,10 +469,10 @@ Published documents outlive the venngram that wrote them, so every document kind
 
 | Kind | Reads | Writes | Keys it does not know |
 | --- | --- | --- | --- |
-| component map | 1 to 6 | 6 for maps with `unit_block` | ignored when descriptive |
+| component map | 1 to 7 | 6 for maps with `unit_block`, 7 for maps with `execution` | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 11 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads | ignored at the top level |
+| address book | 1 to 12 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
