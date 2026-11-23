@@ -117,6 +117,30 @@ def test_book_sets_keep_passes_and_allow_set_algebra(document):
         execution.resolve({"point": "state.final_mix", "expect": 2})
 
 
+@pytest.mark.parametrize("target", [
+    "features:sae & point:resid_post & layers:[12] & units:[5] & passes:2",
+    "point:resid_post & layers:[12] & units:[5] & passes:2",
+    "layers:[12] & units:[5] & passes:2",
+    "@loop",
+])
+def test_treatment_rejects_execution_passes_in_its_target(target):
+    book = {"schema_version": 12, "sets": {"target": target,
+            "loop": "point:resid_post & layers:[12] & units:[5] & passes:2"}, "treatments": {
+                "edit": {"model": {"id": "example/model", "revision": "pinned"}, "stages": [{"site": "resid_post",
+                         "ops": [{"op": "add", "target": {"set": "target"}, "value": {"dose": 1.0}}]}]}}}
+    with pytest.raises(AddressError, match=r"set `target` uses `passes`"):
+        AddressBook.from_mapping(book)
+
+
+def test_treatment_rejects_execution_passes_in_a_path_waypoint():
+    book = {"schema_version": 12,
+            "sets": {"p": {"path": ["component:embed", "point:state.active & layers:12 & passes:2"]}},
+            "treatments": {"cut": {"model": {"id": "example/model", "revision": "pinned"},
+                                   "gradients": [{"op": "stop", "target": {"set": "p"}}]}}}
+    with pytest.raises(AddressError, match=r"set `p` uses `passes`"):
+        AddressBook.from_mapping(book)
+
+
 def test_invalid_map_timeline_is_refused(document):
     with pytest.raises(ValueError, match="schema 7"):
         from_document({**document, "schema_version": 6})

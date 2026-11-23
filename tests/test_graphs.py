@@ -281,6 +281,15 @@ def test_a_restriction_names_a_finite_feature_universe_of_the_book(tmp_path):
     assert op.to_mapping()["target"] == restrict["target"]
 
 
+def test_a_restriction_universe_refuses_execution_passes(tmp_path):
+    sets = {"universe": "features:tc & point:resid_post & layers:[1] & units:[7] & passes:2"}
+    restrict = {"op": "replace", "target": {"graph": "reasoning", "outside": {"set": "universe", "tokens": "prompt"}},
+                "value": {"dose": 0.0}}
+    doc = book_with(tmp_path, [{"site": SITE, "ops": [restrict]}], sets=sets, version=12)
+    with pytest.raises(AddressError, match=r"set `universe` uses `passes`"):
+        AddressBook.from_mapping(doc, base_dir=tmp_path)
+
+
 def _refused(tmp_path, stages, match, **kwargs):
     with pytest.raises(AddressError, match=match):
         AddressBook.from_mapping(book_with(tmp_path, stages, **kwargs), base_dir=tmp_path)

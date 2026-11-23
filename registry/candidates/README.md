@@ -24,9 +24,11 @@ assert (active.call_index, raw.call_index, gate.call_index) == (2, 18, 1)
 ```
 
 Each resolved site gives a module path relative to the mapped model, a zero-based call index, an input or output hook,
-and a path into its value. The call index counts that module's own calls. The layer runs on every pass, the message
-gate starts on pass two, and the shared message module runs at each layer of passes two and three. A request for a
-message on pass one is refused. With `passes` omitted, the resolver returns every visit that exposes the point.
+and a path into its value. The call index counts that module's own calls within one forward. Generation and gradient
+checkpoint recomputation add calls beyond this timeline. The map binds a module at most once at each visit.
+The layer runs on every pass, the message gate starts on pass two, and the shared message module runs at each layer
+of passes two and three. An explicit message address for a layer on pass one is refused. With `passes` omitted,
+the resolver returns every visit that exposes the point. Treatments require sets without `passes`.
 
 Call `site.read(args, token=-1)` on a positional input hook or `site.read(output, token=-1)` on an output hook to
 read the last token. Leave out `token` to keep the full sequence. The consumer owns hooks and any writes.
@@ -34,7 +36,7 @@ read the last token. Leave out `token` to keep the full sequence. The consumer o
 | Point | Value |
 | --- | --- |
 | `state.enter`, `state.active` | The input to the weight layer and the active block sum it returns |
-| `state.completed`, `state.completed.<index>` | All completed blocks at layer entry or one block by zero-based index |
+| `state.completed`, `state.completed.<index>` | All completed blocks at layer entry or one block by zero-based index. The set is empty at layer 0. Index 0 holds the embedding output once the first block boundary has been crossed. |
 | `attn.mix`, `attn.mix.k`, `attn.mix.v` | The query-side block mix, plus separate key and value mixes on full-attention layers. Sliding attention shares the query-side mix. The first layer has no separate attention mix. |
 | `mlp.mix` | The MoE block mix before adding a message |
 | `message.raw.q`, `message.raw.k`, `message.raw.v`, `message.raw.mlp` | The four retrieved messages before their gates |
@@ -53,5 +55,6 @@ cmp /tmp/inkling2_mini.yaml registry/candidates/inkling2_mini.yaml
 
 The generator builds the full module tree on the meta device and checks parameter ownership, widths, layouts, head
 sizes and every hook path. It also runs the same implementation on the CPU at reduced widths, preserving all 48
-visits and attention variants. Hooks check all 609 site calls, their tensor paths and their token axis. The forward
-checks the layer order and confirms each pass uses the same query parameter object for a given layer.
+visits and attention variants. Hooks check that all 609 mapped calls occur and that their paths return finite tensors
+at the chosen token. The forward checks the layer order and confirms each pass uses the same query parameter object
+for a given layer.

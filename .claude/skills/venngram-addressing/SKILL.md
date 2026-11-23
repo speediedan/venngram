@@ -118,9 +118,14 @@ Resolve `point:state.active & layers:12 & passes:3` with `cmap.execution.resolve
 to every call it has on the selected layers. Shared weights use the usual parameter address, such as
 `component:attn.q & layers:12`. Freeze or thaw the weight once even when it serves several passes.
 
+Load the Inkling candidate by path. `cmap.execution` is `None` on a map without a timeline. The execution resolver
+accepts `point`, `layers`, and `passes`. Resolve these addresses outside a treatment, whose ops and readouts require
+sets without `passes`.
+
 Use each result's `module`, `call_index`, `hook` and `path` to locate the activation. Call indices start at zero and
-count calls of that module. A gate that starts on pass two has call index zero there. A module reused across layers
-has a single call sequence. `ExecutionSite.read` follows the input or output path and can select a token on axis 1.
+count calls of that module within one forward. A gate that starts on pass two has call index zero there. A module
+reused across layers has a single call sequence. `ExecutionSite.read` follows the input or output path and can select
+a token on axis 1.
 See the [Inkling 2 Mini map](../../../registry/candidates/README.md) for a model with active blocks, completed blocks,
 and messages available only on later passes.
 

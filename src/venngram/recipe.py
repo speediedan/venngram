@@ -129,14 +129,14 @@ through :func:`migrate`.
 """
 import math
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
 from venngram.address import Path as PathExpr
-from venngram.book import _states_readout, AddressBook
+from venngram.book import _states_readout, _uses_passes, AddressBook
 from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError, VenngramError
 from venngram.graphs import GRAPH_TRANSFORMS
@@ -766,6 +766,7 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
         if not isinstance(t, Mapping) or set(t) != {"set"} or not isinstance(t["set"], str) or t["set"] not in sets:
             raise AddressError(f"{where}: `target` names a set of the book ({sorted(sets)}) and contains only `set`, "
                                f"got {t!r}.")
+        _check_treatment_passes(sets, t["set"], where)
         term = sets[t["set"]]
         if is_path(term, sets):
             if section != "gradients":
@@ -871,6 +872,7 @@ def _graph_op(raw: Mapping[str, Any], name: str, where: str, book: AddressBook) 
                 or o.get("set") not in sets:
             raise AddressError(f"{where}: `outside` is {{set: <a feature set of the book>, tokens: prompt}}, the "
                                f"finite universe a restriction acts in, got {o!r}.")
+        _check_treatment_passes(sets, o["set"], where)
         spaces = book.graphs[graph].spaces
         for term in _leaf_terms(sets, o["set"]):
             if term.target != "feature" or term.features not in spaces:
@@ -940,9 +942,8 @@ def _uses_graphs(body: Any) -> bool:
                 for o in st["ops"]) for st in stages)
 
 
-def _leaf_terms(sets: Mapping[str, Expr], name: str) -> list[Term]:
-    """Every term the set ``name`` reaches, following references (the book refuses cycles when it loads)."""
-    out: list[Term] = []
+def _reachable_sets(sets: Mapping[str, Expr], name: str) -> Iterator[Expr]:
+    """The named set and each set it references, including references inside path waypoints."""
     seen: set[str] = set()
     todo = [name]
     while todo:
@@ -950,9 +951,19 @@ def _leaf_terms(sets: Mapping[str, Expr], name: str) -> list[Term]:
         if n in seen or n not in sets:
             continue
         seen.add(n)
-        out += terms(sets[n])
+        yield sets[n]
         todo += references(sets[n])
-    return out
+
+
+def _leaf_terms(sets: Mapping[str, Expr], name: str) -> list[Term]:
+    """Every term the set ``name`` reaches, following references."""
+    return [term for expr in _reachable_sets(sets, name) for term in terms(expr)]
+
+
+def _check_treatment_passes(sets: Mapping[str, Expr], name: str, where: str) -> None:
+    if any(_uses_passes(expr) for expr in _reachable_sets(sets, name)):
+        raise AddressError(f"{where}: set `{name}` uses `passes`. Treatment consumers do not bind execution passes. "
+                           "Resolve the site with its execution map outside the treatment.")
 
 
 def _names_units(sets: Mapping[str, Expr], name: str | None) -> bool:
@@ -1021,6 +1032,7 @@ def _readout(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Ope
                                "`venngram.readouts.register_readout`).")
         if t["set"] not in sets:
             raise AddressError(f"{at}: `set` names a set of the book ({sorted(sets)}), got {t['set']!r}.")
+        _check_treatment_passes(sets, t["set"], at)
         for leaf in _leaf_terms(sets, t["set"]):
             if leaf.target == "param":
                 raise AddressError(f"{at}: set `{t['set']}` addresses tensors (`{to_string(leaf)}`); a readout reads "

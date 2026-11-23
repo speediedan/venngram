@@ -96,7 +96,8 @@ class ExecutionMap:
         """Resolve a point address to concrete calls, in forward order.
 
         ``layers`` selects weight layers. ``passes`` selects a one-based pass. A point without a pass selects all
-        its calls; a missing requested visit is refused. Run this against the map verified for the forward in use.
+        its calls. A term that explicitly names a point, weight layers and a pass must resolve every requested visit.
+        Use the map verified for the forward in use.
         """
         expr = parse(address)
         try:
