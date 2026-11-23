@@ -1,0 +1,4 @@
+schema_version: 12
+name: loop-pass
+sets:
+  readout: {point: state.active, layers: 1, passes: 2}

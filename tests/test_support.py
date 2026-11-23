@@ -31,6 +31,15 @@ def book(sets, **top):
     return AddressBook.from_mapping({"schema_version": 1, "name": "b", "sets": sets, **top}, source="b")
 
 
+def test_default_tuning_support_does_not_advertise_execution_passes():
+    doc = {"schema_version": 2, "kind": "support_record", "sections": {"tuning": {}}}
+    record = SupportRecord.from_mapping(doc)
+    written = record.to_mapping()
+    assert written["schema_version"] == 2
+    assert "passes" not in written["sections"]["tuning"]["fields"]
+    assert SupportRecord.from_mapping(written) == record
+
+
 def test_a_tuning_section_refuses_what_its_consumer_cannot_tune():
     record = SupportRecord.from_mapping(TUNER)
     assert record.tuning is not None and record.steering is None and record.circuits is None

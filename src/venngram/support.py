@@ -122,8 +122,8 @@ class TuningSupport:
     """What a tuning consumer honours in an address book. ``None`` fields mean any.
 
     Attributes:
-        fields: The address fields its resolution honours (see :mod:`venngram.address`). Every field but ``of`` and
-            ``axis`` by default: a consumer acts on gradients (``of: grad``) only when it lists ``of``, and masks them
+        fields: The address fields its resolution honours (see :mod:`venngram.address`). Defaults exclude ``passes``,
+            ``of`` and ``axis``. A consumer acts on gradients (``of: grad``) only when it lists ``of``, and masks them
             along a named dimension (``axis``, resolved by :func:`venngram.resolve.gradient_selections`) only when it
             lists ``axis`` and the forms (``unit-axis``, ``physical-axis``) under ``gradients``.
         targets: What its sets may select (``param`` for tensors; a tuning consumer reaches sites, features or
@@ -143,7 +143,7 @@ class TuningSupport:
             by a consumer that does not (schema 7).
     """
 
-    fields: frozenset[str] = frozenset(f for f in FIELDS if f not in ("of", "axis"))
+    fields: frozenset[str] = frozenset(f for f in FIELDS if f not in ("of", "axis", "passes"))
     targets: frozenset[str] = frozenset({"param"})
     units: str = "none"
     naming_schemes: frozenset[str] | None = None

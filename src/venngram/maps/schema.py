@@ -55,6 +55,7 @@ import yaml
 
 from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import NewerSchemaError
+from venngram.maps.execution import ExecutionMap
 from venngram.maps.overlay import _OVERLAYS, overlay_from_document, OverlayMap
 from venngram.maps.rules import rules_from_document
 
@@ -94,14 +95,17 @@ ATTENTION_PROJECTIONS = ("attn.q", "attn.k", "attn.v", "attn.o")
 #: or how a row resolves, such as a per-row layer predicate or a second block stack) always does, because a reader that
 #: skipped one would resolve the wrong rows silently. 2 added ``kinds``, ``stacks`` and per-row ``layers``; 3 added
 #: per-row ``optional``; 5 added per-row ``layout`` (4 is the schema the overlay shape arrived with);
-#: 6 added per-row ``unit_block``.
-COMPONENT_MAP_SCHEMA_VERSION = 6
+#: 6 added per-row ``unit_block``; 7 added ``execution``.
+COMPONENT_MAP_SCHEMA_VERSION = 7
 
 #: The first schema whose rows may carry ``layout`` (it says which tensor axis a unit index runs along).
 LAYOUT_SCHEMA_VERSION = 5
 
 #: The first schema whose rows may carry ``unit_block``.
 UNIT_BLOCK_SCHEMA_VERSION = 6
+
+#: The first schema with an execution timeline and named sites.
+EXECUTION_SCHEMA_VERSION = 7
 
 #: The oldest schema this code reads. Published maps outlive the code that wrote them, so the reader accepts a window.
 COMPONENT_MAP_SCHEMA_MIN_READABLE = 1
@@ -253,6 +257,7 @@ class ComponentMap:
     deprecated_since: str | None = None
     """Set when the map is retired: loading it warns, strict lookup refuses, and ``replacement`` names what to use."""
     replacement: str | None = None
+    execution: ExecutionMap | None = None
 
     @property
     def sandwich_norms(self) -> bool:
@@ -263,7 +268,7 @@ class ComponentMap:
     def sublayers(self) -> tuple[str, ...]:
         """The order in which sublayer kinds write to the residual: declared, else ``("attn", "mlp")``."""
         declared = self.properties.get("sublayers")
-        return tuple(declared) if declared else ("attn", "mlp")
+        return tuple(declared) if declared is not None else ("attn", "mlp")
 
     def tuple_output(self, kind: str) -> bool:
         """Whether a kind's module returns a tuple whose element 0 is the tensor."""
@@ -485,10 +490,16 @@ def from_document(doc: Any, source: str = "<document>") -> ComponentMap:
     if verification is not None:
         verification = rules_from_document({"name": f"map:{architecture}", **verification}, f"{source}: verification",
                                            section=True)
+    execution = None
+    if "execution" in doc:
+        if version < EXECUTION_SCHEMA_VERSION:
+            raise ValueError(f"{source}: `execution` needs component map schema {EXECUTION_SCHEMA_VERSION}")
+        execution = ExecutionMap.from_mapping(doc["execution"], source)
     cmap = ComponentMap(architecture=architecture, components=_rows(rows, source, kinds, stacks, version),
                         properties=properties, source=source, kinds=kinds, stacks=stacks, schema_version=version,
                         verification=verification,
-                        deprecated_since=doc.get("deprecated_since"), replacement=doc.get("replacement"))
+                        deprecated_since=doc.get("deprecated_since"), replacement=doc.get("replacement"),
+                        execution=execution)
     if cmap.deprecated_since is not None:
         warnings.warn(f"{source}: the component map for {architecture!r} is deprecated since {cmap.deprecated_since}"
                       + (f"; use {cmap.replacement!r}" if cmap.replacement else "")

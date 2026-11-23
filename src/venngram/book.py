@@ -62,7 +62,7 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
 layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, schema 9 element
 masks (``units: {elements: ...}``), schema 10 paths (``path: [...]``, :mod:`venngram.paths`), and schema 11 whole
-attention heads (``units: {heads: ...}``).
+attention heads (``units: {heads: ...}``). Schema 12 adds the ``passes`` field for activation sites.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -118,7 +118,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchEr
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 11)
+SCHEMA_WINDOW = (1, 12)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -141,6 +141,8 @@ ELEMENTS_SCHEMA = 9
 PATHS_SCHEMA = 10
 #: The first schema whose sets may select whole heads (``units: {heads: ...}``).
 HEADS_SCHEMA = 11
+#: The first schema whose sets may address an execution pass.
+PASSES_SCHEMA = 12
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -321,6 +323,12 @@ class AddressBook:
         if uses_heads and version < HEADS_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_heads} select whole heads, which needs address book "
                                f"schema {HEADS_SCHEMA}.")
+        uses_passes = sorted(n for n, expr in own.items() if _uses_passes(expr))
+        if uses_passes and inline and "schema_version" not in doc:
+            version = max(version, PASSES_SCHEMA)
+        if uses_passes and version < PASSES_SCHEMA:
+            raise AddressError(f"{source}: the sets {uses_passes} select execution passes, which needs address book "
+                               f"schema {PASSES_SCHEMA}.")
         _check_graph_waypoints(own, graphs, portability, source)
         if uses_depth and version < DEPTH_SCHEMA:
             raise AddressError(f"{source}: the sets {uses_depth} give layers as a fraction of the depth, which needs "
@@ -649,6 +657,13 @@ def _paths_in(expr: Expr) -> list[PathExpr]:
     if isinstance(expr, (And, Or)):
         return [p for i in expr.items for p in _paths_in(i)]
     return []
+
+
+def _uses_passes(expr: Expr) -> bool:
+    if any(t.passes is not None for t in terms(expr)):
+        return True
+    return any(t.passes is not None for path in _paths_in(expr) for w in path.waypoints if w.address is not None
+               for t in terms(w.address))
 
 
 def _states_readout(body: Mapping[str, Any]) -> bool:

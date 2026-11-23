@@ -40,6 +40,7 @@ Maps are data: loading one runs no code.
 """
 from venngram.maps.check import (check_map_against_model, ComponentMapModelMismatch, MapProblem,
                                  validate_map_against_model)
+from venngram.maps.execution import ExecutionMap, ExecutionSite, LayerVisit, TensorIndex
 from venngram.maps.schema import (component_map_for, ComponentMap, from_document, known_architectures,
                                   load_component_map, load_map, map_from_document, register, registered_architectures,
                                   unregister, VOCABULARY)
@@ -53,10 +54,13 @@ __all__ = [
     "component_map_for",
     "ComponentMap",
     "ComponentMapModelMismatch",
+    "ExecutionMap",
+    "ExecutionSite",
     "find_mounts",
     "from_document",
     "known_architectures",
     "known_overlays",
+    "LayerVisit",
     "load_component_map",
     "load_map",
     "map_from_document",
@@ -72,6 +76,7 @@ __all__ = [
     "MapStructure",
     "register",
     "registered_architectures",
+    "TensorIndex",
     "unregister",
     "validate_map_against_model",
     "VerificationReport",

@@ -365,7 +365,7 @@ def with_layouts(doc: Any, model: nn.Module, source: str = "<document>") -> dict
             raise ValueError(f"{source}: component {key!r} measures different `unit_block` sizes on different layers")
         if None not in sizes:
             out["components"][key]["unit_block"] = known.pop()
-            out["schema_version"] = UNIT_BLOCK_SCHEMA_VERSION
+            out["schema_version"] = max(out["schema_version"], UNIT_BLOCK_SCHEMA_VERSION)
     from_document(out, source)
     return out
 
@@ -428,6 +428,23 @@ def check_partition(cmap: ComponentMap, model: nn.Module) -> CheckResult:
             owners[path] = key
     total = sum(1 for _ in model.parameters())
     return CheckResult("partition", "failed" if problems else "passed", tuple(problems), f"{total} parameters")
+
+
+def check_execution(cmap: ComponentMap, model: nn.Module) -> CheckResult:
+    """Verify the execution map's weight-layer depth and all of its hook module paths."""
+    execution = cmap.execution
+    if execution is None:
+        return CheckResult("execution", "skipped", note="no execution map")
+    problems = []
+    depth = MapStructure(model, cmap).depth()
+    if execution.depth != depth:
+        problems.append(MapProblem("execution", None, f"declares {execution.depth} weight layers, model has {depth}"))
+    paths = {site.module for site in execution.sites}
+    for path in sorted(paths):
+        if not isinstance(submodule(model, path), nn.Module):
+            problems.append(MapProblem(path, None, "execution site module does not exist"))
+    return CheckResult("execution", "failed" if problems else "passed", tuple(problems),
+                       f"{len(paths)} hook modules for {len(execution.visits)} declared layer visits")
 
 
 def _leaves(placed: dict[str, Any]) -> dict[str, Any]:
@@ -610,6 +627,8 @@ def verify(target: Any, cmap: ComponentMap | None = None, *, architecture: str |
               check_shapes(cmap, model, config, ruleset), check_layout(cmap, model)]
     if any(entry.unit_block is not None for entry in cmap.components.values()):
         checks.append(check_unit_blocks(cmap, model))
+    if cmap.execution is not None:
+        checks.append(check_execution(cmap, model))
     if order:
         checks.append(_order(cmap, target, config, arch, inputs, ruleset))
         if against is not None:
@@ -668,6 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "check_against",
+    "check_execution",
     "check_layout",
     "check_unit_blocks",
     "check_order",

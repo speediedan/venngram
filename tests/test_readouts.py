@@ -142,6 +142,14 @@ def test_a_book_treatment_with_a_readout_is_book_schema_4():
     assert read.treatments["diff"].to_treatment()["readout"]["terms"][0]["reduce"] == "sum"
 
 
+def test_a_treatment_readout_refuses_execution_passes():
+    body = {"model": MODEL, "readout": LOGIT_DIFF, "stages": [ZERO_GRAD]}
+    book = {"schema_version": 12, "sets": {**SETS, "answer": {**SETS["answer"], "passes": 2}},
+            "treatments": {"diff": body}}
+    with pytest.raises(AddressError, match=r"readout term 0: set `answer` uses `passes`"):
+        AddressBook.from_mapping(book)
+
+
 def test_a_consumer_declares_the_reductions_it_computes():
     recipe = Recipe.from_mapping(readout_doc([ZERO_GRAD]))
     grads = Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}))
