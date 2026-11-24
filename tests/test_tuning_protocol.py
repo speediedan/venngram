@@ -228,6 +228,71 @@ def test_promoted_roles_count_as_assigned_and_resolve_view_declares():
     assert bound.roles() == {"bias": "adapter"} and "adapter" in bound.support().declared_roles
 
 
+@pytest.fixture
+def one_rank_mesh(tmp_path):
+    """A one-rank gloo mesh: enough for parameters to be ``DTensor`` with no storage of their own."""
+    import torch.distributed as dist
+    from torch.distributed.device_mesh import init_device_mesh
+
+    if not (dist.is_available() and dist.is_gloo_available()):
+        pytest.skip("needs torch.distributed with gloo")
+    dist.init_process_group("gloo", store=dist.FileStore(str(tmp_path / "store"), 1), rank=0, world_size=1)
+    try:
+        yield init_device_mesh("cpu", (1,))
+    finally:
+        dist.destroy_process_group()
+
+
+class _LensModel(torch.nn.Module):
+    def __init__(self, tie: bool = False):
+        super().__init__()
+        self.base, self.lens = torch.nn.Linear(4, 4), torch.nn.Linear(4, 4)
+        if tie:
+            self.lens.weight = self.base.weight
+
+    def forward(self, x):
+        return self.lens(self.base(x))
+
+
+def _fsdp2(model, mesh):
+    from torch.distributed.fsdp import fully_shard
+
+    return fully_shard(model, mesh=mesh)
+
+
+def _distributed(model, mesh):
+    from torch.distributed.tensor import distribute_module
+
+    return distribute_module(model, mesh)
+
+
+@pytest.mark.parametrize("place", [_fsdp2, _distributed])
+def test_the_default_promote_keeps_a_sharded_models_parameters(one_rank_mesh, place):
+    """A `DTensor` has no storage address to compare; promoting one changes its role and keeps the parameter."""
+    model = place(_LensModel(), one_rank_mesh)
+    before = dict(model.named_parameters())
+    assert all(type(p).__name__ == "DTensor" for p in before.values())
+    view = tv.as_view(tv.CanonicalView(model, roles={"lens.weight": "artifact"}))
+    assert view.promote(["lens.weight"], "latent:lens") == {"lens.weight": "lens.weight"}
+    assert view.roles()["lens.weight"] == "latent:lens"
+    after = dict(model.named_parameters())
+    assert all(after[n] is before[n] for n in before)
+
+
+def test_the_default_promote_refuses_a_tied_dtensor_and_unties_a_plain_one(one_rank_mesh):
+    # `base.weight`, the name under which a tied tensor is listed
+    plain = _LensModel(tie=True)
+    tv.as_view(tv.CanonicalView(plain, roles={"base.weight": "artifact"})).promote(["base.weight"], "latent:lens")
+    assert plain.lens.weight is not plain.base.weight and torch.equal(plain.lens.weight, plain.base.weight)
+    model = _fsdp2(_LensModel(tie=True), one_rank_mesh)
+    before = dict(model.named_parameters(remove_duplicate=False))
+    view = tv.as_view(tv.CanonicalView(model, roles={"base.weight": "artifact"}))
+    with pytest.raises(tv.TunableViewError, match=r"tied `DTensor` cannot .*'base.weight': \['lens.weight'\]"):
+        view.promote(["base.weight"], "latent:lens")
+    after = dict(model.named_parameters(remove_duplicate=False))
+    assert all(after[n] is before[n] for n in before)
+
+
 def test_the_retired_instrument_role_reads_as_artifact_with_one_warning_and_strict_mode_refuses_it():
     import warnings
 

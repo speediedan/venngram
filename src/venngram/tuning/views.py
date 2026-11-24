@@ -282,6 +282,15 @@ def pair_groups(names: Sequence[str]) -> list[list[str]]:
     return [reversed_names[i:i + 2] for i in range(0, len(reversed_names), 2)]
 
 
+def _storage_key(t: Tensor) -> int:
+    """What two tensors that share their storage have in common: the storage's address, or the tensor's identity for
+    one with no storage of its own (a ``DTensor``, whose shards are local tensors inside it, or another wrapper)."""
+    try:
+        return t.untyped_storage().data_ptr()
+    except RuntimeError:
+        return id(t)
+
+
 class ViewDefaults:
     """Every optional view member's default, for views that prefer to inherit them.
 
@@ -361,19 +370,28 @@ class ViewDefaults:
 
         A promoted parameter that shares its storage with another tensor (a tied weight, for example) is replaced by a
         frozen copy of itself, so training it leaves the other tensor unchanged; otherwise only the role changes.
+
+        Raises:
+            TunableViewError: If a promoted parameter is a tied ``DTensor``. The placement (FSDP2, tensor parallelism)
+                holds the parameter it registered, so a copy in its place would be outside the placement.
         """
-        named = list(itertools.chain(self.root.named_parameters(remove_duplicate=False),
-                                     self.root.named_buffers(remove_duplicate=False)))
         holders: dict[int, set[str]] = {}
-        for name, t in named:
+        for name, t in itertools.chain(self.root.named_parameters(remove_duplicate=False),
+                                       self.root.named_buffers(remove_duplicate=False)):
             if t.device.type != "meta":
-                holders.setdefault(t.untyped_storage().data_ptr(), set()).add(name)
+                holders.setdefault(_storage_key(t), set()).add(name)
         params = dict(self.root.named_parameters(remove_duplicate=False))
-        for name in physical:
-            t = params[name]
-            if t.device.type != "meta" and holders.get(t.untyped_storage().data_ptr(), set()) - {name}:
-                owner, _, attr = name.rpartition(".")
-                setattr(self.root.get_submodule(owner), attr, nn.Parameter(t.detach().clone(), requires_grad=False))
+        tied = {n: sorted(others) for n in physical
+                if params[n].device.type != "meta" and (others := holders[_storage_key(params[n])] - {n})}
+        sharded = {n: others for n, others in tied.items() if type(params[n]).__name__ == "DTensor"}
+        if sharded:
+            raise TunableViewError(
+                "A tied `DTensor` cannot be promoted, since the placement holds the parameter a copy would replace:"
+                f" {sharded} (each with the names it shares its tensor with). Untie them before sharding the model.")
+        for name in tied:
+            owner, _, attr = name.rpartition(".")
+            copy = nn.Parameter(params[name].detach().clone(), requires_grad=False)
+            setattr(self.root.get_submodule(owner), attr, copy)
         return {n: n for n in physical}
 
 
