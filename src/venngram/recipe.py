@@ -328,12 +328,19 @@ class Op:
             return term.of or "value"
         return _UnitSets(book.sets(), self.target, "<recipe>").resolve()[1]
 
+    def unit_members(self, book: AddressBook, source: str = "<recipe>") -> list[tuple[int, int]]:
+        """The ``(layer, unit)`` pairs a unit target names, in order of first appearance, whatever the op's value is: a
+        ``doses`` table may dose only some of them, and a consumer looks up a ``from`` column's value for each."""
+        if self.target is None:
+            raise AddressError(f"{source}: `{self.op}` has no unit members (it needs a unit set target).")
+        return list(dict.fromkeys(_units(book.sets(), self.target, source)))
+
     def unit_doses(self, book: AddressBook, source: str = "<recipe>") -> dict[tuple[int, int], float]:
         """``(layer, unit) -> dose`` for a unit-targeted op whose value is a ``dose`` or ``doses``."""
         if self.target is None or self.value is None or self.value.source not in ("dose", "doses"):
             raise AddressError(f"{source}: `{self.op}` has no unit doses (it needs a unit set target and a dose).")
         out = {}
-        for layer, unit in _units(book.sets(), self.target, source):  # a param_units target's units, likewise
+        for layer, unit in self.unit_members(book, source):  # a param_units target's units, likewise
             dose = self.value.dose if self.value.source == "dose" else (self.value.doses or {}).get(layer, {}).get(unit)
             if dose is not None:
                 out[(layer, unit)] = dose

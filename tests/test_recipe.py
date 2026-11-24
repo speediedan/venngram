@@ -116,6 +116,27 @@ def test_a_composed_unit_target_takes_per_unit_doses_commutes_when_disjoint_and_
     assert any("addresses `of: grad`" in r for r in check_support(grads, values_only))
 
 
+def test_a_unit_targets_members_do_not_depend_on_its_value():
+    sets = {**UNIT_SETS, "both": "(@a | @c) - @ctl", "top": {"space": "transcoder", "features": "3,7", "layers": [10]}}
+    evidence = {"from": {"evidence": "scores", "column": "score"}, "transform": ["abs"]}
+    members = [(12, 1), (12, 3), (14, 5)]
+    for value in (evidence, {"dose": 0.5}, {"doses": {12: {3: 2.0}}}):
+        recipe = composed([add("both", value)], sets)
+        assert recipe.stages[0].ops[0].unit_members(recipe.book) == members
+    (op,) = composed([add("both", evidence)], sets).stages[0].ops
+    with pytest.raises(AddressError, match="has no unit doses"):
+        op.unit_doses(recipe.book)
+    single = composed([add("a", evidence)], sets)
+    assert single.stages[0].ops[0].unit_members(single.book) == [(12, 1), (12, 2), (12, 3)]
+    whole = composed([{"site": "resid.post", "ops": [{"op": "scale", "value": {"dose": 2.0}}]}], sets)
+    with pytest.raises(AddressError, match="has no unit members"):
+        whole.stages[0].ops[0].unit_members(whole.book)
+    top = composed([{"site": "transcoder.features", "ops": [
+        {"op": "replace", "target": {"set": "top"}, "value": {"dose": 1.0}}]}], sets)
+    with pytest.raises(AddressError, match="must be one address with `units`"):
+        top.stages[0].ops[0].unit_members(top.book)
+
+
 @pytest.mark.parametrize("expr, match", [
     ("@a - @a", "set `t` names no units: its composition is empty"),
     ("@a | @other_site", r"composes units at different sites \(point:mlp.in.hook_out, point:mlp.out.hook_in\)"),
