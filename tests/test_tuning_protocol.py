@@ -229,14 +229,14 @@ def test_promoted_roles_count_as_assigned_and_resolve_view_declares():
 
 
 @pytest.fixture
-def one_rank_mesh():
+def one_rank_mesh(tmp_path):
     """A one-rank gloo mesh: enough for parameters to be ``DTensor`` with no storage of their own."""
     import torch.distributed as dist
     from torch.distributed.device_mesh import init_device_mesh
 
     if not (dist.is_available() and dist.is_gloo_available()):
         pytest.skip("needs torch.distributed with gloo")
-    dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
+    dist.init_process_group("gloo", store=dist.FileStore(str(tmp_path / "store"), 1), rank=0, world_size=1)
     try:
         yield init_device_mesh("cpu", (1,))
     finally:
