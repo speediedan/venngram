@@ -3,8 +3,14 @@
 
 ```{toctree}
 :hidden:
-:maxdepth: 2
+:caption: Guide
 
 concepts
+```
+
+```{toctree}
+:hidden:
+:caption: Reference
+
 api
 ```
