@@ -570,7 +570,7 @@ class Support:
         sites: [mlp.out.hook_in, "blocks.*"]   # names or fnmatch patterns; default: any
         bases: [unfolded]                 # default: any
 
-    ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
+    ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that acts on the backward pass,
     ``grad`` (a target set with ``of: grad``). It is declared in the ``treatments`` section (``steering`` before schema
     9) of a schema 3 record.
     A parameter target (``param``, ``param_units``: a treatment's ``weights`` section) is declared in ``targets`` of a

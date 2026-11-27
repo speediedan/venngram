@@ -315,7 +315,7 @@ def _closure(book: AddressBook, names: Collection[str]) -> set[str]:
 #: The node kinds of an attribution graph this prototype names.
 CIRCUIT_NODES = ("feature", "error", "embedding", "logit")
 #: The processing levels of the graphs a consumer accepts: traced (from attribution), pruned (thresholded), validated
-#: (by intervention).
+#: (by a treatment applied to its nodes).
 CIRCUIT_LEVELS = ("traced", "pruned", "validated")
 
 
@@ -433,8 +433,9 @@ class CircuitSupport:
     """What a consumer of circuits honours (prototype). ``None`` fields mean any.
 
     A circuit is a subgraph of a model's computation with evidence for it: an attribution graph (circuit-tracer's is one
-    producer), pruned to a threshold, perhaps validated by intervening on its nodes. Its nodes are addressed with
-    venngram addresses (a feature, a site, a token position), so a circuit document composes with books and treatments.
+    producer), pruned to a threshold, perhaps validated by applying a treatment to its nodes. Its nodes are addressed
+    with venngram addresses (a feature, a site, a token position), so a circuit document composes with books and
+    treatments.
 
     Attributes:
         graphs: The graph kinds it reads (``attribution``; others as they are defined).
@@ -443,7 +444,7 @@ class CircuitSupport:
         levels: The processing levels of the graphs it accepts (see :data:`CIRCUIT_LEVELS`); ``evidence`` before
             schema 9.
         subsets: The treatments over graph subsets it applies (``None``: none; reading graphs is not permission to
-            intervene with them).
+            apply treatments over them).
     """
 
     graphs: frozenset[str] = frozenset({"attribution"})
