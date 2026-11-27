@@ -1,0 +1,27 @@
+# Golden fixture: an evidence table at schema 1, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 1
+kind: evidence_table
+name: golden-finding
+description: one target's best neuron, with its confirm statistics
+model:
+  id: Qwen/Qwen3.5-4B
+  revision: abc123
+source:
+  name: example-finder
+  repo: example/finder
+  commit: 0f3a9c1
+  license: MIT
+columns:
+  dose:
+    description: signed steering dose at the best confirm hit rate
+    unit: dose_unit
+  confirm_hit_rate:
+    description: fraction of confirm prompts that hit the target
+    unit: fraction
+  confirm_n:
+    description: confirm prompts
+    dtype: int
+rows:
+- {layer: 13, unit: 4810, dose: 1.5, confirm_hit_rate: 0.85, confirm_n: 20}
+- {layer: 15, unit: 7, dose: -0.8, confirm_hit_rate: 0.6, confirm_n: 20}

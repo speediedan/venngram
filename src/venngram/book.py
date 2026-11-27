@@ -50,6 +50,19 @@ have an empty ``sets``:
     graphs:
       reasoning: {file: reasoning.yaml, sha256: 4be1...}
 
+**Evidence** is optional as well: the evidence tables (:mod:`venngram.evidence`) the book's treatments read their
+``from`` values from, by name, each an ``evidence_table`` document beside the book cited by hash, or written inline
+(the document's body without its header). A book with this section is published with the evidence it reads: its
+treatments' ``from`` values name its tables and their columns, and every member of a target has a row, or the book is
+refused by name. A book without it leaves evidence to its caller. The section changes no set and no treatment, so it
+needs no newer schema: an older reader passes over it and leaves evidence to the caller, as it always has.
+
+.. code-block:: yaml
+
+    evidence:
+      nf_anime: {file: evidence/nf_anime.yaml, sha256: 9c1e...}
+      audit_cards: {model: {...}, source: {...}, columns: {dose: {description: ...}}, rows: [...]}
+
 A standalone ``kind: recipe`` document, written before books and recipes merged, is retired:
 ``python -m venngram.migrate`` rewrites one as its book, carrying the recipe as a treatment (:mod:`venngram.migrate`).
 
@@ -221,6 +234,8 @@ class AddressBook:
     """Treatments by name (each a :class:`venngram.recipe.Recipe` over this book), from the ``treatments`` section."""
     graphs: Mapping[str, Any] = field(default_factory=dict)
     """Graph subsets by name (each a :class:`venngram.graphs.GraphSubset`), from the ``graphs`` section."""
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+    """Evidence tables by name (each a :class:`venngram.evidence.EvidenceTable`), from the ``evidence`` section."""
 
     @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>", base_dir: str | Path | None = None,
@@ -268,6 +283,7 @@ class AddressBook:
                 raise AddressError(f"{source}: `requires.base_model` is {base['id']}@{base['revision']}, which is not "
                                    "among the checkpoint's pinned `applies_to.models`.")
         graphs = _graphs(doc.get("graphs"), source, base_dir) if doc.get("graphs") is not None else {}
+        evidence = _evidence(doc.get("evidence"), source, base_dir) if doc.get("evidence") is not None else {}
         if graphs and inline and "schema_version" not in doc:
             version = GRAPHS_SCHEMA
         if graphs and version < GRAPHS_SCHEMA:
@@ -363,7 +379,7 @@ class AddressBook:
         extra = {k: v for k, v in doc.items() if k not in _KNOWN_KEYS}
         book = cls(name=str(doc.get("name", source)), schema_version=version, portability=portability,
                    applies_to=applies_to, requires=requires, own_sets=own, imports=imports, source=source,
-                   description=doc.get("description"), extra=extra, graphs=graphs)
+                   description=doc.get("description"), extra=extra, graphs=graphs, evidence=evidence)
         for set_name, expr in own.items():
             missing = [r for r in references(expr) if r not in known]
             if missing:
@@ -419,6 +435,11 @@ class AddressBook:
                 out[ns] = cls.from_mapping(_load_yaml(path), source=str(path), base_dir=path.parent,
                                            _loading=loading + (key,))
         return out
+
+    def evidence_tables(self) -> dict[str, dict[str, dict[tuple[int, int], Any]]]:
+        """The book's evidence as ``{table: {column: {(layer, unit): value}}}``, the shape a consumer that applies
+        ``from`` values reads (empty when the book leaves evidence to its caller)."""
+        return {name: table.table() for name, table in self.evidence.items()}
 
     def sets(self) -> dict[str, Expr]:
         """Every set this book can reference: its own by name, and each import's as ``<namespace>.<set>``."""
@@ -674,7 +695,7 @@ def _states_readout(body: Mapping[str, Any]) -> bool:
 
 
 _KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets",
-               "treatments", "graphs")
+               "treatments", "graphs", "evidence")
 
 
 def _graphs(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
@@ -694,6 +715,31 @@ def _graphs(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any
             out[name] = GraphSubset.from_file(Path(base_dir or ".") / ref["file"], sha256=ref["sha256"])
         except VenngramError as err:
             raise AddressError(f"{source}: graph `{name}`: {err}") from err
+    return out
+
+
+def _evidence(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
+    from venngram.evidence import EvidenceTable
+
+    if not isinstance(raw, Mapping) or not raw:
+        raise AddressError(f"{source}: `evidence` maps a table name to its document {{file, sha256}}, or to the table "
+                           "inline.")
+    out = {}
+    for name, ref in raw.items():
+        if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
+            raise AddressError(f"{source}: {name!r} is not a valid evidence table name (letters, digits, `_` and "
+                               "`-`).")
+        where = f"{source}: evidence `{name}`"
+        if not (isinstance(ref, Mapping) and "file" in ref):  # the table inline; its refusals name `where`
+            out[name] = EvidenceTable.from_mapping(ref, source=where, base_dir=base_dir, name=name)
+            continue
+        if set(ref) != {"file", "sha256"} or not all(isinstance(ref[k], str) and ref[k] for k in ref):
+            raise AddressError(f"{where}: a table document is cited as {{file, sha256}}: by its hash, so a changed "
+                               "document is refused rather than re-read.")
+        try:
+            out[name] = EvidenceTable.from_file(Path(base_dir or ".") / ref["file"], sha256=ref["sha256"])
+        except VenngramError as err:
+            raise AddressError(f"{where}: {err}") from err
     return out
 
 

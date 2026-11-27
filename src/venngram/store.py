@@ -536,6 +536,13 @@ def _load_graph(path: Path) -> Any:
     return GraphSubset.from_file(path)
 
 
+def _load_evidence(path: Path) -> Any:
+    """Read an ``evidence_table`` document, checking its row sidecar (:class:`venngram.evidence.EvidenceTable`)."""
+    from venngram.evidence import EvidenceTable
+
+    return EvidenceTable.from_file(path)
+
+
 register_store("local", LocalStore(), versioned=False)
 register_store("hub-model", lambda: HubRepoStore("model"), versioned=True)
 register_store("hub-dataset", lambda: HubRepoStore("dataset"), versioned=True)
@@ -543,7 +550,8 @@ register_store("hub-bucket", HubBucketStore(), versioned=False)
 for _kind, _loader in (("address_book", _load_book), ("component_map", _load_map), ("rules", _load_rules),
                        ("verification_record", _read_yaml),
                        ("support_record", _load_support), ("op_specs", _load_op_specs),
-                       ("weight_patch", _load_weight_patch), ("graph_subset", _load_graph)):
+                       ("weight_patch", _load_weight_patch), ("graph_subset", _load_graph),
+                       ("evidence_table", _load_evidence)):
     register_loader(_kind, _loader)
 
 

@@ -53,9 +53,11 @@ set algebra (``@a & @b``, ``@a | @b``, ``@a - @control``), evaluated over ``(lay
 term in it filters by layer (``(@a & @b & layers:12) - @control``). A composed target is resolved when the recipe is
 read, and refused by name if it is empty, mixes sites, composes feature sets or names units only by slice. **Values**:
 a ``dose``, a per-unit ``doses`` table, or ``from`` a column of recorded evidence through a ``transform`` pipeline of
-declared transforms (:data:`~venngram.ops.TRANSFORMS`). **Tokens** are set per stage; an op may override them only if
-its spec allows. ``prompt`` is every position of the input before any generated token; ``generated`` is every
-position the consumer generates, at each decode step (a consumer that does not generate refuses it by name).
+declared transforms (:data:`~venngram.ops.TRANSFORMS`); the evidence is an evidence table the book names
+(:mod:`venngram.evidence`), or the caller's when the book names none. **Tokens** are set per stage; an op may
+override them only if its spec allows. ``prompt`` is every position of the input before any generated token;
+``generated`` is every position the consumer generates, at each decode step (a consumer that does not generate
+refuses it by name).
 
 **Weights**: a recipe's ``weights`` section (recipe schema 3) lists ops on parameters, in order, applied to the tensors
 before any stage runs and kept in them (a consumer materializes them, reversibly or for export). Each names a target set
@@ -514,6 +516,7 @@ class Recipe:
                                    "older venngram would pass over it silently.")
             readout = _readout(doc["readout"], f"{source}: readout", book, operands)
         _check_readouts(stages, readout, book, source, version)
+        _check_evidence(stages, weights, gradients, book, source)
         return cls(name=str(doc.get("name") or source), model_id=model["id"], revision=model["revision"], book=book,
                    stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
                    book_ref=raw_book,
@@ -573,6 +576,37 @@ class Recipe:
             if getattr(self, key):
                 doc[key] = dict(getattr(self, key))
         return doc
+
+
+def _check_evidence(stages: Sequence[Stage], weights: Sequence[Op], gradients: Sequence[Op], book: AddressBook,
+                    source: str) -> None:
+    """In a book with an ``evidence`` section, refuse a ``from`` value that names a table or a column the book does not
+    have, or whose target has a member without a row (:mod:`venngram.evidence`). A book without the section leaves
+    evidence to its caller."""
+    if not book.evidence:
+        return
+    from venngram.evidence import check_members
+
+    located = [(f"stage {i} ({st.site}) op {j}", op) for i, st in enumerate(stages) for j, op in enumerate(st.ops)]
+    located += [(f"weights op {j}", op) for j, op in enumerate(weights)]
+    located += [(f"gradients op {j}", op) for j, op in enumerate(gradients)]
+    for at, op in located:
+        value = op.value
+        if value is None or value.source != "from" or value.evidence is None:
+            continue
+        where = f"{source}: {at} (`{op.op}`)"
+        if value.evidence not in book.evidence:
+            raise AddressError(f"{where}: the value reads evidence `{value.evidence}`, which the book's `evidence` "
+                               f"does not name (tables: {sorted(book.evidence)}).")
+        table = book.evidence[value.evidence]
+        if value.column not in table.columns:
+            raise AddressError(f"{where}: evidence `{value.evidence}` has no column `{value.column}` (columns: "
+                               f"{sorted(table.columns)}).")
+        try:
+            members = op.unit_members(book, where) if op.target is not None else []
+        except AddressError:
+            members = []  # members known only on a model (a slice, a role): the consumer checks them there
+        check_members(table, str(value.column), members, where)
 
 
 def _schema(*, weights: bool, gradients: bool, readout: bool = False, graphs: bool = False) -> int:

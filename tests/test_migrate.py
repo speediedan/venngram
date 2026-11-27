@@ -24,7 +24,7 @@ from venngram.recipe import Recipe
 SCHEMAS = Path(__file__).parent / "schemas"
 FIXTURES = sorted(SCHEMAS.glob("*.yaml"))
 CURRENT = {"component_map": 7, "overlay_map": 5, "support_record": None, "address_book": None, "rules": 2,
-           "op_specs": None, "weight_patch": 1, "graph_subset": 1}
+           "op_specs": None, "weight_patch": 1, "graph_subset": 1, "evidence_table": 1}
 #: A retired kind migrates to another: a recipe to the book that carries it as a treatment.
 BECOMES = {"recipe": "address_book"}
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
@@ -43,7 +43,7 @@ def test_every_published_schema_has_a_fixture():
                                                             "support_record_v4", "support_record_v5",
                                                             "support_record_v6", "support_record_v7",
                                                             "support_record_v8",
-                                                            "graph_subset_v1",
+                                                            "graph_subset_v1", "evidence_table_v1",
                                                             "address_book_v1",
                                                             "address_book_v2", "address_book_v3",
                                                             "address_book_v4", "address_book_v5",

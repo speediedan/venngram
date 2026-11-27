@@ -190,11 +190,37 @@ large table goes to a sidecar (`nodes: {file, sha256}`): a safetensors file of t
 integer identities stay integer columns. `anchor_cases` gives conformance vectors for anchoring, and a consumer declares
 what it applies in its support record's `circuits.subsets` section.
 
+### Evidence tables
+
+The evidence a treatment's `from` values read is a `kind: evidence_table` document (`venngram.evidence`): one row per
+`(layer, unit)`, typed columns that each state their meaning (a `description`, optionally a `unit` and a `dtype` of
+`float` or `int`), and its provenance: the checkpoint the evidence was measured on (`model: {id, revision}`) and its
+`source` with a `license` and a `version`, `commit` or `revision`. A book names the tables its treatments read under
+`evidence`, each cited by hash or written inline, so it is published with them:
+
+```yaml
+evidence:
+  nf_anime: {file: evidence/nf_anime.yaml, sha256: 9c1e...}
+treatments:
+  nf_anime:
+    model: {id: Qwen/Qwen3.5-4B, revision: pinned-model-commit}
+    stages:
+      - site: mlp.out.hook_in
+        ops: [{op: add, target: {set: nf_anime}, value: {from: {evidence: nf_anime, column: dose}}}]
+```
+
+A table holds one finding per unit: a unit that is a finding for two targets is a row in two tables. In a book with an
+`evidence` section, a `from` value naming a table or a column the book lacks, or a target member without a row, is
+refused when the book loads; a book without one leaves evidence to its caller, as before. The section changes no set or
+treatment, so it needs no newer book schema. `AddressBook.evidence_tables()` gives the tables in the shape a consumer
+takes (`{table: {column: {(layer, unit): value}}}`), and a large table goes to a safetensors sidecar
+(`rows: {file, sha256}`) with integer `layer` and `unit` columns.
+
 ### Sharing documents: manifests and stores
 
 A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
-each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports and graphs, and
-the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
+each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports, graphs and
+evidence tables, and the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
 names `python -m venngram.migrate`. A **document reference** names one document wherever it lives:
 `<store>:<ref>[@<revision>]:<path>[#<sha256>]`, for example
 `hub-model:speediedan/venngram-maps@3f1e...:maps/Qwen3ForCausalLM.yaml`.
@@ -476,6 +502,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
+| evidence table | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 3 | 1, 2 when a declaration names a parameter target or a `delta` operand, or 3 when one names a path target or a parameter's `choices` | refused |
 | weight patch | 1 | 1 | refused |
