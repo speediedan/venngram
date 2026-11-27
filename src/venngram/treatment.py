@@ -323,6 +323,13 @@ class Op:
             raise AddressError(f"{source}: `{self.op}` has no unit members (it needs a unit set target).")
         return list(dict.fromkeys(_units(book.sets(), self.target, source)))
 
+    def unit_stack(self, book: AddressBook, source: str = "<treatment>") -> str | None:
+        """The block stack a unit target sits in (``None`` for the primary stack): a composed unit set sits at one
+        site, and the stack is part of the site."""
+        if self.target is None:
+            raise AddressError(f"{source}: `{self.op}` has no unit members (it needs a unit set target).")
+        return _unit_stack(book.sets(), self.target, source)
+
     def unit_doses(self, book: AddressBook, source: str = "<treatment>") -> dict[tuple[int, int], float]:
         """``(layer, unit) -> dose`` for a unit-targeted op whose value is a ``dose`` or ``doses``."""
         if self.target is None or self.value is None or self.value.source not in ("dose", "doses"):
@@ -552,9 +559,10 @@ def _check_tables(stages: Sequence[Stage], weights: Sequence[Op], gradients: Seq
                                f"{sorted(table.columns)}).")
         try:
             members = op.unit_members(book, where) if op.target is not None else []
+            stack = op.unit_stack(book, where) if op.target is not None else None
         except AddressError:
-            members = []  # members known only on a model (a slice, a role): the consumer checks them there
-        check_members(table, str(value.column), members, where)
+            members, stack = [], None  # members known only on a model (a slice, a role): the consumer checks them
+        check_members(table, str(value.column), members, where, stack=stack)
 
 
 def _schema(*, weights: bool, gradients: bool, readout: bool = False, graphs: bool = False) -> int:
@@ -1140,6 +1148,17 @@ class _UnitSets:
         self.sites.setdefault(site, to_string(Term(**{k: getattr(t, k) for k, _ in site})) if site
                               else "no site fields")
         return _term_units(t, self.name, self.source)
+
+
+def _unit_stack(sets: Mapping[str, Expr], name: str, source: str) -> str | None:
+    """The stack of the one site a book's unit set sits at (see :class:`_UnitSets`)."""
+    expr = sets[name]
+    if isinstance(expr, Term):
+        return expr.stack
+    resolver = _UnitSets(sets, name, source)
+    resolver.resolve()
+    (site,) = resolver.sites
+    return dict(site).get("stack")
 
 
 def _units(sets: Mapping[str, Expr], name: str, source: str) -> list[tuple[int, int]]:

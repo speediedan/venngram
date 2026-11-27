@@ -34,15 +34,29 @@ values are, not why they were chosen: a measured statistic, a published setting 
     rows:
       - {layer: 13, unit: 4810, dose: 1.5, confirm_hit_rate: 0.85, confirm_n: 20}
 
-**Rows are keyed by** ``(layer, unit)``, with each key at most once, and every row gives every column: a unit the
-table says nothing about has no row. A table holds one finding per unit, so a unit that is a finding for two targets
-(with different statistics) is a row in two tables, one per finding, and a book carries one table per finding.
+**A table declares its key**, the coordinates its rows are keyed by: ``key: [layer, unit]`` when the document does
+not say, or ``key: [stack, layer, unit]``. The key's vocabulary (:data:`KEY_FIELDS`) is the coordinates a unit target
+resolves to, which is what lets a book check a table's coverage without a model, and a reader refuses a key it does
+not know by name rather than misread its rows. Each key appears at most once, and every row gives every column: a unit
+the table says nothing about has no row. A table holds one finding per unit, so a unit that is a finding for two
+targets (with different statistics) is a row in two tables, one per finding, and a book carries one table per finding.
 
-**The key is a starting point.** ``(layer, unit)`` is the pair a unit target resolves to, which is what lets a book
-check a table's coverage without a model. For a looped or shared-weight model the layer is the weight layer a visit
-reads (:mod:`venngram.maps.execution`), so a table about one visit's activations needs that visit in its key. Models
-that are not built from layers at all would need another key. Keys are expected to grow (a pass, a position, a
-coordinate within a unit) as consumers need them, each by a schema change readers refuse rather than misread.
+**Stacks.** A unit target sits in one block stack (a composed unit set sits at one site, and the stack is part of the
+site). A table whose key has no ``stack`` is a table of the primary stack, and it is refused for a target in another
+stack (``stack: vision``) rather than read as if its rows were measured there. A table keyed by ``stack`` gives each
+row's stack, a row without one being the primary stack's:
+
+.. code-block:: yaml
+
+    key: [stack, layer, unit]
+    rows:
+      - {layer: 13, unit: 4810, dose: 1.5}                  # the primary stack
+      - {stack: vision, layer: 2, unit: 77, dose: -0.4}
+
+**The key grows as consumers need it.** For a looped or shared-weight model the layer is the weight layer a visit
+reads (:mod:`venngram.maps.execution`), so a table about one visit's activations needs that visit in its key, and
+models that are not built from layers would need another key. Each such coordinate joins :data:`KEY_FIELDS`, and a
+reader that does not know it refuses the table by name.
 
 **Columns state their meaning**: each has a ``description``, optionally a ``measure`` (what its numbers measure, such
 as ``fraction`` or a named statistic), and a ``dtype`` (``float``, the default, or ``int``). Values are finite numbers.
@@ -53,13 +67,15 @@ matters), and ``source`` names where the values came from, with its ``license`` 
 ``revision``. Other ``source`` keys are free-form.
 
 **Large tables** go to a sidecar (``rows: {file, sha256}``): a safetensors file of typed columns with integer
-``layer`` and ``unit`` columns (:func:`write_table_rows`), read and written with the standard library.
+``layer`` and ``unit`` columns, and a ``stack`` index column in a table keyed by stack (:func:`write_table_rows`),
+read and written with the standard library.
 
 **Read-time checks.** In a book with a ``tables`` section, a treatment's ``from`` value names one of the book's tables
 and one of its columns, and every member of its target has a row (where the target's members can be listed without a
 model), or the book is refused by name (:func:`check_members`). A book without the section leaves the tables to its
 caller: a consumer that applies a ``from`` value then needs the caller's table, and refuses without it.
-:meth:`UnitTable.table` gives a table in the shape such a caller passes (``{column: {(layer, unit): value}}``).
+:meth:`UnitTable.table` gives a table in the shape such a caller passes (``{column: {(layer, unit): value}}``), for
+one stack at a time.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -83,17 +99,23 @@ SCHEMA_WINDOW = (1, 1)
 #: The row sidecar schema.
 ROWS_SCHEMA_VERSION = 1
 DTYPES = ("float", "int")
-#: Row keys that are not value columns.
-KEYS = ("layer", "unit")
+#: The coordinates a table's rows may be keyed by, in the order a key lists them.
+KEY_FIELDS = ("stack", "layer", "unit")
+#: The key of a table whose document gives none.
+DEFAULT_KEY = ("layer", "unit")
+#: Row keys that are not value columns (no column takes one of these names).
+KEYS = KEY_FIELDS
 #: Below this many rows, :meth:`UnitTable.write` keeps the rows inline.
 INLINE_THRESHOLD = 512
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
-_TOP_KEYS = ("schema_version", "kind", "name", "description", "model", "source", "columns", "rows")
+_TOP_KEYS = ("schema_version", "kind", "name", "description", "model", "source", "key", "columns", "rows")
 #: The keys of a table written inline in a book (the document without its header).
-BODY_KEYS = ("description", "model", "source", "columns", "rows")
+BODY_KEYS = ("description", "model", "source", "key", "columns", "rows")
 _VERSION_KEYS = ("version", "commit", "revision")
 
 Key = tuple[int, int]
+#: A row's full key: ``(stack, layer, unit)``, the stack ``None`` for the primary stack.
+RowKey = tuple[str | None, int, int]
 
 
 @dataclass(frozen=True)
@@ -151,30 +173,45 @@ class UnitTable:
     model: Mapping[str, str]
     """The checkpoint the values were measured on, ``{id, revision}``."""
     columns: Mapping[str, Column]
-    rows: Mapping[Key, Mapping[str, float | int]]
-    """Each row's values by column, keyed by ``(layer, unit)``, in the document's order."""
+    rows: Mapping[RowKey, Mapping[str, float | int]]
+    """Each row's values by column, keyed by ``(stack, layer, unit)`` (``stack`` ``None`` for the primary stack), in the
+    document's order."""
     provenance: Mapping[str, Any] = field(default_factory=dict)
     """The ``source`` section: where the values came from, its version and its license."""
     description: str | None = None
     source: str = "<inline>"
     rows_ref: Mapping[str, str] | None = None
     """The ``{file, sha256}`` sidecar the rows were read from, kept so the document round-trips."""
+    key: tuple[str, ...] = DEFAULT_KEY
+    """The coordinates the rows are keyed by (:data:`KEY_FIELDS`); a table without ``stack`` is the primary stack's."""
 
-    def column(self, name: str) -> dict[Key, float | int]:
-        """``(layer, unit) -> value`` of one column.
+    @property
+    def stacks(self) -> list[str | None]:
+        """The stacks the table has rows for, in order of first appearance (``None`` for the primary stack)."""
+        return list(dict.fromkeys(k[0] for k in self.rows))
+
+    def column(self, name: str, *, stack: str | None = None) -> dict[Key, float | int]:
+        """``(layer, unit) -> value`` of one column, over the rows of ``stack`` (the primary stack when ``None``).
 
         Raises:
-            AddressError: If the table has no such column.
+            AddressError: If the table has no such column, or ``stack`` is another stack and the table's key has none.
         """
         if name not in self.columns:
             raise AddressError(f"{self.source}: unit table `{self.name}` has no column `{name}` (columns: "
                                f"{sorted(self.columns)}).")
-        return {key: row[name] for key, row in self.rows.items()}
+        self._check_stack(stack, self.source)
+        return {(layer, unit): row[name] for (s, layer, unit), row in self.rows.items() if s == stack}
 
-    def table(self) -> dict[str, dict[Key, float | int]]:
-        """Every column as ``{column: {(layer, unit): value}}``: the shape a consumer that reads ``from`` values takes
-        its tables in."""
-        return {name: self.column(name) for name in self.columns}
+    def table(self, *, stack: str | None = None) -> dict[str, dict[Key, float | int]]:
+        """Every column as ``{column: {(layer, unit): value}}`` over the rows of ``stack``: the shape a consumer that
+        reads ``from`` values takes its tables in."""
+        return {name: self.column(name, stack=stack) for name in self.columns}
+
+    def _check_stack(self, stack: str | None, where: str) -> None:
+        if stack is not None and "stack" not in self.key:
+            raise AddressError(f"{where}: unit table `{self.name}` is keyed by {list(self.key)}, so its rows are the "
+                               f"primary stack's, and the target is in stack `{stack}`; a table with rows for "
+                               "another stack declares `key: [stack, layer, unit]`.")
 
     @classmethod
     def from_mapping(cls, doc: Any, *, source: str = "<inline>", base_dir: str | Path | None = None,
@@ -183,9 +220,9 @@ class UnitTable:
         written inline in a book: the document's body (:data:`BODY_KEYS`) without its header.
 
         Raises:
-            AddressError: If a key is missing or malformed, provenance is incomplete, a row repeats a key, lacks a
-                column or carries one the table does not declare, a value is not of its column's type or not finite,
-                or a sidecar differs from its hash.
+            AddressError: If a key is missing or malformed, the table's ``key`` names a coordinate this venngram does
+                not know, provenance is incomplete, a row repeats a key, lacks a column or carries one the table does
+                not declare, a value is not of its column's type or not finite, or a sidecar differs from its hash.
         """
         if name is None:
             if not isinstance(doc, Mapping) or doc.get("kind") != "unit_table":
@@ -215,6 +252,7 @@ class UnitTable:
                 or not provenance["license"] or not any(provenance.get(k) for k in _VERSION_KEYS):
             raise AddressError(f"{source}: `source` names where the values came from, with its `license` and one of "
                                f"{list(_VERSION_KEYS)}, so the table can be published and reproduced.")
+        key = _key(doc.get("key"), source)
         raw_columns = doc.get("columns")
         if not isinstance(raw_columns, Mapping) or not raw_columns:
             raise AddressError(f"{source}: `columns` maps each column name to {{description, unit, dtype}}.")
@@ -228,16 +266,16 @@ class UnitTable:
         if not isinstance(raw_rows, list) or not raw_rows:
             raise AddressError(f"{source}: `rows` lists at least one {{layer, unit, <column>: ...}}, or names a "
                                "sidecar {file, sha256}.")
-        rows: dict[Key, dict[str, float | int]] = {}
+        rows: dict[RowKey, dict[str, float | int]] = {}
         for i, raw in enumerate(raw_rows):
-            key, values = _row(raw, i, columns, source)
-            if key in rows:
-                raise AddressError(f"{source}: row {i} repeats (layer {key[0]}, unit {key[1]}): a table holds one "
-                                   "finding per unit, so a second finding for a unit belongs in a table of its own.")
-            rows[key] = values
+            row_key, values = _row(raw, i, key, columns, source)
+            if row_key in rows:
+                raise AddressError(f"{source}: row {i} repeats ({_shown(row_key)}): a table holds one finding per "
+                                   "unit, so a second finding for a unit belongs in a table of its own.")
+            rows[row_key] = values
         return cls(name=str(name or doc.get("name") or source), model=dict(model), columns=columns, rows=rows,
                    provenance=dict(provenance), description=doc.get("description"), source=source,
-                   rows_ref=rows_ref)
+                   rows_ref=rows_ref, key=key)
 
     @classmethod
     def from_file(cls, path: str | Path, *, sha256: str | None = None) -> "UnitTable":
@@ -267,9 +305,12 @@ class UnitTable:
             doc["description"] = self.description
         doc["model"] = dict(self.model)
         doc["source"] = dict(self.provenance)
+        if self.key != DEFAULT_KEY:
+            doc["key"] = list(self.key)
         doc["columns"] = {name: c.to_mapping() for name, c in self.columns.items()}
         doc["rows"] = dict(self.rows_ref) if self.rows_ref is not None and not inline else \
-            [{"layer": layer, "unit": unit, **values} for (layer, unit), values in self.rows.items()]
+            [{**({"stack": stack} if stack is not None else {}), "layer": layer, "unit": unit, **values}
+             for (stack, layer, unit), values in self.rows.items()]
         return doc
 
     def write(self, path: str | Path, *, threshold: int = INLINE_THRESHOLD) -> Path:
@@ -287,20 +328,43 @@ class UnitTable:
         return path
 
 
-def check_members(table: UnitTable, column: str, members: Iterable[Key], where: str) -> None:
-    """Refuse, naming them, the ``(layer, unit)`` members that have no row in ``table`` (whose ``column`` a value
-    reads).
+def check_members(table: UnitTable, column: str, members: Iterable[Key], where: str, *,
+                  stack: str | None = None) -> None:
+    """Refuse, naming them, the ``(layer, unit)`` members of a target in ``stack`` (the primary stack when ``None``)
+    that have no row in ``table`` (whose ``column`` a value reads).
 
     Raises:
-        AddressError: If the table has no such column, or a member has no row.
+        AddressError: If the table has no such column, ``stack`` is another stack and the table's key has none, or a
+            member has no row.
     """
     table.column(column)
-    missing = [m for m in members if m not in table.rows]
+    table._check_stack(stack, where)
+    missing = [(stack, layer, unit) for layer, unit in members if (stack, layer, unit) not in table.rows]
     if missing:
-        shown = ", ".join(f"(layer {layer}, unit {unit})" for layer, unit in missing[:8])
+        shown = ", ".join(f"({_shown(m)})" for m in missing[:8])
         more = f" and {len(missing) - 8} more" if len(missing) > 8 else ""
         raise AddressError(f"{where}: unit table `{table.name}` has no row for {shown}{more}, so column "
                            f"`{column}` gives them no value.")
+
+
+def _shown(key: RowKey) -> str:
+    stack, layer, unit = key
+    return (f"stack {stack}, " if stack is not None else "") + f"layer {layer}, unit {unit}"
+
+
+def _key(raw: Any, source: str) -> tuple[str, ...]:
+    if raw is None:
+        return DEFAULT_KEY
+    if not isinstance(raw, list) or not all(isinstance(k, str) for k in raw):
+        raise AddressError(f"{source}: `key` lists the coordinates the rows are keyed by ({list(KEY_FIELDS)}), "
+                           f"got {raw!r}.")
+    unknown = [k for k in raw if k not in KEY_FIELDS]
+    if unknown:
+        raise AddressError(f"{source}: `key` names {unknown}, which this venngram does not know (it reads keys of "
+                           f"{list(KEY_FIELDS)}); upgrade venngram to read this table.")
+    if len(set(raw)) != len(raw) or not {"layer", "unit"} <= set(raw):
+        raise AddressError(f"{source}: `key` lists each coordinate once and includes `layer` and `unit`, got {raw!r}.")
+    return tuple(k for k in KEY_FIELDS if k in raw)
 
 
 def _is_sidecar(raw: Any) -> TypeGuard[Mapping[str, str]]:
@@ -308,16 +372,24 @@ def _is_sidecar(raw: Any) -> TypeGuard[Mapping[str, str]]:
                                                                                for k in raw)
 
 
-def _row(raw: Any, i: int, columns: Mapping[str, Column], source: str) -> tuple[Key, dict[str, float | int]]:
+def _row(raw: Any, i: int, key: Sequence[str], columns: Mapping[str, Column],
+         source: str) -> tuple[RowKey, dict[str, float | int]]:
     where = f"{source}: row {i}"
     if not isinstance(raw, Mapping):
         raise AddressError(f"{where}: a row is {{layer, unit, <column>: <value>, ...}}, got {raw!r}.")
-    key = []
-    for k in KEYS:
+    if "stack" in raw and "stack" not in key:
+        raise AddressError(f"{where}: gives a `stack`, and the table's key is {list(key)}; a table with rows for "
+                           "another stack declares `key: [stack, layer, unit]`.")
+    stack = raw.get("stack")
+    if stack is not None and (not isinstance(stack, str) or not _NAME.fullmatch(stack)):
+        raise AddressError(f"{where}: `stack` is a block stack's name (or absent for the primary stack), got "
+                           f"{stack!r}.")
+    coords = []
+    for k in ("layer", "unit"):
         v = raw.get(k)
         if isinstance(v, bool) or not isinstance(v, int) or v < 0:
             raise AddressError(f"{where}: `{k}` is an integer >= 0, got {v!r}.")
-        key.append(v)
+        coords.append(v)
     given = set(raw) - set(KEYS)
     unknown, missing = sorted(given - set(columns)), sorted(set(columns) - given)
     if unknown:
@@ -325,7 +397,7 @@ def _row(raw: Any, i: int, columns: Mapping[str, Column], source: str) -> tuple[
     if missing:
         raise AddressError(f"{where}: lacks {missing}: every row gives every column (a unit the table says nothing "
                            "about has no row).")
-    return (key[0], key[1]), {c: col.read(raw[c], where) for c, col in columns.items()}
+    return (stack, coords[0], coords[1]), {c: col.read(raw[c], where) for c, col in columns.items()}
 
 
 # ---- the row sidecar ------------------------------------------------------------------------------------------------
@@ -336,7 +408,9 @@ _COLUMN_DTYPE = {"int": "I64", "float": "F64"}
 
 def write_table_rows(path: str | Path, table: UnitTable) -> str:
     """Write ``table``'s rows to a sidecar (safetensors: ``layer`` and ``unit`` as I64, each column as ``value.<name>``,
-    I64 or F64 by its dtype) and return its sha256. Reference it from the document as ``rows: {file, sha256}``."""
+    I64 or F64 by its dtype, and in a table keyed by stack a ``stack`` I64 column indexing the stack names its
+    metadata lists, ``-1`` for the primary stack) and return its sha256. Reference it from the document as ``rows:
+    {file, sha256}``."""
     n = len(table.rows)
     blobs: dict[str, tuple[str, bytes]] = {}
 
@@ -346,8 +420,13 @@ def write_table_rows(path: str | Path, table: UnitTable) -> str:
             data.byteswap()
         blobs[name] = (dtype, data.tobytes())
 
-    put("layer", "I64", (k[0] for k in table.rows))
-    put("unit", "I64", (k[1] for k in table.rows))
+    meta: dict[str, Any] = {"columns": list(table.columns), "rows": n}
+    if "stack" in table.key:
+        stacks = [s for s in table.stacks if s is not None]
+        meta["stacks"] = stacks
+        put("stack", "I64", (-1 if k[0] is None else stacks.index(k[0]) for k in table.rows))
+    put("layer", "I64", (k[1] for k in table.rows))
+    put("unit", "I64", (k[2] for k in table.rows))
     for name, col in table.columns.items():
         put(f"value.{name}", _COLUMN_DTYPE[col.dtype], (row[name] for row in table.rows.values()))
     header: dict[str, Any] = {}
@@ -356,7 +435,7 @@ def write_table_rows(path: str | Path, table: UnitTable) -> str:
         header[name] = {"dtype": dtype, "shape": [n], "data_offsets": [offset, offset + len(blob)]}
         offset += len(blob)
     header["__metadata__"] = {"venngram.schema_version": str(ROWS_SCHEMA_VERSION), "venngram.kind": "unit_table_rows",
-                              "venngram.table": json.dumps({"columns": list(table.columns), "rows": n})}
+                              "venngram.table": json.dumps(meta)}
     raw = json.dumps(header, separators=(",", ":")).encode()
     raw += b" " * (-len(raw) % 8)
     path = Path(path)
@@ -395,6 +474,7 @@ def read_table_rows(path: str | Path, *, sha256: str | None = None,
                 raise ValueError("not table rows")
             meta = json.loads(meta_raw["venngram.table"])
             n, names = int(meta["rows"]), [str(c) for c in meta["columns"]]
+            stacks = None if meta.get("stacks") is None else [str(s) for s in meta["stacks"]]
         except (ValueError, KeyError, TypeError):
             raise AddressError(f"{path}: not a venngram unit table row sidecar (schema {ROWS_SCHEMA_VERSION})."
                                ) from None
@@ -429,14 +509,26 @@ def read_table_rows(path: str | Path, *, sha256: str | None = None,
     layers, units = column("layer", ("I64",)), column("unit", ("I64",))
     values = {c: column(f"value.{c}", (_COLUMN_DTYPE[dtypes[c]],) if dtypes and c in dtypes else ("I64", "F64"))
               for c in names}
-    return [{"layer": layers[i], "unit": units[i], **{c: v[i] for c, v in values.items()}} for i in range(n)]
+    stack_of: list[dict[str, str]] = [{} for _ in range(n)]
+    if stacks is not None:
+        for i, s in enumerate(column("stack", ("I64",))):
+            if not -1 <= s < len(stacks):
+                raise AddressError(f"{path}: row {i}'s stack index {s} is outside the {len(stacks)} stacks it lists.")
+            if s >= 0:
+                stack_of[i] = {"stack": stacks[s]}
+    elif "stack" in header:
+        raise AddressError(f"{path}: has a `stack` column but lists no stacks in its metadata.")
+    return [{**stack_of[i], "layer": layers[i], "unit": units[i], **{c: v[i] for c, v in values.items()}}
+            for i in range(n)]
 
 
 __all__ = [
     "BODY_KEYS",
     "check_members",
     "Column",
+    "DEFAULT_KEY",
     "DTYPES",
+    "KEY_FIELDS",
     "UnitTable",
     "INLINE_THRESHOLD",
     "read_table_rows",

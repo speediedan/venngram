@@ -443,10 +443,12 @@ class AddressBook:
                                            _loading=loading + (key,))
         return out
 
-    def unit_tables(self) -> dict[str, dict[str, dict[tuple[int, int], Any]]]:
-        """The book's unit tables as ``{table: {column: {(layer, unit): value}}}``, the shape a consumer that applies
-        ``from`` values reads (empty when the book leaves the tables to its caller)."""
-        return {name: table.table() for name, table in self.tables.items()}
+    def unit_tables(self, *, stack: str | None = None) -> dict[str, dict[str, dict[tuple[int, int], Any]]]:
+        """The book's unit tables as ``{table: {column: {(layer, unit): value}}}`` over the rows of ``stack`` (the
+        primary stack when ``None``), the shape a consumer that applies ``from`` values reads (empty when the book
+        leaves the tables to its caller). With ``stack``, only the tables keyed by stack are given."""
+        return {name: table.table(stack=stack) for name, table in self.tables.items()
+                if stack is None or "stack" in table.key}
 
     def sets(self) -> dict[str, Expr]:
         """Every set this book can reference: its own by name, and each import's as ``<namespace>.<set>``."""
