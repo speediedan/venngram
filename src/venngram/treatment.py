@@ -33,8 +33,16 @@ several treatments and a consumer reads one kind of document; :meth:`Treatment.f
               - {op: add, target: {set: chess}, value: {dose: 0.8}}
               - {op: add, target: {set: openings}, value: {doses: {15: {4041: 0.5}}}}
               - {op: reject, operand: concept, params: {fraction: 1.0}}
-        sampling: {temperature: 0.7}
-        metadata: {examples: [...]}      # free-form, carried and never read
+        sampling: {temperature: 0.7}           # generation settings: read by the consumer that generates
+        metadata: {examples: [...]}            # free-form, carried and never read
+
+**Sampling is read by the consumer, metadata by nobody.** ``sampling`` holds the generation settings a treatment's
+result was measured under, since the same stages give different text at another temperature. venngram checks only its
+shape (a mapping of names to scalars) and never reads it. A consumer that generates applies the keys it honours, named
+as Hugging Face's ``generate`` names them (:data:`SAMPLING_KEYS`: ``do_sample``, ``temperature``, ``top_p``,
+``top_k``, ``max_new_tokens``, ``seed``, ...), and refuses the treatment by name for a key it does not apply rather than
+generate under its own defaults; a consumer that does not generate has nothing to apply them to and ignores them.
+``metadata`` is free-form, carried with the treatment and never read by venngram or a consumer's application of it.
 
 **Ops are declared specs** (:mod:`venngram.ops`): this module validates a treatment against them and composes
 treatments; it never executes an op. Applying a treatment belongs to the consumer (e.g. interpretune steers,
@@ -429,6 +437,8 @@ class Treatment:
     """What its stages' ``of: grad`` ops act on the gradients of, unless a stage states its own."""
     revision_source: str = "pinned"
     sampling: Mapping[str, Any] = field(default_factory=dict)
+    """The generation settings its result was measured under, read by the consumer that generates (see the module
+    docs): it applies the keys it honours and refuses one it does not."""
     metadata: Mapping[str, Any] = field(default_factory=dict)
     """Free-form: carried with the treatment and never read by venngram."""
     source: str = "<inline>"
@@ -490,7 +500,8 @@ class Treatment:
         _check_tables(stages, weights, gradients, book, source)
         return cls(name=str(name or source), model_id=model["id"], revision=model["revision"], book=book,
                    stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
-                   revision_source=model.get("revision_source", "pinned"), sampling=dict(body.get("sampling") or {}),
+                   revision_source=model.get("revision_source", "pinned"),
+                   sampling=_sampling(body.get("sampling"), source),
                    metadata=_metadata(body), source=source,
                    base_dir=str(base_dir) if base_dir is not None else None)
 
@@ -520,6 +531,26 @@ class Treatment:
             if getattr(self, key):
                 doc[key] = dict(getattr(self, key))
         return doc
+
+
+#: The conventional ``sampling`` keys, as Hugging Face's ``generate`` names them. A treatment may set others (a consumer
+#: refuses a key it does not apply); these are the names consumers share.
+SAMPLING_KEYS = ("do_sample", "temperature", "top_p", "top_k", "min_p", "repetition_penalty", "max_new_tokens",
+                 "num_beams", "seed")
+
+
+def _sampling(raw: Any, source: str) -> dict[str, Any]:
+    """A treatment's ``sampling``: a mapping of setting names to scalars, which venngram carries and never reads."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping) or not all(isinstance(k, str) and k for k in raw):
+        raise AddressError(f"{source}: `sampling` maps generation settings by name (for example "
+                           f"{{temperature: 0.7}}), got {raw!r}.")
+    bad = sorted(k for k, v in raw.items() if not (v is None or isinstance(v, (bool, int, float, str))))
+    if bad:
+        raise AddressError(f"{source}: `sampling` {bad} are not scalars: a generation setting is a number, a flag or a "
+                           "name.")
+    return dict(raw)
 
 
 def _metadata(doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -1313,6 +1344,7 @@ __all__ = [
     "GRAPH_OPS",
     "GRAPHS_SCHEMA",
     "WEIGHTS_SCHEMA",
+    "SAMPLING_KEYS",
     "Stage",
     "Tokens",
     "Transform",

@@ -8,7 +8,7 @@ from venngram.errors import AddressError
 from venngram.operands import read_operand, write_operands
 from venngram.ops import check_support, OPS, OpSpec, register_op, Support
 from venngram.book import AddressBook
-from venngram.treatment import compose, Composition, Treatment
+from venngram.treatment import compose, Composition, SAMPLING_KEYS, Treatment
 
 MODEL = {"id": "Qwen/Qwen3.5-4B", "revision": "abc123"}
 
@@ -379,3 +379,22 @@ def test_a_treatment_is_refused_by_name_when_it_carries_a_header_or_names_no_set
         AddressBook.from_mapping({**base, "treatments": {"t": {**body, "stages": [add("nope", {"dose": 1.0})]}}})
     with pytest.raises(AddressError, match="`treatments` maps a treatment name"):
         AddressBook.from_mapping({**base, "treatments": []})
+
+
+def test_sampling_is_carried_for_the_consumer_that_generates():
+    doc = {**treatment_doc([add("chess", {"dose": 0.5})]), "sampling": {"temperature": 0.7, "do_sample": True,
+                                                                        "seed": 3, "acme_mode": "beam"}}
+    treatment = read_treatment(doc)
+    assert treatment.sampling == {"temperature": 0.7, "do_sample": True, "seed": 3, "acme_mode": "beam"}
+    assert treatment.to_mapping()["sampling"] == treatment.sampling and "temperature" in SAMPLING_KEYS
+    assert read_treatment(treatment_doc([add("chess", {"dose": 0.5})])).sampling == {}
+
+
+@pytest.mark.parametrize("sampling, match", [
+    ([0.7], "`sampling` maps generation settings by name"),
+    ({1: 0.7}, "`sampling` maps generation settings by name"),
+    ({"stop": ["\n"], "temperature": 0.7}, "`sampling` \\['stop'\\] are not scalars"),
+])
+def test_malformed_sampling_is_refused(sampling, match):
+    with pytest.raises(AddressError, match=match):
+        read_treatment({**treatment_doc([add("chess", {"dose": 0.5})]), "sampling": sampling})

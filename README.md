@@ -146,7 +146,10 @@ the last position" is two `sum` terms over `unembed`'s output units weighted 1 a
 registered in code or read from a published `op_specs` document); venngram validates and composes them and never
 executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
 gives $o + \mathrm{sg}(x - o)$, so the forward value is $x$ and the gradient reaches $o$, not $x$. A token scope is `all`, `last`, `prompt` (the input, before any
-generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
+generated token), `generated` (each decode step), explicit positions or a slice. A treatment's `sampling` holds the
+generation settings its result was measured under (named as Hugging Face's `generate` names them, `treatment.SAMPLING_KEYS`):
+venngram carries it and never reads it, a consumer that generates applies the keys it honours and refuses the treatment
+for one it does not, and its free-form `metadata` is read by no one. A consumer declares what it honours as
 a `Support` record, in code or as the `treatments` section of a published `support_record` document (see "Support
 records" below), and `check_support` names everything a treatment asks for beyond it. `compose` joins treatments stage by stage, refusing
 ops that do not commute unless the composition gives an order. Applying a treatment is the consumer's; treatments written in another tool's format
@@ -522,6 +525,12 @@ Published documents outlive the venngram that wrote them, so every document kind
 | weight patch | 1 | 1 | refused |
 | manifest (`venngram.yaml`) | 1 | 1 | refused in a document entry |
 | registry index header | 1 | 1 | |
+
+**A schema version is a feature level.** Each version adds one capability (an address book's 2 adds `of`, its 13
+`tables`), and a writer stamps the lowest version its content needs, as the Writes column says, never the newest. So
+an older reader still reads every document that uses none of the newer features, and the numbers can grow with the
+protocol without stranding the documents already published. `AddressBook.needed_schema(mapping)` gives the lowest
+version a book needs, for a tool that writes books; a support record's `to_mapping` already writes the lowest.
 
 **What bumps a version.** A key a reader may ignore without misreading the document (a description, an annotation)
 never does, where the kind ignores unknown keys. A key that changes what a document selects or how a row resolves
