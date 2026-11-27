@@ -15,7 +15,7 @@ Unit Tables
 
 A **unit table** holds recorded values about units, kept as a document of its own (``kind: unit_table``): one row per
 ``(layer, unit)``, typed columns that state what their values mean, and the provenance of the values. A treatment's
-value may come ``from`` one of its columns (:mod:`venngram.recipe`: ``value: {from: {table: <name>, column:
+value may come ``from`` one of its columns (:mod:`venngram.treatment`: ``value: {from: {table: <name>, column:
 <column>}}``), and an address book names the tables its treatments read (``tables:``, :mod:`venngram.book`), so a book
 is published with the values it reads and a table is checked against the book when it loads. A table says what its
 values are, not why they were chosen: a measured statistic, a published setting and a random-unit null are all tables.

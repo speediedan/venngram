@@ -10,13 +10,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 r"""
-Recipe Ops
-^^^^^^^^^^
+Treatment Ops
+^^^^^^^^^^^^^
 
-What a recipe op may be, as declared specs: venngram validates and composes ops, and never executes one (applying an op
-is the consumer's). An :class:`OpSpec` declares an op's operand kinds, its parameters, the declarations it requires (a
-``basis``), the targets it may act on, whether its value is required, whether it may override its stage's token scope,
-and how two of it compose on one target (``sum``, ``product``, ``max``, ``min``, or ``ordered``: never merged).
+What a treatment op may be, as declared specs: venngram validates and composes ops, and never executes one (applying
+an op is the consumer's). An :class:`OpSpec` declares an op's operand kinds, its parameters, the declarations it
+requires (a ``basis``), the targets it may act on, whether its value is required, whether it may override its stage's
+token scope, and how two of it compose on one target (``sum``, ``product``, ``max``, ``min``, or ``ordered``: never
+merged).
 
 The core ops (:data:`OPS`): ``replace``, ``add`` (sums), ``scale`` (multiplies), ``project`` and ``reject`` (keep or
 remove the component in a span, a ``fraction`` of it), ``patch`` (swap coordinates along a pair of directions),
@@ -27,17 +28,17 @@ with). An op's ``of`` says which target sets it may act on: values, gradients (`
 
 **Targets** are an activation (no target), the ``units`` or ``features`` a book set names at a site, or a **parameter**:
 a whole tensor (``param``) or units of it along its unit axis (``param_units``; :data:`~venngram.maps.schema.UNIT_SIDES`
-says which side, a map's ``layout`` which dimension). A parameter op lives in a recipe's ``weights`` section and is
+says which side, a map's ``layout`` which dimension). A parameter op lives in a treatment's ``weights`` section and is
 materialized into the tensor, so it has no token scope but ``all``. ``add``, ``scale`` and ``replace`` declare both
 parameter targets; ``project`` and ``reject`` declare ``param`` (for a matrix ``W`` and a direction ``u`` on its ``out``
 side, ``reject`` with fraction ``a`` gives ``(I - a u u^T) W``: the activation ``reject`` at its output, folded in);
 ``patch`` and ``clamp`` declare none. A weight ``add`` or ``replace`` may take a ``delta`` operand: a weight patch
 (:mod:`venngram.patches`). ``fraction`` may exceed 1 (over-rejection) on every target. An op whose spec declares a
-parameter target and ``grad`` in its ``of`` may also act on parameter gradients, in a recipe's ``gradients`` section,
+parameter target and ``grad`` in its ``of`` may also act on parameter gradients, in a treatment's ``gradients`` section,
 where a ``delta`` operand is refused; the parameter conformance vectors state its meaning there too, read with the
 gradient as the tensor.
 :func:`register_op` adds an op in code; :func:`read_op_specs` reads declarations published as an ``op_specs``
-document, so a recipe naming a published op validates without its publisher's code. :func:`op_cases` and
+document, so a treatment naming a published op validates without its publisher's code. :func:`op_cases` and
 :func:`check_ops` are conformance vectors for ops whose meaning is numeric, as :func:`transform_cases` and
 :func:`check_transforms` are for transforms.
 
@@ -62,16 +63,16 @@ transform                             value for a member, given ``v``
 ====================================  =============================================================================
 
 ``sign(0)`` is ``0``. ``sign_of`` and ``sign_aware_scale`` read the ``from`` table, so they apply only to a ``from``
-value (a recipe giving them a ``dose`` or ``doses`` is refused when read). A statistic is computed from the model, not
-recorded: the consumer supplies ``t`` for each member (a value per layer, or per unit, such as a layer's median
+value (a treatment giving them a ``dose`` or ``doses`` is refused when read). A statistic is computed from the model,
+not recorded: the consumer supplies ``t`` for each member (a value per layer, or per unit, such as a layer's median
 residual norm over a unit's output column norm), declares ``statistic`` in its support record, and refuses a
 statistic it cannot compute, or one that is zero for ``normalize``, by name. ``statistic`` and ``normalize`` by the
 same statistic are inverses. :func:`register_transform` adds a transform, with a stated meaning and conformance
 vectors of its own.
 
 :func:`transform_cases` returns conformance vectors (each a pipeline, its members' inputs and the expected values), and
-:func:`check_transforms` runs a consumer's evaluator against them, so two consumers that honour a recipe are tested to
-give it the same values.
+:func:`check_transforms` runs a consumer's evaluator against them, so two consumers that honour a treatment are tested
+to give it the same values.
 
 A consumer declares what it honours as a :class:`Support` record, in code or as the ``steering`` section of a
 ``support_record`` document (:mod:`venngram.support`); :func:`check_support` lists every refusal by name before anything
@@ -104,7 +105,7 @@ PATH_OP_SPECS_SCHEMA = 3
 OPERAND_KINDS = ("none", "vector", "pair", "subspace", "delta")
 #: What an op may act on at a site: the whole activation, a set's units, a latent space's features.
 ACTIVATION_TARGETS = ("activation", "units", "features")
-#: What an op in a recipe's ``weights`` section may act on: a whole tensor, or units of it along its unit axis.
+#: What an op in a treatment's ``weights`` section may act on: a whole tensor, or units of it along its unit axis.
 PARAM_TARGETS = ("param", "param_units")
 #: What a path op (a treatment's ``gradients`` section) acts on: the routes of a path set (:mod:`venngram.paths`).
 PATH_TARGETS = ("path",)
@@ -176,7 +177,7 @@ OPS: dict[str, OpSpec] = {spec.name: spec for spec in (
 #: The ops venngram defines; a document may not redeclare one.
 CORE_OPS = frozenset(OPS)
 
-#: Schema 1 op names read by :func:`venngram.recipe.migrate`.
+#: Retired op names, each refused by name with the op that replaced it.
 ALIASES = {"mul": "scale"}
 
 #: Value transforms, by name, with their parameters (what each computes: the module docstring).
@@ -249,7 +250,7 @@ def transform_cases() -> tuple[TransformCase, ...]:
 
 def register_transform(name: str, params: Mapping[str, ParamSpec], *, meaning: str,
                        cases: Sequence[Mapping[str, Any]], reads_table: bool = False, replace: bool = False) -> None:
-    """Register a value transform, so recipes may name it and consumers may declare it.
+    """Register a value transform, so treatments may name it and consumers may declare it.
 
     A transform is shared only with what it computes: ``meaning`` states it, and ``cases`` are conformance vectors in
     the ``data/transform_vectors.yaml`` form (each a pipeline using it, its members' inputs and the expected values),
@@ -441,7 +442,7 @@ def write_op_specs(specs: Sequence[OpSpec], *, name: str, description: str | Non
 
 
 def read_op_specs(doc: Any, *, source: str = "<inline>", register: bool = True) -> tuple[OpSpec, ...]:
-    """Read an ``op_specs`` document and, unless ``register`` is false, register its ops, so a recipe naming them
+    """Read an ``op_specs`` document and, unless ``register`` is false, register its ops, so a treatment naming them
     validates and is checked against support records exactly as one naming a code-registered op.
 
     .. code-block:: yaml
@@ -553,7 +554,7 @@ def check_ops(evaluate: Callable[[OpCase], Mapping[str, Sequence[float]]], *, op
 class Support:
     """What a consumer honours. ``sites`` is a set of site names, or a predicate over them; ``None`` fields mean any.
 
-    A consumer may publish its record as a ``support_record`` document (:meth:`from_mapping`), so a recipe can be
+    A consumer may publish its record as a ``support_record`` document (:meth:`from_mapping`), so a treatment can be
     checked against it without the consumer installed:
 
     .. code-block:: yaml
@@ -571,11 +572,11 @@ class Support:
 
     ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
     ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
-    A parameter target (``param``, ``param_units``: a recipe's ``weights`` section) is declared in ``targets`` of a
-    schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a recipe's
-    ``gradients`` section, on targets it declares), and ``readouts`` the reductions it computes a readout with
-    (:mod:`venngram.readouts`), in a schema 5 record; none of either by default. ``routes`` lists the path waypoint
-    kinds its route resolver places (:mod:`venngram.paths`), in a schema 8 record; none by default.
+    A parameter target (``param``, ``param_units``: a treatment's ``weights`` section) is declared in ``targets`` of a
+    schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a
+    treatment's ``gradients`` section, on targets it declares), and ``readouts`` the reductions it computes a readout
+    with (:mod:`venngram.readouts`), in a schema 5 record; none of either by default. ``routes`` lists the path
+    waypoint kinds its route resolver places (:mod:`venngram.paths`), in a schema 8 record; none by default.
     """
 
     ops: frozenset[str]
@@ -646,38 +647,39 @@ _SUPPORT_FIELDS: dict[str, tuple[str, ...] | None] = {"targets": TARGETS, "token
 _GLOB = re.compile(r"[*?\[]")
 
 
-def check_support(recipe: Any, support: Support) -> list[str]:
-    """Every way ``recipe`` (a :class:`venngram.recipe.Recipe`) asks for something ``support`` does not honour."""
+def check_support(treatment: Any, support: Support) -> list[str]:
+    """Every way ``treatment`` (a :class:`venngram.treatment.Treatment`) asks for something ``support`` does not
+    honour."""
     out: list[str] = []
-    for j, op in enumerate(getattr(recipe, "weights", ())):
+    for j, op in enumerate(getattr(treatment, "weights", ())):
         at = f"weights op {j} (`{op.op}`)"
         if op.op not in support.ops:
             out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
-        if op.target_kind(recipe.book) not in support.targets:
-            out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
-        out += _value_and_operand(op, recipe, support, at)
-    for j, op in enumerate(getattr(recipe, "gradients", ())):
+        if op.target_kind(treatment.book) not in support.targets:
+            out.append(f"{at}: target `{op.target_kind(treatment.book)}` is not supported")
+        out += _value_and_operand(op, treatment, support, at)
+    for j, op in enumerate(getattr(treatment, "gradients", ())):
         at = f"gradients op {j} (`{op.op}`)"
         if op.op not in support.gradient_ops:
             out.append(f"{at}: the op is not applied to parameter gradients (`gradient_ops`: "
                        f"{sorted(support.gradient_ops)})")
-        if op.target_kind(recipe.book) not in support.targets:
-            out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
-        if op.target_kind(recipe.book) == "path":
-            sets = recipe.book.sets()
+        if op.target_kind(treatment.book) not in support.targets:
+            out.append(f"{at}: target `{op.target_kind(treatment.book)}` is not supported")
+        if op.target_kind(treatment.book) == "path":
+            sets = treatment.book.sets()
             used = frozenset().union(*(waypoint_kinds(p) for p in paths(sets[op.target], sets)))
             if used - support.routes:
                 out.append(f"{at}: its path uses the waypoint kinds {sorted(used - support.routes)}, which this "
                            f"consumer's route resolver does not place (`routes`: {sorted(support.routes)})")
             continue
-        out += _value_and_operand(op, recipe, support, at)
-    for where, readout in [("readout", getattr(recipe, "readout", None))] + [
-            (f"stage {i} ({s.site}) readout", s.readout) for i, s in enumerate(recipe.stages)]:
+        out += _value_and_operand(op, treatment, support, at)
+    for where, readout in [("readout", getattr(treatment, "readout", None))] + [
+            (f"stage {i} ({s.site}) readout", s.readout) for i, s in enumerate(treatment.stages)]:
         for k, term in enumerate(readout.terms if readout is not None else ()):
             if term.reduce not in support.readouts:
                 out.append(f"{where} term {k}: reduction `{term.reduce}` is not computed (`readouts`: "
                            f"{sorted(support.readouts)})")
-    for i, stage in enumerate(recipe.stages):
+    for i, stage in enumerate(treatment.stages):
         where = f"stage {i} ({stage.site})"
         if not support.site_ok(stage.site):
             out.append(f"{where}: the site `{stage.site}` is not one this consumer reaches")
@@ -688,19 +690,19 @@ def check_support(recipe: Any, support: Support) -> list[str]:
             tokens = (op.tokens or stage.tokens).kind
             if op.op not in support.ops:
                 out.append(f"{at}: the op is not supported (supported: {sorted(support.ops)})")
-            if op.target_kind(recipe.book) not in support.targets:
-                out.append(f"{at}: target `{op.target_kind(recipe.book)}` is not supported")
-            of = op.target_of(recipe.book)
+            if op.target_kind(treatment.book) not in support.targets:
+                out.append(f"{at}: target `{op.target_kind(treatment.book)}` is not supported")
+            of = op.target_of(treatment.book)
             if of not in support.of:
                 out.append(f"{at}: target set `{op.target}` addresses `of: {of}`, which this consumer does not act on "
                            f"(it declares {sorted(support.of)})")
             if tokens not in support.tokens:
                 out.append(f"{at}: token scope `{tokens}` is not supported")
-            out += _value_and_operand(op, recipe, support, at)
+            out += _value_and_operand(op, treatment, support, at)
     return out
 
 
-def _value_and_operand(op: Any, recipe: Any, support: Support, at: str) -> list[str]:
+def _value_and_operand(op: Any, treatment: Any, support: Support, at: str) -> list[str]:
     out: list[str] = []
     if op.value is not None:
         if op.value.source not in support.values:
@@ -708,8 +710,8 @@ def _value_and_operand(op: Any, recipe: Any, support: Support, at: str) -> list[
         for t in op.value.transform:
             if t.name not in support.transforms:
                 out.append(f"{at}: transform `{t.name}` is not supported")
-    if op.operand is not None and support.bases is not None and recipe.operands[op.operand].kind != "delta":
-        basis = recipe.operands[op.operand].basis  # a weight patch is in the tensor's own coordinates, not a basis
+    if op.operand is not None and support.bases is not None and treatment.operands[op.operand].kind != "delta":
+        basis = treatment.operands[op.operand].basis  # a weight patch is in the tensor's own coordinates, not a basis
         if basis not in support.bases:
             out.append(f"{at}: operand `{op.operand}` is in basis `{basis}`, which is not supported")
     return out

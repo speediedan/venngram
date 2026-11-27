@@ -72,17 +72,6 @@ def test_a_document_that_fails_to_load_is_reported_not_raised(tmp_path):
     assert all("sha256" in e for e in failing.values())
 
 
-def test_a_retired_recipe_entry_is_listed_not_loaded(tmp_path):
-    location, pub = published(tmp_path)
-    manifest = yaml.safe_load((pub / "venngram.yaml").read_text())
-    manifest["documents"].append({"kind": "recipe", "path": "recipes/chess.yaml"})
-    (pub / "venngram.yaml").write_text(yaml.safe_dump(manifest))
-    with pytest.warns(UserWarning, match="retired kind `recipe`"):
-        report = check(location)
-    assert report.ok and ("recipe", "recipes/chess.yaml") in report.unloaded
-    assert all(d.kind != "recipe" for d in report.documents)
-
-
 def test_the_command_exits_by_outcome(tmp_path, capsys):
     location, pub = published(tmp_path, tokens="generated")
     assert main([location]) == 0

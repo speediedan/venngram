@@ -10,14 +10,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 r"""
-Recipes
-^^^^^^^
+Treatments
+^^^^^^^^^^
 
-A recipe is a *treatment* over an address book's sets: what is done at which sites, to which units or features, in which
-order. It is kept apart from the values and findings it reads (unit tables and graph subsets the book names). A
-treatment lives in the book it treats, by name, under its ``treatments`` section (:mod:`venngram.book`), so one
-selection carries several treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` reads one, and
-:meth:`Recipe.to_treatment` writes one. :class:`Recipe` is a treatment in memory: its book, and the body below.
+A treatment is what is done to an address book's sets: at which sites, to which units or features, in which order. It
+is kept apart from the values and findings it reads (unit tables and graph subsets the book names). A treatment lives
+in the book it treats, by name, under its ``treatments`` section (:mod:`venngram.book`), so one selection carries
+several treatments and a consumer reads one kind of document; :meth:`Treatment.from_mapping` reads one, and
+:meth:`Treatment.to_mapping` writes one. :class:`Treatment` is a treatment in memory: its book, and the body below.
 
 .. code-block:: yaml
 
@@ -36,21 +36,17 @@ selection carries several treatments and a consumer reads one kind of document; 
         sampling: {temperature: 0.7}
         metadata: {examples: [...]}      # free-form, carried and never read
 
-The standalone ``kind: recipe`` document, written before books and recipes merged (the body above with a header and a
-``book``), is retired: only ``python -m venngram.migrate`` reads it, and writes its book with the recipe as a treatment
-named by the recipe (:mod:`venngram.migrate`).
-
-**Ops are declared specs** (:mod:`venngram.ops`): this module validates a recipe against them and composes recipes; it
-never executes an op. Applying a recipe belongs to the consumer (e.g. interpretune steers, finetuning-scheduler tunes a
-unit adapter), which declares what it honours as a :class:`~venngram.ops.Support` record and checks a recipe with
-:func:`~venngram.ops.check_support` before running it. A format another tool writes is read by an adapter outside this
-module (:mod:`venngram.sources`).
+**Ops are declared specs** (:mod:`venngram.ops`): this module validates a treatment against them and composes
+treatments; it never executes an op. Applying a treatment belongs to the consumer (e.g. interpretune steers,
+finetuning-scheduler tunes a unit adapter), which declares what it honours as a :class:`~venngram.ops.Support` record
+and checks a treatment with :func:`~venngram.ops.check_support` before running it. A format another tool writes is
+read by an adapter outside this module (:mod:`venngram.sources`).
 
 **Targets**: an op acts on the whole activation (no ``target``), the units a book set names, or the features of a
 latent space a book set names (its ``space`` and ``features``; the consumer supplies the space's encoder). A unit
 target may be one address with explicit layers and ``units``, or a composition of such sets at one site with the book's
 set algebra (``@a & @b``, ``@a | @b``, ``@a - @control``), evaluated over ``(layer, unit)`` pairs; a ``layers``-only
-term in it filters by layer (``(@a & @b & layers:12) - @control``). A composed target is resolved when the recipe is
+term in it filters by layer (``(@a & @b & layers:12) - @control``). A composed target is resolved when the treatment is
 read, and refused by name if it is empty, mixes sites, composes feature sets or names units only by slice. **Values**:
 a ``dose``, a per-unit ``doses`` table, or ``from`` a column of a unit table through a ``transform`` pipeline of
 declared transforms (:data:`~venngram.ops.TRANSFORMS`); the table is one the book names
@@ -59,13 +55,14 @@ override them only if its spec allows. ``prompt`` is every position of the input
 ``generated`` is every position the consumer generates, at each decode step (a consumer that does not generate
 refuses it by name).
 
-**Weights**: a recipe's ``weights`` section (recipe schema 3) lists ops on parameters, in order, applied to the tensors
-before any stage runs and kept in them (a consumer materializes them, reversibly or for export). Each names a target set
-that addresses tensors (no ``point``, ``features`` or ``subspace``): a whole tensor is a ``param`` target, a set with
-``units`` a ``param_units`` one, along each tensor's unit axis (:meth:`venngram.maps.structure.MapStructure.unit_dim`).
-A weight op acts on every token, so its token scope is ``all``, and on the tensor's value, never ``of: grad``. An
-``add`` or ``replace`` may take a ``delta`` operand, a weight patch (``operands: {edit: {patch: edit.yaml}}``,
-:mod:`venngram.patches`). A recipe may have ``weights`` and no ``stages``.
+**Weights**: a treatment's ``weights`` section (treatment schema 3) lists ops on parameters, in order, applied to the
+tensors before any stage runs and kept in them (a consumer materializes them, reversibly or for export). Each names a
+target set that addresses tensors (no ``point``, ``features`` or ``subspace``): a whole tensor is a ``param`` target,
+a set with ``units`` a ``param_units`` one, along each tensor's unit axis
+(:meth:`venngram.maps.structure.MapStructure.unit_dim`). A weight op acts on every token, so its token scope is
+``all``, and on the tensor's value, never ``of: grad``. An ``add`` or ``replace`` may take a ``delta`` operand, a
+weight patch (``operands: {edit: {patch: edit.yaml}}``, :mod:`venngram.patches`). A treatment may have ``weights``
+and no ``stages``.
 
 .. code-block:: yaml
 
@@ -73,7 +70,7 @@ A weight op acts on every token, so its token scope is ``all``, and on the tenso
       - {op: scale, target: {set: chess_columns}, value: {dose: 0.0}}       # zero neurons' write columns
       - {op: add, target: {set: down_13}, operand: edit}                     # a low-rank patch from a document
 
-**Gradients**: a recipe's ``gradients`` section (recipe schema 4) lists ops on parameter gradients, in order, each
+**Gradients**: a treatment's ``gradients`` section (treatment schema 4) lists ops on parameter gradients, in order, each
 acting on a step's accumulated gradient of the tensors it targets and never materialized into them. Its target sets
 address tensors as a ``weights`` op's do, and say ``of: grad``; a ``param_units`` target acts along each tensor's unit
 axis. An op belongs there when its spec declares the target and ``grad`` in its ``of``: among the core ops ``scale``,
@@ -90,8 +87,8 @@ sharding, and any state it keeps, are the consumer's.
 **Readouts**: a stage op on an ``of: grad`` target acts on the gradient of a scalar, and the treatment says which with a
 ``readout`` (:mod:`venngram.readouts`): the weighted sum of terms, each a registered reduction (``sum``, ``project``
 with a vector operand, ``norm``) of the activations a book set addresses at a token scope. A stage may state its own,
-replacing the treatment's for its ops. From recipe schema 4 a stage with an ``of: grad`` op needs one of the two, and a
-readout where no stage acts on a gradient is refused; an earlier document without one leaves the scalar to the
+replacing the treatment's for its ops. From treatment schema 4 a stage with an ``of: grad`` op needs one of the two,
+and a readout where no stage acts on a gradient is refused; an earlier document without one leaves the scalar to the
 consumer. Parameter gradients (the ``gradients`` section) are the training objective's, which is the tuning tool's.
 
 .. code-block:: yaml
@@ -101,14 +98,14 @@ consumer. Parameter gradients (the ``gradients`` section) are the training objec
         - {reduce: sum, set: answer_logit, tokens: last, weight: 1.0}
         - {reduce: sum, set: foil_logit, tokens: last, weight: -1.0}
 
-**Graphs**: an op may target a graph subset the book names (``target: {graph: <name>}``, recipe schema 5,
+**Graphs**: an op may target a graph subset the book names (``target: {graph: <name>}``, treatment schema 5,
 :mod:`venngram.graphs`): it acts on the graph's feature nodes at the stage's site, each placed by its anchor, and reads
 its value ``from`` a node column, optionally as a delta from a baseline column. ``replace`` and ``add`` keep their
 meanings. ``target: {graph: <name>, outside: {set: <universe>, tokens: prompt}}`` targets everything else in a finite
 feature set of the book (a restriction, with ``replace`` and a ``dose``). Anchors fix a graph target's positions, so its
 stage gives no ``tokens`` and the op no ``tokens`` or operand; every site of the graph's feature nodes must be reached
-by a stage, and the graph must pin the recipe's model. Graph values pass only through transforms that act on each value
-alone (:data:`~venngram.graphs.GRAPH_TRANSFORMS`). A consumer declares what it honours in its support record's
+by a stage, and the graph must pin the treatment's model. Graph values pass only through transforms that act on each
+value alone (:data:`~venngram.graphs.GRAPH_TRANSFORMS`). A consumer declares what it honours in its support record's
 ``circuits.subsets`` section (:class:`venngram.support.SubsetSupport`).
 
 .. code-block:: yaml
@@ -117,20 +114,18 @@ alone (:data:`~venngram.graphs.GRAPH_TRANSFORMS`). A consumer declares what it h
       - site: mlp.out.hook_out
         ops: [{op: replace, target: {graph: reasoning}, value: {from: {graph: reasoning, column: activation}}}]
 
-**Composition** (:func:`compose`): recipes on one model revision compose stage by stage. Without an order, ops from
-different recipes at one site must commute (the same summing or multiplying op, or disjoint unit sets); otherwise the
-composition must state ``order: listed``. ``weights`` and ``gradients`` ops compose the same way, section by section
-(:func:`compose_weights`).
+**Composition** (:func:`compose`): treatments on one model revision compose stage by stage. Without an order, ops
+from different treatments at one site must commute (the same summing or multiplying op, or disjoint unit sets);
+otherwise the composition must state ``order: listed``. ``weights`` and ``gradients`` ops compose the same way,
+section by section (:func:`compose_weights`).
 
-**Versions**: a treatment is read at the recipe schema its sections need: 2, 3 when it has ``weights``, 4 when it has
-``gradients`` or a ``readout``, or 5 when an op targets a graph (the book's own schema says the same, see
-:mod:`venngram.book`). A retired recipe document at schema 1 (one ``method`` and its ``treatments``) is rewritten
-through :func:`migrate`.
+**Versions**: a treatment is read at the schema its sections need: 2, 3 when it has ``weights``, 4 when it
+has ``gradients`` or a ``readout``, or 5 when an op targets a graph (the book's own schema says the same, see
+:mod:`venngram.book`).
 
 .. warning:: This is an experimental API and may change in a future release.
 """
 import math
-import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -139,8 +134,7 @@ from typing import Any
 from venngram.address import And, Expr, Guarded, Minus, Or, Ref, references, Term, terms, to_string
 from venngram.address import Path as PathExpr
 from venngram.book import _states_readout, _uses_passes, AddressBook
-from venngram.deprecation import VenngramDeprecationWarning
-from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError, VenngramError
+from venngram.errors import AddressError, AddressUnresolvable, VenngramError
 from venngram.graphs import GRAPH_TRANSFORMS
 from venngram.operands import INLINE_LIMIT, read_operand
 from venngram.ops import ALIASES, TABLE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
@@ -149,29 +143,21 @@ from venngram.readouts import READOUTS
 from venngram.resolve import gradient_of
 from venngram.units import _sha256 as _sha256_file
 
-#: The recipe schema of a treatment without ``weights``, ``gradients``, a ``readout`` or a graph target.
-RECIPE_SCHEMA_VERSION = 2
+#: The schema of a treatment without ``weights``, ``gradients``, a ``readout`` or a graph target.
+TREATMENT_SCHEMA_VERSION = 2
 
-#: The recipe schemas this code reads (schema 1, of a retired recipe document, through :func:`migrate`).
-RECIPE_WINDOW = (1, 5)
-
-#: The first recipe schema with a ``weights`` section (a key an older reader would pass over silently).
+#: The first treatment schema with a ``weights`` section (a key an older reader would pass over silently).
 WEIGHTS_SCHEMA = 3
-#: The first recipe schema with a ``gradients`` section (ops on parameter gradients) or a ``readout`` (what a stage's
-#: gradients are taken of); an older reader would pass over either silently.
+#: The first treatment schema with a ``gradients`` section (ops on parameter gradients) or a ``readout`` (what a
+#: stage's gradients are taken of); an older reader would pass over either silently.
 GRADIENTS_SCHEMA = 4
-#: The first recipe schema whose ops may target a graph subset (``target: {graph: ...}``).
+#: The first treatment schema whose ops may target a graph subset (``target: {graph: ...}``).
 GRAPHS_SCHEMA = 5
 #: The ops a graph target admits, by target kind.
 GRAPH_OPS = {"graph_nodes": ("replace", "add"), "graph_complement": ("replace",)}
 
 #: Token scopes written as a bare string.
 _BARE_SCOPES = ("all", "last", "prompt", "generated")
-_APPLY_TO = {"all_tokens": "all", "last_token": "last", "prompt_tokens": "prompt", "generated_tokens": "generated"}
-
-
-class RecipeSchemaWarning(VenngramDeprecationWarning, DeprecationWarning):
-    """A recipe was read in an older schema and migrated; re-write it in the current one."""
 
 
 @dataclass(frozen=True)
@@ -204,7 +190,7 @@ class Operand:
             raise AddressError(f"operand `{self.name}` is not a weight patch.")
         path = Path(base_dir) / self.patch
         if self.sha256 is not None and path.is_file() and _sha256_file(path) != self.sha256.lower():
-            raise AddressError(f"operand `{self.name}`: {path} differs from the sha256 the recipe names.")
+            raise AddressError(f"operand `{self.name}`: {path} differs from the sha256 the treatment names.")
         return read_weight_patch(path)
 
     def load(self, base_dir: str | Path = ".") -> tuple[tuple[float, ...], tuple[int, ...]]:
@@ -290,9 +276,9 @@ class Op:
     value: Value | None = None
     tokens: Tokens | None = None
     weights: bool = False
-    """An op of the recipe's ``weights`` section: its target is a parameter."""
+    """An op of the treatment's ``weights`` section: its target is a parameter."""
     gradients: bool = False
-    """An op of the recipe's ``gradients`` section: its target is a parameter's gradient."""
+    """An op of the treatment's ``gradients`` section: its target is a parameter's gradient."""
     graph: str | None = None
     """The graph subset of the book the op targets (``target: {graph: ...}``)."""
     outside: str | None = None
@@ -304,8 +290,8 @@ class Op:
 
     def target_kind(self, book: AddressBook) -> str:
         """``activation`` (no target), ``units`` or ``features``, from the target set (a composed target is a unit
-        set: a recipe refuses any other composition when it is read); for a ``weights`` or ``gradients`` op, ``param``
-        or ``param_units``; for a graph target, ``graph_nodes`` or (with ``outside``) ``graph_complement``."""
+        set: a treatment refuses any other composition when it is read); for a ``weights`` or ``gradients`` op,
+        ``param`` or ``param_units``; for a graph target, ``graph_nodes`` or (with ``outside``) ``graph_complement``."""
         if self.graph is not None:
             return "graph_complement" if self.outside is not None else "graph_nodes"
         if self.gradients and self.target is not None and is_path(book.sets()[self.target], book.sets()):
@@ -328,16 +314,16 @@ class Op:
         term = book.sets()[self.target]
         if isinstance(term, Term):
             return term.of or "value"
-        return _UnitSets(book.sets(), self.target, "<recipe>").resolve()[1]
+        return _UnitSets(book.sets(), self.target, "<treatment>").resolve()[1]
 
-    def unit_members(self, book: AddressBook, source: str = "<recipe>") -> list[tuple[int, int]]:
+    def unit_members(self, book: AddressBook, source: str = "<treatment>") -> list[tuple[int, int]]:
         """The ``(layer, unit)`` pairs a unit target names, in order of first appearance, whatever the op's value is: a
         ``doses`` table may dose only some of them, and a consumer looks up a ``from`` column's value for each."""
         if self.target is None:
             raise AddressError(f"{source}: `{self.op}` has no unit members (it needs a unit set target).")
         return list(dict.fromkeys(_units(book.sets(), self.target, source)))
 
-    def unit_doses(self, book: AddressBook, source: str = "<recipe>") -> dict[tuple[int, int], float]:
+    def unit_doses(self, book: AddressBook, source: str = "<treatment>") -> dict[tuple[int, int], float]:
         """``(layer, unit) -> dose`` for a unit-targeted op whose value is a ``dose`` or ``doses``."""
         if self.target is None or self.value is None or self.value.source not in ("dose", "doses"):
             raise AddressError(f"{source}: `{self.op}` has no unit doses (it needs a unit set target and a dose).")
@@ -419,8 +405,8 @@ class Stage:
 
 
 @dataclass(frozen=True)
-class Recipe:
-    """A treatment over its book (see the module docstring). A book's loader reads one with :meth:`treatment`."""
+class Treatment:
+    """A treatment over its book (see the module docstring). A book's loader reads one with :meth:`from_mapping`."""
 
     name: str
     model_id: str
@@ -434,8 +420,6 @@ class Recipe:
     """The ``gradients`` section: ops on parameter gradients, in order, applied to each step's accumulated gradient."""
     readout: Readout | None = None
     """What its stages' ``of: grad`` ops act on the gradients of, unless a stage states its own."""
-    book_ref: Any = None
-    """What the document says for ``book`` (a path, or the inline mapping), kept so it round-trips."""
     revision_source: str = "pinned"
     sampling: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -444,94 +428,18 @@ class Recipe:
     base_dir: str | None = None
 
     @classmethod
-    def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>",
-                     base_dir: str | Path | None = None) -> "Recipe":
-        """Read a recipe body with its header (``schema_version``, ``kind``, ``name``) and its ``book`` (an
-        :class:`~venngram.book.AddressBook`, a path relative to ``base_dir``, or a book mapping), refusing a malformed
-        one by name. :meth:`treatment` reads a book's treatment through it, and :mod:`venngram.migrate` a retired
-        recipe document (schema 1 through :func:`migrate`, with a deprecation warning).
+    def from_mapping(cls, body: Any, book: AddressBook, *, name: str | None = None, source: str = "<inline>",
+                     base_dir: str | Path | None = None) -> "Treatment":
+        """Read one entry of a book's ``treatments`` section: a treatment's body (``model``, ``operands``,
+        ``stages``, ``weights``, ``gradients``, ``readout``, ``sampling``, ``metadata``) over ``book``'s sets, refusing
+        a malformed one by name. ``name`` is its key in the section (``source`` when not given), and operand files
+        resolve against ``base_dir``. It is read at the treatment schema its sections need (see the module docstring).
 
         Raises:
-            AddressError: If a key is missing or malformed, an op is unknown or misused (an operand of the wrong kind, a
-                missing basis, an unknown parameter, a target it cannot act on, a missing or forbidden value), the book
-                cannot load or pins another revision, or a target names a set the book lacks.
-        """
-        version = _check_header(doc, source)
-        if version == 1:
-            warnings.warn(f"{source}: recipe schema 1 is read through `venngram.recipe.migrate`; re-write it in "
-                          f"schema {RECIPE_SCHEMA_VERSION}.", RecipeSchemaWarning, stacklevel=2)
-            doc = migrate(doc, source=source)
-        model = doc.get("model")
-        if not isinstance(model, Mapping) or not model.get("id") or not model.get("revision"):
-            raise AddressError(f"{source}: `model` is {{id, revision}}: a recipe's units mean something in one "
-                               "revision only.")
-        raw_book = doc.get("book")
-        if isinstance(raw_book, AddressBook):  # a treatment written in the book it treats
-            book, raw_book = raw_book, None
-        elif isinstance(raw_book, str):
-            book = AddressBook.from_file(Path(base_dir or ".") / raw_book)
-        elif isinstance(raw_book, Mapping):
-            book = AddressBook.from_mapping(raw_book, source=f"{source}: book", base_dir=base_dir, inline=True)
-        else:
-            raise AddressError(f"{source}: `book` is a path to an address book or the book inline.")
-        pinned = [m for m in (book.applies_to.get("models") or []) if isinstance(m, Mapping)]
-        if pinned and not any(m.get("id") == model["id"] and m.get("revision") == model["revision"] for m in pinned):
-            raise AddressError(f"{source}: the book pins {[(m.get('id'), m.get('revision')) for m in pinned]}, not the "
-                               f"recipe's {(model['id'], model['revision'])}.")
-        operands = {name: _operand(name, raw, source, base_dir) for name, raw in (doc.get("operands") or {}).items()}
-        raw_weights = doc.get("weights")
-        if raw_weights is not None:
-            if version < WEIGHTS_SCHEMA:
-                raise AddressError(f"{source}: `weights` needs recipe schema {WEIGHTS_SCHEMA}, not {version}: an older "
-                                   "venngram would pass over it silently.")
-            if not isinstance(raw_weights, list) or not raw_weights:
-                raise AddressError(f"{source}: `weights` lists at least one op on a parameter.")
-        weights = tuple(_op(o, f"{source}: weights op {j}", book, operands, weights=True)
-                        for j, o in enumerate(raw_weights or ()))
-        raw_gradients = doc.get("gradients")
-        if raw_gradients is not None:
-            if version < GRADIENTS_SCHEMA:
-                raise AddressError(f"{source}: `gradients` needs recipe schema {GRADIENTS_SCHEMA}, not {version}: an "
-                                   "older venngram would pass over it silently.")
-            if not isinstance(raw_gradients, list) or not raw_gradients:
-                raise AddressError(f"{source}: `gradients` lists at least one op on a parameter's gradient.")
-        gradients = tuple(_op(o, f"{source}: gradients op {j}", book, operands, gradients=True)
-                          for j, o in enumerate(raw_gradients or ()))
-        raw_stages = doc.get("stages")
-        if raw_stages is None and (weights or gradients):
-            raw_stages = []
-        if not isinstance(raw_stages, list) or not (raw_stages or weights or gradients):
-            raise AddressError(f"{source}: `stages` lists at least one {{site, ops}} (or the recipe has `weights` or "
-                               "`gradients`).")
-        stages = tuple(_stage(raw, i, book, operands, source, version) for i, raw in enumerate(raw_stages))
-        if any(o.graph is not None for st in stages for o in st.ops):
-            if version < GRAPHS_SCHEMA:
-                raise AddressError(f"{source}: a graph target needs recipe schema {GRAPHS_SCHEMA}, not {version}: an "
-                                   "older venngram would refuse it by name rather than apply it.")
-            _check_graphs(stages, model, book, source)
-        readout = None
-        if doc.get("readout") is not None:
-            if version < GRADIENTS_SCHEMA:
-                raise AddressError(f"{source}: `readout` needs recipe schema {GRADIENTS_SCHEMA}, not {version}: an "
-                                   "older venngram would pass over it silently.")
-            readout = _readout(doc["readout"], f"{source}: readout", book, operands)
-        _check_readouts(stages, readout, book, source, version)
-        _check_tables(stages, weights, gradients, book, source)
-        return cls(name=str(doc.get("name") or source), model_id=model["id"], revision=model["revision"], book=book,
-                   stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
-                   book_ref=raw_book,
-                   revision_source=model.get("revision_source", "pinned"), sampling=dict(doc.get("sampling") or {}),
-                   metadata=_metadata(doc), source=source,
-                   base_dir=str(base_dir) if base_dir is not None else None)
-
-    @classmethod
-    def treatment(cls, body: Any, book: AddressBook, *, name: str, source: str = "<inline>",
-                  base_dir: str | Path | None = None) -> "Recipe":
-        """Read one entry of a book's ``treatments`` section: a recipe's body (``model``, ``operands``, ``stages``,
-        ``sampling``, ``metadata``) over ``book``'s sets.
-
-        Raises:
-            AddressError: As :meth:`from_mapping`, or if the body carries a recipe header or its own ``book``.
+            AddressError: If the body is not a mapping or carries a header (``schema_version``, ``kind``, ``name``) or
+                its own ``book``, a key is missing or malformed, an op is unknown or misused (an operand of the wrong
+                kind, a missing basis, an unknown parameter, a target it cannot act on, a missing or forbidden value),
+                the book pins another revision, or a target names a set the book lacks.
         """
         if not isinstance(body, Mapping):
             raise AddressError(f"{source}: a treatment is a mapping (model, stages, ...), got {type(body).__name__}.")
@@ -540,28 +448,57 @@ class Recipe:
             raise AddressError(f"{source}: a treatment is written in the book it treats, so it has no {header}.")
         version = _schema(weights="weights" in body, gradients="gradients" in body, readout=_states_readout(body),
                           graphs=_uses_graphs(body))
-        return cls.from_mapping({"schema_version": version, "kind": "recipe", "name": name, **body, "book": book},
-                                source=source, base_dir=base_dir)
+        model = body.get("model")
+        if not isinstance(model, Mapping) or not model.get("id") or not model.get("revision"):
+            raise AddressError(f"{source}: `model` is {{id, revision}}: a treatment's units mean something in one "
+                               "revision only.")
+        pinned = [m for m in (book.applies_to.get("models") or []) if isinstance(m, Mapping)]
+        if pinned and not any(m.get("id") == model["id"] and m.get("revision") == model["revision"] for m in pinned):
+            raise AddressError(f"{source}: the book pins {[(m.get('id'), m.get('revision')) for m in pinned]}, not the "
+                               f"treatment's {(model['id'], model['revision'])}.")
+        operands = {k: _operand(k, raw, source, base_dir) for k, raw in (body.get("operands") or {}).items()}
+        raw_weights = body.get("weights")
+        if raw_weights is not None and (not isinstance(raw_weights, list) or not raw_weights):
+            raise AddressError(f"{source}: `weights` lists at least one op on a parameter.")
+        weights = tuple(_op(o, f"{source}: weights op {j}", book, operands, weights=True)
+                        for j, o in enumerate(raw_weights or ()))
+        raw_gradients = body.get("gradients")
+        if raw_gradients is not None and (not isinstance(raw_gradients, list) or not raw_gradients):
+            raise AddressError(f"{source}: `gradients` lists at least one op on a parameter's gradient.")
+        gradients = tuple(_op(o, f"{source}: gradients op {j}", book, operands, gradients=True)
+                          for j, o in enumerate(raw_gradients or ()))
+        raw_stages = body.get("stages")
+        if raw_stages is None and (weights or gradients):
+            raw_stages = []
+        if not isinstance(raw_stages, list) or not (raw_stages or weights or gradients):
+            raise AddressError(f"{source}: `stages` lists at least one {{site, ops}} (or the treatment has `weights` "
+                               "or `gradients`).")
+        stages = tuple(_stage(raw, i, book, operands, source) for i, raw in enumerate(raw_stages))
+        if any(o.graph is not None for st in stages for o in st.ops):
+            _check_graphs(stages, model, book, source)
+        readout = None
+        if body.get("readout") is not None:
+            readout = _readout(body["readout"], f"{source}: readout", book, operands)
+        _check_readouts(stages, readout, book, source, version)
+        _check_tables(stages, weights, gradients, book, source)
+        return cls(name=str(name or source), model_id=model["id"], revision=model["revision"], book=book,
+                   stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
+                   revision_source=model.get("revision_source", "pinned"), sampling=dict(body.get("sampling") or {}),
+                   metadata=_metadata(body), source=source,
+                   base_dir=str(base_dir) if base_dir is not None else None)
 
-    def to_treatment(self) -> dict[str, Any]:
-        """This recipe as an entry of its book's ``treatments`` section."""
-        doc = self.to_mapping()
-        for key in ("schema_version", "kind", "name", "book"):
-            doc.pop(key)
-        return doc
+    @property
+    def schema_version(self) -> int:
+        """The treatment schema its sections need (see the module docstring); a book carrying it is at least that."""
+        return _schema(weights=bool(self.weights), gradients=bool(self.gradients),
+                       readout=self.readout is not None or any(s.readout for s in self.stages),
+                       graphs=any(o.graph is not None for s in self.stages for o in s.ops))
 
     def to_mapping(self) -> dict[str, Any]:
-        """The treatment body plus a header (``schema_version``, ``kind: recipe``, ``name``) and the ``book`` it was
-        read with; :meth:`to_treatment` drops the header and the book. The schema is the one its sections need (see
-        the module docstring)."""
+        """This treatment as an entry of its book's ``treatments`` section (its body, without the name it is listed
+        under)."""
         doc: dict[str, Any] = {
-            "schema_version": _schema(weights=bool(self.weights), gradients=bool(self.gradients),
-                                      readout=self.readout is not None or any(s.readout for s in self.stages),
-                                      graphs=any(o.graph is not None for s in self.stages for o in s.ops)),
-            "kind": "recipe",
-            "name": self.name,
-            "model": {"id": self.model_id, "revision": self.revision, "revision_source": self.revision_source},
-            "book": self.book_ref}
+            "model": {"id": self.model_id, "revision": self.revision, "revision_source": self.revision_source}}
         if self.operands:
             doc["operands"] = {k: o.to_mapping() for k, o in self.operands.items()}
         if self.weights:
@@ -621,59 +558,10 @@ def _check_tables(stages: Sequence[Stage], weights: Sequence[Op], gradients: Seq
 
 
 def _schema(*, weights: bool, gradients: bool, readout: bool = False, graphs: bool = False) -> int:
-    """The recipe schema a document's sections need."""
+    """The treatment schema a body's sections need."""
     if graphs:
         return GRAPHS_SCHEMA
-    return GRADIENTS_SCHEMA if gradients or readout else WEIGHTS_SCHEMA if weights else RECIPE_SCHEMA_VERSION
-
-
-def _check_header(doc: Any, source: str) -> int:
-    if not isinstance(doc, Mapping):
-        raise AddressError(f"{source}: a recipe is a mapping, got {type(doc).__name__}.")
-    version = doc.get("schema_version")
-    lo, hi = RECIPE_WINDOW
-    if isinstance(version, int) and not isinstance(version, bool) and version > hi:
-        raise NewerAddressSchemaError(f"{source}: recipe schema {version} is newer than this venngram reads "
-                                      f"({lo}..{hi}); upgrade venngram.", kind="recipe", version=version, newest=hi)
-    if not isinstance(version, int) or not lo <= version <= hi:
-        raise AddressError(f"{source}: recipe `schema_version` must be in {lo}..{hi} for this venngram, got "
-                           f"{version!r}.")
-    if doc.get("kind", "recipe") != "recipe":
-        raise AddressError(f"{source}: `kind` is `recipe`, got {doc.get('kind')!r}.")
-    return version
-
-
-def migrate(doc: Mapping[str, Any], *, source: str = "<inline>") -> dict[str, Any]:
-    """A schema 1 recipe rewritten as schema 2: one stage at ``method.site``, one op per treatment.
-
-    ``mul`` becomes ``scale``; ``apply_to`` becomes the stage's ``tokens``; a ``normalization`` other than ``raw``
-    becomes a ``statistic`` transform on each value, naming it.
-
-    Raises:
-        AddressError: If ``method`` is malformed or ``apply_to`` names a scope schema 2 has no spelling for.
-    """
-    method = doc.get("method")
-    if not isinstance(method, Mapping) or not method.get("op") or not method.get("site"):
-        raise AddressError(f"{source}: a schema 1 `method` names at least an `op` and a `site`.")
-    unknown = set(method) - {"op", "site", "normalization", "apply_to"}
-    if unknown:
-        raise AddressError(f"{source}: unknown `method` keys {sorted(unknown)}.")
-    apply_to = method.get("apply_to", "all_tokens")
-    if apply_to not in _APPLY_TO:
-        raise AddressError(f"{source}: `apply_to: {apply_to}` has no schema 2 token scope; known: {sorted(_APPLY_TO)}.")
-    normalization = method.get("normalization", "raw")
-    ops = []
-    for t in doc.get("treatments") or ():
-        if not isinstance(t, Mapping):
-            raise AddressError(f"{source}: a treatment is {{set, dose}} or {{set, doses}}, got {t!r}.")
-        value = {k: t[k] for k in ("dose", "doses") if k in t}
-        if normalization != "raw":
-            value["transform"] = [{"statistic": {"name": normalization}}]
-        ops.append({"op": ALIASES.get(method["op"], method["op"]), "target": {"set": t.get("set")}, "value": value})
-    out = {k: v for k, v in doc.items() if k not in ("method", "treatments")}
-    out["schema_version"] = RECIPE_SCHEMA_VERSION
-    out["stages"] = [{"site": method["site"], "tokens": _APPLY_TO[apply_to], "ops": ops}]
-    return out
+    return GRADIENTS_SCHEMA if gradients or readout else WEIGHTS_SCHEMA if weights else TREATMENT_SCHEMA_VERSION
 
 
 def _number(value: Any) -> bool:
@@ -831,8 +719,8 @@ def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand]
             return _path_op(raw, name, spec, where, t["set"], book)
         axes = [to_string(x) for x in _leaf_terms(sets, t["set"]) if x.axis is not None]
         if axes:
-            raise AddressError(f"{where}: target set `{t['set']}` names an `axis` ({axes[0]}); a recipe's unit targets "
-                               "run along their component's unit axis, and no recipe reads `axis` yet.")
+            raise AddressError(f"{where}: target set `{t['set']}` names an `axis` ({axes[0]}); a treatment's unit "
+                               "targets run along their component's unit axis, and no treatment reads `axis` yet.")
         if section is not None:
             of = _check_param_set(sets, t["set"], where, section)
         elif isinstance(term, Term):
@@ -972,7 +860,7 @@ def _check_graphs(stages: Sequence[Stage], model: Mapping[str, Any], book: Addre
             graph = book.graphs[op.graph]
             if (graph.model.get("id"), str(graph.model.get("revision"))) != (model["id"], str(model["revision"])):
                 raise AddressError(f"{source}: graph `{op.graph}` pins {graph.model.get('id')}@"
-                                   f"{graph.model.get('revision')}, not the recipe's "
+                                   f"{graph.model.get('revision')}, not the treatment's "
                                    f"{model['id']}@{model['revision']}.")
             if stage.site not in graph.sites():
                 raise AddressError(f"{source}: stage {i} ({stage.site}) targets graph `{op.graph}`, which has no "
@@ -986,7 +874,7 @@ def _check_graphs(stages: Sequence[Stage], model: Mapping[str, Any], book: Addre
 
 
 def _uses_graphs(body: Any) -> bool:
-    """Whether a recipe or treatment mapping has an op targeting a graph."""
+    """Whether a treatment mapping has an op targeting a graph."""
     stages = body.get("stages") if isinstance(body, Mapping) else None
     return isinstance(stages, list) and any(
         isinstance(st, Mapping) and isinstance(st.get("ops"), list)
@@ -1039,12 +927,11 @@ def _check_param_set(sets: Mapping[str, Expr], name: str, where: str, section: s
         raise AddressError(f"{where}: target set `{name}` addresses `of: {stated or 'value'}`; a `gradients` op acts "
                            "on a tensor's gradient, so its set says `of: grad`.")
     if _names_units(sets, name) and not isinstance(sets[name], Term):
-        _UnitSets(sets, name, where).resolve()  # a composed unit set resolves when the recipe is read, as in a stage
+        _UnitSets(sets, name, where).resolve()  # a composed unit set resolves when the treatment is read, as in a stage
     return of
 
 
-def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand], source: str,
-           version: int = RECIPE_SCHEMA_VERSION) -> Stage:
+def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand], source: str) -> Stage:
     where = f"{source}: stage {i}"
     if not isinstance(raw, Mapping) or not isinstance(raw.get("site"), str) or not isinstance(raw.get("ops"), list) \
             or not raw["ops"]:
@@ -1058,8 +945,6 @@ def _stage(raw: Any, i: int, book: AddressBook, operands: Mapping[str, Operand],
                            "nodes, and a token scope could drop some silently.")
     readout = None
     if raw.get("readout") is not None:
-        if version < GRADIENTS_SCHEMA:
-            raise AddressError(f"{where}: `readout` needs recipe schema {GRADIENTS_SCHEMA}, not {version}.")
         readout = _readout(raw["readout"], f"{where} readout", book, operands)
     return Stage(raw["site"], ops, _tokens(raw.get("tokens"), where), readout)
 
@@ -1113,7 +998,8 @@ def _readout(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Ope
 def _check_readouts(stages: Sequence[Stage], readout: Readout | None, book: AddressBook, source: str,
                     version: int) -> None:
     """A treatment's readout, or a stage's, is stated exactly where a stage acts on gradients: refused where no stage
-    (or not that stage) has an ``of: grad`` op, and required (from recipe schema 4) where one has and none applies."""
+    (or not that stage) has an ``of: grad`` op, and required (from treatment schema 4) where one has and none
+    applies."""
     grads = [any(o.target_of(book) == "grad" for o in s.ops) for s in stages]
     for i, (stage, has) in enumerate(zip(stages, grads)):
         if stage.readout is not None and not has:
@@ -1149,7 +1035,7 @@ def _term_units(expr: Term, name: str, source: str) -> list[tuple[int, int]]:
     for layer in layers:
         idx = (dict(units.per_layer)[layer] if units.per_layer is not None else units.flat).indices  # type: ignore
         if idx is None:
-            raise AddressError(f"{source}: set `{name}` names a slice of units at layer {layer}; a recipe needs "
+            raise AddressError(f"{source}: set `{name}` names a slice of units at layer {layer}; a treatment needs "
                                "explicit units.")
         out += [(layer, u) for u in idx]
     return out
@@ -1170,9 +1056,9 @@ def _of_only(expr: Expr) -> bool:
 class _UnitSets:
     """The ``(layer, unit)`` pairs a book set names when it composes unit sets with the set algebra.
 
-    This is the recipe's counterpart of the tensor resolution in :mod:`venngram.resolve`: ``&`` intersects, ``|``
+    This is the treatment's counterpart of the tensor resolution in :mod:`venngram.resolve`: ``&`` intersects, ``|``
     unites and ``-`` subtracts, over pairs rather than tensor names. Every unit address it reaches must be at one site
-    (the same fields besides ``layers``, ``units`` and ``of``), since a recipe's stage gives the site; ``of`` is read
+    (the same fields besides ``layers``, ``units`` and ``of``), since a treatment's stage gives the site; ``of`` is read
     as :func:`~venngram.resolve.gradient_of` reads it.
     """
 
@@ -1230,7 +1116,7 @@ class _UnitSets:
         items = tuple(i for i in expr.items if not (isinstance(expr, And) and _of_only(i)))
         filters = [_layer_filter(i) for i in items]
         if isinstance(expr, Or) and any(f is not None for f in filters):
-            raise self.refuse("unites a `layers`-only term, which names every unit of its layers; a recipe needs "
+            raise self.refuse("unites a `layers`-only term, which names every unit of its layers; a treatment needs "
                               "explicit units")
         results = [self.run(i) for i, f in zip(items, filters) if f is None]
         if not results:
@@ -1244,7 +1130,7 @@ class _UnitSets:
     def term(self, t: Term) -> list[tuple[int, int]]:
         if t.features is not None:
             raise self.refuse(f"composes the feature set `{to_string(t)}`; a feature target is one address with "
-                              "`features`, and feature sets do not compose in a recipe")
+                              "`features`, and feature sets do not compose in a treatment")
         if t.layers is not None and t.layers.indices is None and set(t.set_fields()) == {"layers"}:
             raise self.refuse(f"filters by `{to_string(t)}`, which depends on the model's depth; name the layers "
                               "explicitly")
@@ -1267,10 +1153,10 @@ def _units(sets: Mapping[str, Expr], name: str, source: str) -> list[tuple[int, 
 
 @dataclass(frozen=True)
 class BoundOp:
-    """An op with the recipe it came from (its sets and operands are that recipe's)."""
+    """An op with the treatment it came from (its sets and operands are that treatment's)."""
 
     op: Op
-    recipe: Recipe
+    treatment: Treatment
 
 
 @dataclass(frozen=True)
@@ -1290,7 +1176,7 @@ class ComposedStage:
         for b in self.ops:
             if b.op.op == op and b.op.target is not None and b.op.value is not None \
                     and b.op.value.source in ("dose", "doses"):
-                for unit, dose in b.op.unit_doses(b.recipe.book, b.recipe.source).items():
+                for unit, dose in b.op.unit_doses(b.treatment.book, b.treatment.source).items():
                     out[unit] = spec.combine(out[unit], dose) if unit in out else dose
         return out
 
@@ -1300,34 +1186,34 @@ def _commute(a: BoundOp, b: BoundOp) -> bool:
         return True
     if a.op.target is not None and b.op.target is not None and a.op.value is not None and b.op.value is not None:
         try:
-            ua = set(_units(a.recipe.book.sets(), a.op.target, a.recipe.source))
-            ub = set(_units(b.recipe.book.sets(), b.op.target, b.recipe.source))
+            ua = set(_units(a.treatment.book.sets(), a.op.target, a.treatment.source))
+            ub = set(_units(b.treatment.book.sets(), b.op.target, b.treatment.source))
         except AddressError:
             return False
         return not ua & ub
     return False
 
 
-def compose(recipes: Sequence[Recipe], *, ordered: bool = False) -> list[ComposedStage]:
-    """The stages several recipes on one model revision amount to.
+def compose(treatments: Sequence[Treatment], *, ordered: bool = False) -> list[ComposedStage]:
+    """The stages several treatments on one model revision amount to.
 
-    Stages at the same site and token scope are joined, in recipe order. Without ``ordered``, ops from different
-    recipes at one site must commute: the same summing or multiplying op (doses then combine per unit, see
+    Stages at the same site and token scope are joined, in treatment order. Without ``ordered``, ops from different
+    treatments at one site must commute: the same summing or multiplying op (doses then combine per unit, see
     :meth:`ComposedStage.unit_doses`), or ops on disjoint unit sets.
 
     Raises:
-        AddressError: If the recipes pin different models or revisions, or two ops at one site do not commute and the
-            composition gives no order.
+        AddressError: If the treatments pin different models or revisions, or two ops at one site do not commute and
+            the composition gives no order.
     """
-    if not recipes:
+    if not treatments:
         return []
-    first = recipes[0]
-    for r in recipes[1:]:
+    first = treatments[0]
+    for r in treatments[1:]:
         if (r.model_id, r.revision) != (first.model_id, first.revision):
             raise AddressError(f"{r.source}: composes {r.model_id}@{r.revision} with {first.model_id}@"
                                f"{first.revision}; a composition is over one revision.")
     out: list[ComposedStage] = []
-    for r in recipes:
+    for r in treatments:
         for s in r.stages:
             bound = tuple(BoundOp(o, r) for o in s.ops)
             match = next((i for i, c in enumerate(out) if (c.site, c.tokens) == (s.site, s.tokens)), None)
@@ -1341,57 +1227,57 @@ def compose(recipes: Sequence[Recipe], *, ordered: bool = False) -> list[Compose
                 out.append(ComposedStage(s.site, s.tokens, bound))
                 continue
             for b in bound:
-                clash = next((a for a in out[match].ops if a.recipe is not r and not _commute(a, b)), None)
+                clash = next((a for a in out[match].ops if a.treatment is not r and not _commute(a, b)), None)
                 if clash is not None:
                     raise AddressError(f"{r.source}: `{b.op.op}` at {s.site} does not commute with `{clash.op.op}` "
-                                       f"from {clash.recipe.source}; compose with an order.")
+                                       f"from {clash.treatment.source}; compose with an order.")
             out[match] = ComposedStage(s.site, s.tokens, out[match].ops + bound)
     return out
 
 
-def compose_weights(recipes: Sequence[Recipe], *, ordered: bool = False,
+def compose_weights(treatments: Sequence[Treatment], *, ordered: bool = False,
                     section: str = "weights") -> tuple[BoundOp, ...]:
-    """The ``weights`` ops (or, with ``section="gradients"``, the ``gradients`` ops) several recipes on one model
-    revision amount to, in recipe order.
+    """The ``weights`` ops (or, with ``section="gradients"``, the ``gradients`` ops) several treatments on one model
+    revision amount to, in treatment order.
 
-    Without ``ordered``, ops from different recipes must commute as stage ops do: the same summing or multiplying op
+    Without ``ordered``, ops from different treatments must commute as stage ops do: the same summing or multiplying op
     (additive deltas on one tensor sum), or ops on disjoint units.
 
     Raises:
-        AddressError: If the recipes pin different revisions, or two ops do not commute and no order is given.
+        AddressError: If the treatments pin different revisions, or two ops do not commute and no order is given.
     """
-    compose(recipes, ordered=True)  # the revision check; stages are composed by `compose` itself
+    compose(treatments, ordered=True)  # the revision check; stages are composed by `compose` itself
     out: list[BoundOp] = []
-    for r in recipes:
+    for r in treatments:
         for o in getattr(r, section):
             b = BoundOp(o, r)
             if not ordered:
-                clash = next((a for a in out if a.recipe is not r and not _commute(a, b)), None)
+                clash = next((a for a in out if a.treatment is not r and not _commute(a, b)), None)
                 if clash is not None:
                     raise AddressError(f"{r.source}: {section} op `{o.op}` does not commute with `{clash.op.op}` from "
-                                       f"{clash.recipe.source}; compose with an order.")
+                                       f"{clash.treatment.source}; compose with an order.")
             out.append(b)
     return tuple(out)
 
 
 @dataclass(frozen=True)
 class Composition:
-    """Several recipes applied together, in order when ``ordered``."""
+    """Several treatments applied together, in order when ``ordered``."""
 
-    recipes: tuple[Recipe, ...]
+    treatments: tuple[Treatment, ...]
     ordered: bool = False
 
     def stages(self) -> list[ComposedStage]:
         """The stages to apply, in order (see :func:`compose`)."""
-        return compose(self.recipes, ordered=self.ordered)
+        return compose(self.treatments, ordered=self.ordered)
 
     def weights(self) -> tuple[BoundOp, ...]:
         """The weight ops to apply before any stage, in order (see :func:`compose_weights`)."""
-        return compose_weights(self.recipes, ordered=self.ordered)
+        return compose_weights(self.treatments, ordered=self.ordered)
 
     def gradients(self) -> tuple[BoundOp, ...]:
         """The ops to apply to parameter gradients, in order (see :func:`compose_weights`)."""
-        return compose_weights(self.recipes, ordered=self.ordered, section="gradients")
+        return compose_weights(self.treatments, ordered=self.ordered, section="gradients")
 
 
 __all__ = [
@@ -1400,15 +1286,10 @@ __all__ = [
     "compose_weights",
     "ComposedStage",
     "Composition",
-    "migrate",
     "Op",
     "Operand",
-    "Recipe",
-    "RECIPE_SCHEMA_VERSION",
-    "RECIPE_WINDOW",
     "Readout",
     "ReadoutTerm",
-    "RecipeSchemaWarning",
     "GRADIENTS_SCHEMA",
     "GRAPH_OPS",
     "GRAPHS_SCHEMA",
@@ -1416,5 +1297,7 @@ __all__ = [
     "Stage",
     "Tokens",
     "Transform",
+    "Treatment",
+    "TREATMENT_SCHEMA_VERSION",
     "Value",
 ]

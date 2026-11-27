@@ -17,7 +17,7 @@ cases:
     op: replace_with_error
     inputs: {x: [0.5, 2.0], o: [0.5, 2.0], g: [3.0, -1.0]}
     expect: {value: [0.5, 2.0], grad_o: [3.0, -1.0], grad_x: [0.0, 0.0]}
-  # Parameter forms (a recipe's `weights` section). A tensor `w` is row-major in its stored `shape`; `dim` is the
+  # Parameter forms (a treatment's `weights` section). A tensor `w` is row-major in its stored `shape`; `dim` is the
   # dimension its units run along (venngram.maps.structure.MapStructure.unit_dim), so a case holds for any layout.
   # Where a weight edit has an exact activation counterpart, at token scope `all`, a case expects both forms of the
   # output `y` (`y_weight` from the edited weight, `y_activation` from the activation op on the unedited one).

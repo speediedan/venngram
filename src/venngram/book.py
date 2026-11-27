@@ -28,9 +28,9 @@ composable (books import books, by namespace) and versioned.
       top:  {role: adapter, layers: "-4:"}
       rest: {role: adapter, exclude: "@top"}
 
-**Treatments** are optional: what is done to the book's sets for one model, by name, each the body of a recipe
-(:mod:`venngram.recipe`: ``model``, ``operands``, ``stages``, ``sampling``, ``metadata``) whose targets name this book's
-sets, so a selection and what is done to it travel together and a consumer reads one kind of document:
+**Treatments** are optional: what is done to the book's sets for one model, by name, each a treatment's body
+(:mod:`venngram.treatment`: ``model``, ``operands``, ``stages``, ``sampling``, ``metadata``) whose targets name this
+book's sets, so a selection and what is done to it travel together and a consumer reads one kind of document:
 
 .. code-block:: yaml
 
@@ -62,9 +62,6 @@ the book needs, which an older venngram cannot fetch, so it refuses the book as 
     tables:
       nf_anime: {file: tables/nf_anime.yaml, sha256: 9c1e...}
       audit_cards: {model: {...}, source: {...}, columns: {dose: {description: ...}}, rows: [...]}
-
-A standalone ``kind: recipe`` document, written before books and recipes merged, is retired:
-``python -m venngram.migrate`` rewrites one as its book, carrying the recipe as a treatment (:mod:`venngram.migrate`).
 
 **Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
@@ -234,7 +231,8 @@ class AddressBook:
     description: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
     treatments: Mapping[str, Any] = field(default_factory=dict)
-    """Treatments by name (each a :class:`venngram.recipe.Recipe` over this book), from the ``treatments`` section."""
+    """Treatments by name (each a :class:`venngram.treatment.Treatment` over this book), from the ``treatments``
+    section."""
     graphs: Mapping[str, Any] = field(default_factory=dict)
     """Graph subsets by name (each a :class:`venngram.graphs.GraphSubset`), from the ``graphs`` section."""
     tables: Mapping[str, Any] = field(default_factory=dict)
@@ -753,15 +751,16 @@ def _tables(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any
 
 
 def _treatments(raw: Any, book: AddressBook, source: str, base_dir: str | Path | None) -> dict[str, Any]:
-    from venngram.recipe import Recipe
+    from venngram.treatment import Treatment
 
     if not isinstance(raw, Mapping) or not raw:
-        raise AddressError(f"{source}: `treatments` maps a treatment name to its recipe body (model, stages, ...).")
+        raise AddressError(f"{source}: `treatments` maps a treatment name to its body (model, stages, ...).")
     out = {}
     for name, body in raw.items():
         if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
             raise AddressError(f"{source}: {name!r} is not a valid treatment name (letters, digits, `_` and `-`).")
-        out[name] = Recipe.treatment(body, book, name=name, source=f"{source}: treatment `{name}`", base_dir=base_dir)
+        out[name] = Treatment.from_mapping(body, book, name=name, source=f"{source}: treatment `{name}`",
+                                           base_dir=base_dir)
     return out
 
 

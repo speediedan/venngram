@@ -13,13 +13,12 @@
 import copy
 
 import pytest
-from test_recipe import recipe_doc
+from test_treatment import read_treatment, treatment_doc
 from test_resolve import space_of
 
 from venngram import AddressBook, AddressUnresolvable, parse, select
 from venngram.address import to_mapping, to_string
 from venngram.errors import AddressError
-from venngram.recipe import Recipe
 from venngram.ops import check_support, Support
 from venngram.resolve import gradient_masks, gradient_of, split_of
 from venngram.support import SupportRecord, TuningSupport
@@ -166,19 +165,19 @@ def test_tuning_consumers_opt_in_to_gradients():
     assert opted_in.check_book(book) == [] and "of" in opted_in.to_mapping()["fields"]
 
 
-def gradient_recipe():
-    doc = copy.deepcopy(recipe_doc([{"site": "mlp.out.hook_in", "ops": [
+def gradient_treatment():
+    doc = copy.deepcopy(treatment_doc([{"site": "mlp.out.hook_in", "ops": [
         {"op": "scale", "target": {"set": "chess"}, "value": {"dose": 0.0}}]}]))
     doc["book"]["schema_version"] = 2
     doc["book"]["sets"]["chess"]["of"] = "grad"
-    return Recipe.from_mapping(doc)
+    return read_treatment(doc)
 
 
-def test_a_recipe_may_act_on_gradients_and_a_consumer_must_declare_it():
-    recipe = gradient_recipe()
-    (refusal,) = check_support(recipe, Support(ops=frozenset({"scale"})))
+def test_a_treatment_may_act_on_gradients_and_a_consumer_must_declare_it():
+    treatment = gradient_treatment()
+    (refusal,) = check_support(treatment, Support(ops=frozenset({"scale"})))
     assert "addresses `of: grad`, which this consumer does not act on (it declares ['value'])" in refusal
-    assert check_support(recipe, Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}))) == []
+    assert check_support(treatment, Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}))) == []
 
 
 def test_a_steering_of_declaration_is_support_record_schema_3():

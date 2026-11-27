@@ -1,11 +1,11 @@
-"""Parameter targets: a recipe's `weights` section, weight patches, their schema steps and conformance vectors."""
+"""Parameter targets: a treatment's `weights` section, weight patches, their schema steps and conformance vectors."""
 import copy
 import hashlib
 
 import pytest
 import torch
 import yaml
-from test_recipe import add, CONCEPT, MODEL, recipe_doc
+from test_treatment import add, CONCEPT, MODEL, read_treatment, treatment_doc
 
 from venngram.book import AddressBook
 from venngram.errors import AddressError
@@ -13,8 +13,8 @@ from venngram.manifest import build_manifest
 from venngram.ops import (check_ops, check_support, op_cases, op_spec_from_mapping, read_op_specs, Support,
                           write_op_specs)
 from venngram.patches import read_weight_patch, tensor_sha256, weight_patch_from_mapping, write_weight_patch
-from venngram.recipe import compose_weights, Composition, Recipe
 from venngram.support import SupportRecord
+from venngram.treatment import compose_weights, Composition, Treatment
 
 # tensors, addressed without a site: a whole matrix, and neurons along mlp.out's unit axis
 PARAM_SETS = {"down": {"component": "mlp.out", "layers": [13], "leaf": "weight"},
@@ -25,8 +25,7 @@ PARAM_SETS = {"down": {"component": "mlp.out", "layers": [13], "leaf": "weight"}
 
 
 def weights_doc(weights, *, stages=None, operands=None, sets=PARAM_SETS, name="w"):
-    doc = recipe_doc(stages or [], sets, operands=operands, name=name)
-    doc["schema_version"] = 3
+    doc = treatment_doc(stages or [], sets, operands=operands, name=name)
     doc["weights"] = weights
     if stages is None:
         doc.pop("stages")
@@ -38,18 +37,18 @@ def zero(target):
 
 
 def test_a_weights_op_targets_a_tensor_or_its_units_and_round_trips():
-    recipe = Recipe.from_mapping(weights_doc([zero("neurons"), {"op": "scale", "target": {"set": "down"},
+    treatment = read_treatment(weights_doc([zero("neurons"), {"op": "scale", "target": {"set": "down"},
                                                                 "value": {"dose": 0.5}}]))
-    units, whole = recipe.weights
-    assert (units.target_kind(recipe.book), whole.target_kind(recipe.book)) == ("param_units", "param")
-    assert units.unit_doses(recipe.book) == {(13, 7): 0.0, (13, 9): 0.0} and recipe.stages == ()
-    doc = recipe.to_mapping()
-    assert doc["schema_version"] == 3 and "stages" not in doc and len(doc["weights"]) == 2
-    assert Recipe.from_mapping(doc).weights == recipe.weights
-    composed = Recipe.from_mapping(weights_doc([zero("both")]))
+    units, whole = treatment.weights
+    assert (units.target_kind(treatment.book), whole.target_kind(treatment.book)) == ("param_units", "param")
+    assert units.unit_doses(treatment.book) == {(13, 7): 0.0, (13, 9): 0.0} and treatment.stages == ()
+    doc = treatment.to_mapping()
+    assert treatment.schema_version == 3 and "stages" not in doc and len(doc["weights"]) == 2
+    assert Treatment.from_mapping(doc, treatment.book).weights == treatment.weights
+    composed = read_treatment(weights_doc([zero("both")]))
     assert list(composed.weights[0].unit_doses(composed.book)) == [(13, 7), (13, 9), (13, 11)]
-    plain = Recipe.from_mapping(recipe_doc([add("chess", {"dose": 1.0})]))
-    assert plain.to_mapping()["schema_version"] == 2 and plain.weights == ()  # schema 3 only when it is needed
+    plain = read_treatment(treatment_doc([add("chess", {"dose": 1.0})]))
+    assert plain.schema_version == 2 and plain.weights == ()  # schema 3 only when it is needed
 
 
 @pytest.mark.parametrize("op, match", [
@@ -67,20 +66,17 @@ def test_a_misused_weights_op_is_refused_by_name(op, match):
     doc = weights_doc([op], sets=sets, operands={"concept": CONCEPT, "poles": poles})
     doc["book"]["schema_version"] = 2
     with pytest.raises(AddressError, match=match):
-        Recipe.from_mapping(doc)
+        read_treatment(doc)
 
 
-def test_weights_need_recipe_schema_3_and_a_book_treatment_with_them_book_schema_3():
-    doc = weights_doc([zero("neurons")])
-    doc["schema_version"] = 2
-    with pytest.raises(AddressError, match="`weights` needs recipe schema 3, not 2"):
-        Recipe.from_mapping(doc)
-    book = {**recipe_doc([], PARAM_SETS)["book"], "treatments": {"off": {"model": MODEL, "weights": [zero("neurons")]}}}
+def test_a_book_treatment_with_weights_needs_book_schema_3():
+    book = {**treatment_doc([], PARAM_SETS)["book"],
+            "treatments": {"off": {"model": MODEL, "weights": [zero("neurons")]}}}
     with pytest.raises(AddressError, match="treatments \\['off'\\] have `weights`, which need address book schema 3"):
         AddressBook.from_mapping(book)
-    read = AddressBook.from_mapping({**book, "schema_version": 3})
-    assert read.treatments["off"].weights[0].target_kind(read) == "param_units"
-    assert read.treatments["off"].to_treatment()["weights"] == [zero("neurons")]
+    loaded = AddressBook.from_mapping({**book, "schema_version": 3})
+    assert loaded.treatments["off"].weights[0].target_kind(loaded) == "param_units"
+    assert loaded.treatments["off"].to_mapping()["weights"] == [zero("neurons")]
 
 
 def test_a_delta_operand_is_a_weight_patch_applied_only_by_a_weights_op(tmp_path):
@@ -92,16 +88,16 @@ def test_a_delta_operand_is_a_weight_patch_applied_only_by_a_weights_op(tmp_path
     assert read_weight_patch(tmp_path / "edit.yaml") == patch
     doc = weights_doc([{"op": "add", "target": {"set": "down"}, "operand": "edit"}], operands={"edit": {
         "patch": "edit.yaml"}})
-    recipe = Recipe.from_mapping(doc, base_dir=tmp_path)
-    edit = recipe.operands["edit"]
+    treatment = read_treatment(doc, base_dir=tmp_path)
+    edit = treatment.operands["edit"]
     assert edit.kind == "delta" and edit.shape == (2, 3) and edit.load(tmp_path)[0] == patch.delta()
-    assert recipe.to_mapping()["operands"] == {"edit": {"patch": "edit.yaml"}}
-    in_a_stage = recipe_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "add", "operand": "edit"}]}],
+    assert treatment.to_mapping()["operands"] == {"edit": {"patch": "edit.yaml"}}
+    in_a_stage = treatment_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "add", "operand": "edit"}]}],
                             operands={"edit": {"patch": "edit.yaml"}})
     with pytest.raises(AddressError, match="is a weight patch, which only a `weights` op applies"):
-        Recipe.from_mapping(in_a_stage, base_dir=tmp_path)
+        read_treatment(in_a_stage, base_dir=tmp_path)
     (tmp_path / "book.yaml").write_text(yaml.safe_dump({**doc["book"], "schema_version": 3,
-                                                         "treatments": {"edit": recipe.to_treatment()}}))
+                                                         "treatments": {"edit": treatment.to_mapping()}}))
     entries = {e.path: e.kind for e in build_manifest(tmp_path, [("address_book", "book.yaml")]).documents}
     assert entries == {"book.yaml": "address_book", "edit.yaml": "weight_patch", "edit.safetensors": "weight_delta"}
 
@@ -141,12 +137,12 @@ def test_the_tensor_hash_is_of_its_float32_bytes():
     assert tensor_sha256(t.t()) != tensor_sha256(t) and tensor_sha256(t.double()) == tensor_sha256(t)
 
 
-def test_weight_ops_from_two_recipes_compose_when_they_commute():
-    a = Recipe.from_mapping(weights_doc([zero("neurons")], name="a"), source="a")
-    b = Recipe.from_mapping(weights_doc([{"op": "scale", "target": {"set": "neurons"}, "value": {"dose": 2.0}}],
+def test_weight_ops_from_two_treatments_compose_when_they_commute():
+    a = read_treatment(weights_doc([zero("neurons")], name="a"), source="a")
+    b = read_treatment(weights_doc([{"op": "scale", "target": {"set": "neurons"}, "value": {"dose": 2.0}}],
                                         name="b"), source="b")
-    assert [x.recipe.name for x in compose_weights([a, b])] == ["a", "b"]  # two scales multiply, in either order
-    c = Recipe.from_mapping(weights_doc([{"op": "replace", "target": {"set": "others"}, "value": {"dose": 1.0}}],
+    assert [x.treatment.name for x in compose_weights([a, b])] == ["a", "b"]  # two scales multiply, in either order
+    c = read_treatment(weights_doc([{"op": "replace", "target": {"set": "others"}, "value": {"dose": 1.0}}],
                                         name="c"), source="c")
     with pytest.raises(AddressError, match="weights op `replace` does not commute with `scale`"):
         compose_weights([a, c])  # unit 9 is in both
@@ -154,11 +150,11 @@ def test_weight_ops_from_two_recipes_compose_when_they_commute():
 
 
 def test_a_consumer_declares_parameter_targets_and_the_record_takes_schema_4():
-    recipe = Recipe.from_mapping(weights_doc([zero("neurons")]))
+    treatment = read_treatment(weights_doc([zero("neurons")]))
     steering = Support(ops=frozenset({"scale"}))
-    assert check_support(recipe, steering) == ["weights op 0 (`scale`): target `param_units` is not supported"]
+    assert check_support(treatment, steering) == ["weights op 0 (`scale`): target `param_units` is not supported"]
     weights = Support(ops=frozenset({"scale"}), targets=frozenset({"units", "param_units"}))
-    assert check_support(recipe, weights) == []
+    assert check_support(treatment, weights) == []
     record = SupportRecord(sections={"steering": weights})
     doc = record.to_mapping()
     assert doc["schema_version"] == 4 and SupportRecord.from_mapping(doc).steering == weights
@@ -225,6 +221,6 @@ def test_the_parameter_vectors_hold_and_state_each_activation_counterpart():
 
 
 def test_fraction_may_exceed_one_on_activations_too():
-    doc = recipe_doc([{"site": "s", "ops": [{"op": "reject", "operand": "concept", "params": {"fraction": 6.0}}]}],
+    doc = treatment_doc([{"site": "s", "ops": [{"op": "reject", "operand": "concept", "params": {"fraction": 6.0}}]}],
                      operands={"concept": CONCEPT})
-    assert Recipe.from_mapping(copy.deepcopy(doc)).stages[0].ops[0].params == {"fraction": 6.0}
+    assert read_treatment(copy.deepcopy(doc)).stages[0].ops[0].params == {"fraction": 6.0}

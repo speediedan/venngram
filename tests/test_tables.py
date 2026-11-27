@@ -265,4 +265,4 @@ def test_a_treatments_free_form_notes_are_metadata_and_an_earlier_evidence_mappi
     book = AddressBook.from_mapping(book_doc({"nf_anime": body()}, treatment=treatment))
     steered = book.treatments["steer"]
     assert steered.metadata == {"author": "x", "evidence": {"examples": ["a"]}}
-    assert "evidence" not in steered.to_treatment() and steered.to_treatment()["metadata"] == steered.metadata
+    assert "evidence" not in steered.to_mapping() and steered.to_mapping()["metadata"] == steered.metadata
