@@ -182,3 +182,25 @@ def validate_roles(roles: Mapping[str, str], parameters: Iterable[str], buffers:
 def declared_kinds(roles: Mapping[str, str]) -> frozenset[str]:
     """The role kinds a role mapping uses, always including ``base``."""
     return frozenset({"base"} | {role_kind(r) for r in roles.values()})
+
+
+__all__ = [
+    "canonical_kind",
+    "canonical_role",
+    "declared_kinds",
+    "FROZEN_ROLE_KINDS",
+    "is_frozen_role",
+    "is_role_selector",
+    "NAMED_OPTIONAL",
+    "NAMED_REQUIRED",
+    "parse_role",
+    "parse_selector",
+    "ROLE_KIND_ALIASES",
+    "ROLE_KINDS",
+    "role_kind",
+    "select",
+    "SELECTOR_PREFIX",
+    "selector_matches",
+    "UNCHECKPOINTED_ROLE_KINDS",
+    "validate_roles",
+]

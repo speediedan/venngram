@@ -28,6 +28,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any
 
+from venngram.errors import VenngramError
 from venngram.maps.schema import ComponentMap, PRIMARY_STACK
 
 
@@ -44,8 +45,9 @@ class MapProblem:
         return f"{where}: {self.reason}"
 
 
-class ComponentMapModelMismatch(ValueError):
-    """The map does not describe this model; every problem is listed."""
+class ComponentMapModelMismatch(VenngramError):
+    """The map does not describe this model; every problem is listed. A :class:`~venngram.errors.VenngramError` (and
+    so still a ``ValueError``)."""
 
 
 def submodule(model: Any, path: str) -> Any | None:

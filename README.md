@@ -531,6 +531,13 @@ warning on every module says; it may change in any 0.x release. A consumer pins 
 (`venngram>=0.1,<0.2`), declares what it honours in its own support record, and checks published documents with
 `python -m venngram.conformance`.
 
+**The public API.** A name is public when it is in its module's `__all__`; every module has one, and anything else
+(a leading underscore, a helper a module imports) is internal and may change without notice. A public name is
+removed only through the deprecation cycle below, and after 0.1.0 a renamed module keeps a warning alias for one minor
+version. Every error venngram raises derives from `venngram.errors.VenngramError` (a `ValueError`), so `except
+VenngramError` catches them all; `venngram.tuning.Unresolvable` is also an `AddressUnresolvable`, the same outcome
+seen through a view.
+
 **Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
 reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
 

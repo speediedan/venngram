@@ -21,7 +21,7 @@ own error types at its boundary (Fine-Tuning Scheduler raises its ``FTSConfigura
 """
 from collections.abc import Sequence
 
-from venngram.errors import RoleError, VenngramError
+from venngram.errors import AddressUnresolvable, Refusal, RoleError, VenngramError
 
 
 class TunableViewError(VenngramError):
@@ -36,8 +36,12 @@ class RoleKeyError(RoleError, TunableViewError):
     """
 
 
-class Unresolvable(TunableViewError):
+class Unresolvable(TunableViewError, AddressUnresolvable):
     """Raised when logical names cannot be resolved to physical parameters; names every unresolved input.
+
+    It is both a :class:`TunableViewError` and an :class:`~venngram.errors.AddressUnresolvable` (the same outcome seen
+    through a view), so a consumer catches either through one class. Its ``address`` lists the names, and its
+    ``refusals`` give one per name.
 
     Args:
         names: Every name that did not resolve.
@@ -47,8 +51,10 @@ class Unresolvable(TunableViewError):
     def __init__(self, names: Sequence[str], detail: str | None = None) -> None:
         self.names = list(names)
         self.detail = detail
+        self.address = ", ".join(self.names)
+        self.refusals = tuple(Refusal(f"`{n}` does not resolve to any parameter") for n in self.names)
         msg = f"These names do not resolve to any parameter: {self.names}."
-        super().__init__(f"{msg} {detail}" if detail else msg)
+        VenngramError.__init__(self, f"{msg} {detail}" if detail else msg)
 
 
 __all__ = ["RoleKeyError", "TunableViewError", "Unresolvable"]

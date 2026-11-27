@@ -211,3 +211,6 @@ def _site_rows(point: str, row: dict[str, Any], visits: tuple[LayerVisit, ...], 
             raise ValueError(f"{where}: inconsistent call timeline for {module!r}")
         out.extend(ExecutionSite(point, module, i, mode, path, visit) for i, visit in enumerate(calls))
     return out
+
+
+__all__ = ["ExecutionMap", "ExecutionSite", "LayerVisit", "TensorIndex"]
