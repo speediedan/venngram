@@ -123,3 +123,22 @@ def test_a_book_written_in_one_vocabulary_is_refused_through_a_view_with_another
         book.check_requires(naming_scheme="physical")
     # a book of vocabulary-neutral sets declares none and applies through any view
     AddressBook.from_mapping({"schema_version": 1, "sets": {"a": "role:adapter"}}).check_requires(naming_scheme="tl")
+
+
+@pytest.mark.parametrize("sets, needed", [
+    ({"top": "layers:-4:"}, 1),
+    ({"grads": "module:q_proj & of:grad"}, 2),
+    ({"axis": {"module": "q_proj", "units": [1], "axis": 0, "of": "grad"}}, 6),
+    ({"depth": "layers:0.25d:0.75d"}, 7),
+    ({"heads": {"module": "q_proj", "units": {"heads": [2, 5]}, "of": "grad"}}, 11),
+])
+def test_a_book_needs_the_lowest_schema_that_holds_its_features(sets, needed):
+    assert AddressBook.needed_schema({"name": "b", "schema_version": 13, "sets": sets}) == needed
+    assert AddressBook.from_mapping({"name": "b", "schema_version": needed, "sets": sets}).schema_version == needed
+
+
+def test_needed_schema_refuses_what_is_not_a_book():
+    with pytest.raises(AddressError, match="an address book is a mapping"):
+        AddressBook.needed_schema(["layers:0"])
+    with pytest.raises(AddressError, match="`sets` is a non-empty mapping"):
+        AddressBook.needed_schema({"sets": {}})

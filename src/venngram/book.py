@@ -63,7 +63,10 @@ the book needs, which an older venngram cannot fetch, so it refuses the book as 
       nf_anime: {file: tables/nf_anime.yaml, sha256: 9c1e...}
       audit_cards: {model: {...}, source: {...}, columns: {dose: {description: ...}}, rows: [...]}
 
-**Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). A key an older reader
+**Versions.** ``schema_version`` is required and read within a window (:data:`SCHEMA_WINDOW`). It is a feature level:
+each version adds one capability, and a writer stamps the lowest version its content needs
+(:meth:`AddressBook.needed_schema`), so an older reader still reads every book that uses none of the newer
+features. A key an older reader
 may ignore without misreading the book (``description``, ``charts``, any unknown top-level key) never changes the
 version; a key that changes what a set selects does. Schema 2 adds the ``of`` address field (a set's gradients), so a
 book whose sets use it is schema 2, and every other book stays readable as schema 1. Schema 3 lets a treatment carry a
@@ -239,6 +242,25 @@ class AddressBook:
     """Unit tables by name (each a :class:`venngram.tables.UnitTable`), from the ``tables`` section."""
 
     @classmethod
+    def needed_schema(cls, doc: Mapping[str, Any], *, source: str = "<inline>",
+                      base_dir: str | Path | None = None) -> int:
+        """The lowest address book schema that holds ``doc``: what a writer stamps, so a reader of any version that
+        holds the book's features reads it. A ``schema_version`` in ``doc`` is ignored.
+
+        >>> AddressBook.needed_schema({"sets": {"top": "layers:-4:"}})
+        1
+        >>> AddressBook.needed_schema({"schema_version": 13, "sets": {"grads": "module:q_proj & of:grad"}})
+        2
+
+        Raises:
+            AddressError: If the book is malformed, as :meth:`from_mapping` refuses it.
+        """
+        if not isinstance(doc, Mapping):
+            raise AddressError(f"{source}: an address book is a mapping, got {type(doc).__name__}.")
+        body = {k: v for k, v in doc.items() if k != "schema_version"}
+        return cls.from_mapping(body, source=source, base_dir=base_dir, inline=True).schema_version
+
+    @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>", base_dir: str | Path | None = None,
                      inline: bool = False, _loading: tuple[str, ...] = ()) -> "AddressBook":
         """Load a book from its mapping.
@@ -286,7 +308,7 @@ class AddressBook:
         graphs = _graphs(doc.get("graphs"), source, base_dir) if doc.get("graphs") is not None else {}
         tables = _tables(doc.get("tables"), source, base_dir) if doc.get("tables") is not None else {}
         if graphs and inline and "schema_version" not in doc:
-            version = GRAPHS_SCHEMA
+            version = max(version, GRAPHS_SCHEMA)
         if graphs and version < GRAPHS_SCHEMA:
             raise AddressError(f"{source}: `graphs` needs address book schema {GRAPHS_SCHEMA}, not {version}: an older "
                                "venngram would pass over it silently.")

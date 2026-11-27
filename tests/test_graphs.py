@@ -345,6 +345,9 @@ def test_graphs_need_book_schema_5_and_cite_a_hash(tmp_path):
     inline = book_with(tmp_path, [{"site": SITE, "ops": [transfer_op()]}])
     inline.pop("schema_version")
     assert AddressBook.from_mapping(inline, base_dir=tmp_path, inline=True).schema_version == 5
+    assert AddressBook.needed_schema({**inline, "schema_version": 13}, base_dir=tmp_path) == 5
+    pins = {**inline, "requires": {"base_model": dict(MODEL)}}  # pins (8) and graphs (5): the higher one holds both
+    assert AddressBook.needed_schema(pins, base_dir=tmp_path) == 8
 
 
 def circuits_record(**subsets):
