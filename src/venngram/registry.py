@@ -359,8 +359,10 @@ def subjects(kind: str, *, locations: Sequence[str] | None = None) -> list[str]:
     return sorted(seen)
 
 
-def _order(row: Row) -> tuple[int, int]:
-    return (SERVED.index(row.status) if row.status in SERVED else len(SERVED), row.rank)
+def _order(row: Row) -> tuple[int, int, int]:
+    """Status, then crawl order, then the newest schema first: a location may publish a document at two schemas, so a
+    reader serves the newest it reads and an older one passes over it to the next."""
+    return (SERVED.index(row.status) if row.status in SERVED else len(SERVED), row.rank, -(row.schema_version or 0))
 
 
 def newest_readable(kind: str, subject: str = "") -> int | None:

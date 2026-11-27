@@ -67,9 +67,9 @@ from venngram.errors import NewerSchemaError
 from venngram.maps.check import check_map_against_model, MapProblem, stack_length, submodule
 from venngram.maps.rules import config_field, core_rules, evaluate, layered, RuleSet, Unstated
 from venngram.maps.schema import (ATTENTION_PROJECTIONS, component_map_for, ComponentMap, from_document,
-                                  LAYOUT_SCHEMA_VERSION, load_component_map, PRIMARY_STACK, UNIT_BLOCK_SCHEMA_VERSION,
-                                  UNIT_SIDES)
-from venngram.maps.structure import map_for, MapStructure
+                                  LAYOUT_SCHEMA_VERSION, load_component_map, PRIMARY_STACK, UNIT_BLOCK_SCHEMA_VERSION)
+from venngram.maps.structure import head_size, map_for, MapStructure
+from venngram.maps.structure import unit_width as _unit_width
 from venngram.resolve import component_matches
 
 #: The schema of a verification record.
@@ -254,13 +254,6 @@ def check_layout(cmap: ComponentMap, model: nn.Module) -> CheckResult:
     return CheckResult("layout", "failed" if problems else "passed", tuple(problems), note)
 
 
-def _unit_width(module: Any, component: str, layout: str | None) -> int | None:
-    side, weight = UNIT_SIDES.get(component), getattr(module, "weight", None)
-    if side is None or layout is None or not isinstance(weight, torch.Tensor) or weight.ndim != 2:
-        return None
-    return int(weight.shape[0 if layout.startswith(side) else 1])
-
-
 def _measure_unit_block(cmap: ComponentMap, model: nn.Module, key: str, layer: int | None,
                         module: Any, width: int) -> int | None:
     loc = cmap.key(key)
@@ -273,19 +266,7 @@ def _measure_unit_block(cmap: ComponentMap, model: nn.Module, key: str, layer: i
             path = path.replace("{i}", str(layer))
         attention = path.rpartition(".")[0]
     owner = submodule(model, attention)
-    sources = (module, owner, getattr(owner, "config", None))
-    for obj in sources:
-        size = getattr(obj, "head_dim", None)
-        if type(size) is int and size > 0:
-            return size
-    names = (("num_key_value_heads", "num_kv_heads") if loc.component in ("attn.k", "attn.v")
-             else ("num_heads", "num_attention_heads", "n_head"))
-    for obj in sources:
-        for name in names:
-            count = getattr(obj, name, None)
-            if type(count) is int and count > 0:
-                return width // count if width > 0 and width % count == 0 else None
-    return None
+    return head_size(loc.component, (module, owner, getattr(owner, "config", None)), width)
 
 
 def check_unit_blocks(cmap: ComponentMap, model: nn.Module) -> CheckResult:
@@ -309,18 +290,18 @@ def check_unit_blocks(cmap: ComponentMap, model: nn.Module) -> CheckResult:
         if measured is not None and measured != size:
             problems.append(MapProblem(key, layer, f"records `unit_block` {size}, but its measured size is {measured}"))
         counts.setdefault((loc.stack, layer), {})[loc.component] = (key, width // size, size)
-    for (_stack, layer), projections in counts.items():
+    for (_stack, layer), projections in counts.items():  # head counts agree; a head's width may differ by projection
         queries = [projections[c] for c in ("attn.q", "attn.o") if c in projections]
         keys_values = [projections[c] for c in ("attn.k", "attn.v") if c in projections]
         for pair in (queries, keys_values):
-            if len(pair) == 2 and pair[0][1:] != pair[1][1:]:
+            if len(pair) == 2 and pair[0][1] != pair[1][1]:
                 key, count, size = pair[0]
                 peer, peer_count, peer_size = pair[1]
                 problems.append(MapProblem(key, layer, f"its {count} heads of width {size} do not match "
                                            f"{peer}'s {peer_count} heads of width {peer_size}"))
         for key, query, q_size in queries:
             for kv_key, kv, kv_size in keys_values:
-                if query % kv or q_size != kv_size:
+                if query % kv:
                     problems.append(MapProblem(key, layer, f"its {query} heads of width {q_size} cannot be grouped "
                                                f"over {kv_key}'s {kv} heads of width {kv_size}"))
     return CheckResult("unit_block", "failed" if problems else "passed", tuple(problems),

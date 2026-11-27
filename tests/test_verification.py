@@ -275,3 +275,54 @@ def test_head_qualifier_round_trips_and_requires_book_schema_11(selection):
     with pytest.raises(AddressError, match="schema 11"):
         AddressBook.from_mapping(doc)
     assert AddressBook.from_mapping({**doc, "schema_version": 11}).sets() == {"heads": expr}
+
+
+def test_a_recorded_head_size_this_checkpoint_does_not_share_is_refused_not_misread():
+    import transformers
+
+    from test_maps import TEXT
+
+    recorded = from_document(with_layouts(seed_document("LlamaForCausalLM"), tiny("LlamaForCausalLM")))
+    assert recorded.unit_block_of("attn.o", 1) == 4
+    with torch.device("meta"):  # the same architecture with heads of 2: its widths still divide into 4
+        other = transformers.LlamaForCausalLM(transformers.LlamaConfig(**{**TEXT, "head_dim": 2,
+                                                                          "num_attention_heads": 8}))
+    shapes = {n: tuple(p.shape) for n, p in other.named_parameters()}
+    heads = "component:attn.o & layers:1 & leaf:weight & of:grad & units:{heads:[1]}"
+    space = ParamSpace(list(shapes), structure=MapStructure(other, recorded))
+    with pytest.raises(AddressUnresolvable, match="records `unit_block` 4 for `attn.o`.*measures heads of 2"):
+        gradient_selections(heads, space, shapes=shapes)
+    same = ParamSpace(list(shapes), structure=MapStructure(other, from_document(with_layouts(
+        seed_document("LlamaForCausalLM"), other))))  # measured on this checkpoint, it resolves
+    projection = f"{recorded.module_for('attn.o', 1)}.weight"
+    assert gradient_selections(heads, same, shapes=shapes) == {projection: GradientSelection(1, (2, 3))}
+
+
+def test_a_head_size_measured_through_a_wrapper_is_checked_too():
+    class Wrapper(nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.model = inner
+
+    import transformers
+
+    from test_maps import TEXT
+
+    recorded = from_document(with_layouts(seed_document("LlamaForCausalLM"), tiny("LlamaForCausalLM")))
+    with torch.device("meta"):
+        other = Wrapper(transformers.LlamaForCausalLM(transformers.LlamaConfig(**{**TEXT, "head_dim": 2,
+                                                                                  "num_attention_heads": 8})))
+    structure = MapStructure(other, recorded, mount="model")
+    name = f"model.{recorded.module_for('attn.o', 1)}.weight"
+    with pytest.raises(AddressError, match="measures heads of 2"):
+        structure.unit_block(name)
+    assert MapStructure(tiny("LlamaForCausalLM"), recorded).unit_block(name.removeprefix("model.")) == 4
+
+
+def test_a_gated_query_projection_measures_whole_heads_of_query_and_gate():
+    model = tiny("LlamaForCausalLM")
+    for layer in model.model.layers:  # each query head carries its gate beside it, as a gated attention's does
+        layer.self_attn.q_proj = nn.Linear(16, 2 * 4 * 4, bias=False, device="meta")
+    cmap = from_document(with_layouts(seed_document("LlamaForCausalLM"), model))
+    assert [cmap.unit_block_of(f"attn.{p}", 0) for p in ("q", "k", "v", "o")] == [8, 4, 4, 4]
+    assert check_unit_blocks(cmap, model).status == "passed"  # 4 query heads of 8 over 2 key/value heads of 4
