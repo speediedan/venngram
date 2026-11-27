@@ -196,7 +196,7 @@ The evidence a treatment's `from` values read is a `kind: evidence_table` docume
 `(layer, unit)`, typed columns that each state their meaning (a `description`, optionally a `unit` and a `dtype` of
 `float` or `int`), and its provenance: the checkpoint the evidence was measured on (`model: {id, revision}`) and its
 `source` with a `license` and a `version`, `commit` or `revision`. A book names the tables its treatments read under
-`evidence`, each cited by hash or written inline, so it is published with them:
+`evidence` (book schema 13), each cited by hash or written inline, so it is published with them:
 
 ```yaml
 evidence:
@@ -211,8 +211,8 @@ treatments:
 
 A table holds one finding per unit: a unit that is a finding for two targets is a row in two tables. In a book with an
 `evidence` section, a `from` value naming a table or a column the book lacks, or a target member without a row, is
-refused when the book loads; a book without one leaves evidence to its caller, as before. The section changes no set or
-treatment, so it needs no newer book schema. `AddressBook.evidence_tables()` gives the tables in the shape a consumer
+refused when the book loads, as is a transform such as `sign_of` reading a column the table lacks; a book without one
+leaves evidence to its caller, as before. `AddressBook.evidence_tables()` gives the tables in the shape a consumer
 takes (`{table: {column: {(layer, unit): value}}}`), and a large table goes to a safetensors sidecar
 (`rows: {file, sha256}`) with integer `layer` and `unit` columns.
 
@@ -498,7 +498,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 7 | 6 for maps with `unit_block`, 7 for maps with `execution` | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 12 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass | ignored at the top level |
+| address book | 1 to 13 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass, 13 when the book names `evidence` | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |

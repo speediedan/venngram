@@ -129,8 +129,8 @@ class Column:
 
     def read(self, value: Any, where: str) -> float | int:
         if self.dtype == "int":
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise AddressError(f"{where}: `{self.name}` is an integer column, got {value!r}.")
+            if isinstance(value, bool) or not isinstance(value, int) or not -(1 << 63) <= value < (1 << 63):
+                raise AddressError(f"{where}: `{self.name}` is an integer column (64-bit), got {value!r}.")
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise AddressError(f"{where}: `{self.name}` is a finite number, got {value!r}.")
@@ -217,7 +217,8 @@ class EvidenceTable:
         rows_ref = None
         if _is_sidecar(raw_rows):
             rows_ref = {"file": raw_rows["file"], "sha256": raw_rows["sha256"]}
-            raw_rows = read_evidence_rows(Path(base_dir or ".") / raw_rows["file"], sha256=raw_rows["sha256"])
+            raw_rows = read_evidence_rows(Path(base_dir or ".") / raw_rows["file"], sha256=raw_rows["sha256"],
+                                          dtypes={c: col.dtype for c, col in columns.items()})
         if not isinstance(raw_rows, list) or not raw_rows:
             raise AddressError(f"{source}: `rows` lists at least one {{layer, unit, <column>: ...}}, or names a "
                                "sidecar {file, sha256}.")
@@ -251,8 +252,9 @@ class EvidenceTable:
             return cls.from_mapping(yaml.safe_load(fh), source=str(path), base_dir=path.parent)
 
     def to_mapping(self, *, inline: bool = False) -> dict[str, Any]:
-        """The document (with ``inline``, the body a book writes under its ``evidence`` section); rows read from a
-        sidecar are written as the same reference (see :func:`write_evidence_rows` for writing one)."""
+        """The document; rows read from a sidecar are written as the same reference (see :func:`write_evidence_rows`
+        for writing one). With ``inline``, the body a book writes under its ``evidence`` section, rows always inline:
+        a sidecar path is relative to the table's directory, not the book's."""
         doc: dict[str, Any] = {} if inline else {"schema_version": SCHEMA_VERSION, "kind": "evidence_table",
                                                  "name": self.name}
         if self.description is not None:
@@ -260,7 +262,7 @@ class EvidenceTable:
         doc["model"] = dict(self.model)
         doc["source"] = dict(self.provenance)
         doc["columns"] = {name: c.to_mapping() for name, c in self.columns.items()}
-        doc["rows"] = dict(self.rows_ref) if self.rows_ref is not None else \
+        doc["rows"] = dict(self.rows_ref) if self.rows_ref is not None and not inline else \
             [{"layer": layer, "unit": unit, **values} for (layer, unit), values in self.rows.items()]
         return doc
 
@@ -270,7 +272,7 @@ class EvidenceTable:
         import yaml
 
         path = Path(path)
-        table = self
+        table = replace(self, rows_ref=None)  # rows read from a sidecar elsewhere are written afresh, never referenced
         if len(self.rows) > threshold:
             sidecar = path.with_name(f"{path.stem}.rows.safetensors")
             table = replace(self, rows_ref={"file": sidecar.name, "sha256": write_evidence_rows(sidecar, self)})
@@ -357,13 +359,14 @@ def write_evidence_rows(path: str | Path, table: EvidenceTable) -> str:
     return _sha256(path)
 
 
-def read_evidence_rows(path: str | Path, *, sha256: str | None = None) -> list[dict[str, Any]]:
+def read_evidence_rows(path: str | Path, *, sha256: str | None = None,
+                       dtypes: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
     """A sidecar's rows as document mappings (what :meth:`EvidenceTable.from_mapping` reads inline); the document's
-    ``columns`` then check their names and types.
+    ``columns`` then check their names and types, and ``dtypes`` (a column's :data:`DTYPES` value) the stored type.
 
     Raises:
-        AddressError: If the file differs from ``sha256``, is not a venngram evidence row sidecar, or a column has the
-            wrong dtype or length.
+        AddressError: If the file differs from ``sha256``, is not a venngram evidence row sidecar, its columns do not
+            tile its data exactly, or a column has the wrong dtype or length.
     """
     path = Path(path)
     if not path.is_file():
@@ -390,12 +393,23 @@ def read_evidence_rows(path: str | Path, *, sha256: str | None = None) -> list[d
             raise AddressError(f"{path}: not a venngram evidence row sidecar (schema {ROWS_SCHEMA_VERSION}).") from None
         body = fh.read()
 
+    spans = []
+    for name, entry in header.items():
+        offsets = entry.get("data_offsets") if isinstance(entry, Mapping) else None
+        if not (isinstance(offsets, list) and len(offsets) == 2 and all(type(o) is int for o in offsets)
+                and 0 <= offsets[0] <= offsets[1] <= len(body)):
+            raise AddressError(f"{path}: column `{name}` has data offsets {offsets!r} outside its {len(body)} bytes.")
+        spans.append(tuple(offsets))
+    spans.sort()
+    if [lo for lo, _ in spans] != [0] + [hi for _, hi in spans[:-1]] or (spans and spans[-1][1] != len(body)):
+        raise AddressError(f"{path}: its columns do not tile its data exactly (overlapping, gapped or trailing bytes).")
+
     def column(name: str, dtypes: Sequence[str]) -> list[Any]:
         entry = header.get(name)
         if not isinstance(entry, Mapping):
             raise AddressError(f"{path}: no column `{name}`.")
         dtype = str(entry.get("dtype"))
-        lo, hi = entry.get("data_offsets", (0, -1))
+        lo, hi = entry["data_offsets"]
         if dtype not in dtypes or entry.get("shape") != [n] or hi - lo != n * _CODES[dtype][1]:
             raise AddressError(f"{path}: column `{name}` is {' or '.join(dtypes)} with {n} rows, got {dtype} "
                                f"{entry.get('shape')}.")
@@ -406,7 +420,8 @@ def read_evidence_rows(path: str | Path, *, sha256: str | None = None) -> list[d
         return list(data)
 
     layers, units = column("layer", ("I64",)), column("unit", ("I64",))
-    values = {c: column(f"value.{c}", ("I64", "F64")) for c in names}
+    values = {c: column(f"value.{c}", (_COLUMN_DTYPE[dtypes[c]],) if dtypes and c in dtypes else ("I64", "F64"))
+              for c in names}
     return [{"layer": layers[i], "unit": units[i], **{c: v[i] for c, v in values.items()}} for i in range(n)]
 
 

@@ -52,7 +52,8 @@ def steer(table="nf_anime", column="dose", target="found"):
 
 
 def book_doc(evidence=None, treatment=None, units=None):
-    doc = {"schema_version": 2, "name": "zoo", "portability": "checkpoint", "applies_to": {"models": [dict(MODEL)]},
+    doc = {"schema_version": 13 if evidence is not None else 2, "name": "zoo", "portability": "checkpoint",
+           "applies_to": {"models": [dict(MODEL)]},
            "sets": {"found": {"point": SITE, "units": units or {13: [4810], 15: [7]}}},
            "treatments": {"steer": treatment or steer()}}
     if evidence is not None:
@@ -122,7 +123,7 @@ def test_a_sidecar_value_of_the_wrong_type_for_its_column_is_refused(tmp_path):
     floats = {**COLUMNS, "confirm_n": {"description": "confirm prompts"}}  # written as a float column
     table = EvidenceTable.from_mapping(table_doc(columns=floats))
     sha = write_evidence_rows(tmp_path / "rows.safetensors", table)
-    with pytest.raises(AddressError, match="integer column"):  # read as the document's int column
+    with pytest.raises(AddressError, match="`value.confirm_n` is I64 with 2 rows, got F64"):  # the document's int
         EvidenceTable.from_mapping(table_doc(rows={"file": "rows.safetensors", "sha256": sha}), base_dir=tmp_path)
 
 
@@ -138,8 +139,11 @@ def test_a_book_carries_its_evidence_by_reference_or_inline(tmp_path):
     assert set(book.evidence) == {"nf_anime", "audit"} and book.evidence["audit"].name == "audit"
     tables = book.evidence_tables()
     assert tables["nf_anime"] == tables["audit"] == EvidenceTable.from_mapping(table_doc()).table()
-    assert book.schema_version == 2  # the section changes no set or treatment, so it needs no newer schema
-    assert "evidence" not in book.extra
+    assert book.schema_version == 13 and "evidence" not in book.extra
+    with pytest.raises(AddressError, match="`evidence` needs address book schema 13, not 12"):
+        AddressBook.from_mapping({**book_doc({"nf_anime": body()}), "schema_version": 12})
+    inline = {k: v for k, v in book_doc({"nf_anime": body()}).items() if k != "schema_version"}
+    assert AddressBook.from_mapping(inline, inline=True).schema_version == 13  # an inline book takes the schema
 
 
 def test_a_book_citing_a_changed_or_malformed_table_is_refused(tmp_path):
@@ -156,7 +160,7 @@ def test_a_book_citing_a_changed_or_malformed_table_is_refused(tmp_path):
 
 @pytest.mark.parametrize("treatment, units, match", [
     (steer(table="nf_cartoon"), None, "reads evidence `nf_cartoon`, which the book's `evidence` does not name"),
-    (steer(column="hits"), None, "evidence `nf_anime` has no column `hits`"),
+    (steer(column="hits"), None, "evidence `nf_anime` has no column \\['hits'\\]"),
     (None, {13: [4810, 9], 15: [7]}, "stage 0 \\(mlp.out.hook_in\\) op 0 .*no row for \\(layer 13, unit 9\\)"),
 ])
 def test_a_treatment_reading_evidence_the_book_cannot_give_is_refused_when_the_book_loads(treatment, units, match):
@@ -208,3 +212,49 @@ def test_a_published_book_lists_its_tables_and_sidecars_and_fetches_with_them(tm
     report = check(f"local:{tmp_path / 'pub'}")
     assert report.ok, report.render()
     assert {d.kind for d in report.documents} >= {"address_book", "evidence_table"}
+
+
+def test_a_transform_reading_another_column_names_one_the_table_has():
+    treatment = steer()
+    treatment["stages"][0]["ops"][0]["value"]["transform"] = [{"sign_of": {"column": "nope"}}]
+    with pytest.raises(AddressError, match="has no column \\['nope'\\]"):
+        AddressBook.from_mapping(book_doc({"nf_anime": body()}, treatment=treatment))
+    treatment["stages"][0]["ops"][0]["value"]["transform"] = [{"sign_of": {"column": "confirm_hit_rate"}}]
+    assert AddressBook.from_mapping(book_doc({"nf_anime": body()}, treatment=treatment)).treatments
+
+
+def test_a_table_read_from_a_sidecar_writes_its_rows_afresh_wherever_it_goes(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    big = EvidenceTable.from_file(EvidenceTable.from_mapping(table_doc()).write(tmp_path / "a" / "t.yaml", threshold=0))
+    assert big.rows_ref is not None
+    again = EvidenceTable.from_file(big.write(tmp_path / "b" / "t.yaml"))  # inline now: no dangling reference
+    assert again.rows_ref is None and again.table() == big.table()
+    assert isinstance(big.to_mapping(inline=True)["rows"], list)  # a book's inline table carries its rows
+
+
+@pytest.mark.parametrize("damage, match", [
+    (lambda h, body: (h["layer"].update(data_offsets=[0, 8]), body)[1], "do not tile"),
+    (lambda h, body: (h["unit"].update(data_offsets=[16, 10 ** 6]), body)[1], "outside its"),
+    (lambda h, body: (h["unit"].update(data_offsets="x"), body)[1], "data offsets 'x'"),
+    (lambda h, body: body + b"\0" * 8, "do not tile"),
+    (lambda h, body: body[:-8], "outside its|do not tile"),
+])
+def test_a_damaged_row_sidecar_is_refused_by_name(tmp_path, damage, match):
+    import json
+    import struct
+
+    write_evidence_rows(tmp_path / "r.safetensors", EvidenceTable.from_mapping(table_doc()))
+    raw = (tmp_path / "r.safetensors").read_bytes()
+    (size,) = struct.unpack("<Q", raw[:8])
+    header, body = json.loads(raw[8:8 + size]), raw[8 + size:]
+    body = damage(header, body)
+    head = json.dumps(header).encode()
+    (tmp_path / "bad.safetensors").write_bytes(struct.pack("<Q", len(head)) + head + body)
+    with pytest.raises(AddressError, match=match):
+        read_evidence_rows(tmp_path / "bad.safetensors")
+
+
+def test_an_integer_column_holds_64_bit_values():
+    with pytest.raises(AddressError, match="64-bit"):
+        EvidenceTable.from_mapping(table_doc(rows=[{**ROWS[0], "confirm_n": 1 << 63}]))

@@ -54,8 +54,8 @@ have an empty ``sets``:
 ``from`` values from, by name, each an ``evidence_table`` document beside the book cited by hash, or written inline
 (the document's body without its header). A book with this section is published with the evidence it reads: its
 treatments' ``from`` values name its tables and their columns, and every member of a target has a row, or the book is
-refused by name. A book without it leaves evidence to its caller. The section changes no set and no treatment, so it
-needs no newer schema: an older reader passes over it and leaves evidence to the caller, as it always has.
+refused by name. A book without it leaves evidence to its caller. The section needs book schema 13: a store lists
+the tables as files the book needs, which an older venngram cannot fetch, so it refuses the book as newer instead.
 
 .. code-block:: yaml
 
@@ -75,7 +75,8 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
 layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, schema 9 element
 masks (``units: {elements: ...}``), schema 10 paths (``path: [...]``, :mod:`venngram.paths`), and schema 11 whole
-attention heads (``units: {heads: ...}``). Schema 12 adds the ``passes`` field for activation sites.
+attention heads (``units: {heads: ...}``). Schema 12 adds the ``passes`` field for activation sites, and schema 13 the
+``evidence`` section.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -131,7 +132,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchEr
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 12)
+SCHEMA_WINDOW = (1, 13)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -156,6 +157,8 @@ PATHS_SCHEMA = 10
 HEADS_SCHEMA = 11
 #: The first schema whose sets may address an execution pass.
 PASSES_SCHEMA = 12
+#: The first schema with an ``evidence`` section (evidence tables its treatments read).
+EVIDENCE_SCHEMA = 13
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -289,6 +292,12 @@ class AddressBook:
         if graphs and version < GRAPHS_SCHEMA:
             raise AddressError(f"{source}: `graphs` needs address book schema {GRAPHS_SCHEMA}, not {version}: an older "
                                "venngram would pass over it silently.")
+        if evidence and inline and "schema_version" not in doc:
+            version = max(version, EVIDENCE_SCHEMA)
+        if evidence and version < EVIDENCE_SCHEMA:
+            raise AddressError(f"{source}: `evidence` needs address book schema {EVIDENCE_SCHEMA}, not {version}: an "
+                               "older venngram would not fetch the tables it names, and would leave its treatments' "
+                               "values to a caller.")
         raw_sets = doc.get("sets")
         if not isinstance(raw_sets, Mapping) or not (raw_sets or graphs):
             raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses (it may be empty "
@@ -788,6 +797,7 @@ __all__ = [
     "AddressBook",
     "AXIS_SCHEMA",
     "DEPTH_SCHEMA",
+    "EVIDENCE_SCHEMA",
     "diff_lock",
     "GRAPHS_SCHEMA",
     "make_lock",

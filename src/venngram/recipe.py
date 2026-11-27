@@ -581,8 +581,8 @@ class Recipe:
 def _check_evidence(stages: Sequence[Stage], weights: Sequence[Op], gradients: Sequence[Op], book: AddressBook,
                     source: str) -> None:
     """In a book with an ``evidence`` section, refuse a ``from`` value that names a table or a column the book does not
-    have, or whose target has a member without a row (:mod:`venngram.evidence`). A book without the section leaves
-    evidence to its caller."""
+    have (its own, or one a transform such as ``sign_of`` reads), or whose target has a member without a row
+    (:mod:`venngram.evidence`). A book without the section leaves evidence to its caller."""
     if not book.evidence:
         return
     from venngram.evidence import check_members
@@ -599,8 +599,11 @@ def _check_evidence(stages: Sequence[Stage], weights: Sequence[Op], gradients: S
             raise AddressError(f"{where}: the value reads evidence `{value.evidence}`, which the book's `evidence` "
                                f"does not name (tables: {sorted(book.evidence)}).")
         table = book.evidence[value.evidence]
-        if value.column not in table.columns:
-            raise AddressError(f"{where}: evidence `{value.evidence}` has no column `{value.column}` (columns: "
+        read = [str(value.column)] + [str(t.params["column"]) for t in value.transform
+                                      if t.name in EVIDENCE_TRANSFORMS and "column" in t.params]
+        missing = [c for c in dict.fromkeys(read) if c not in table.columns]
+        if missing:
+            raise AddressError(f"{where}: evidence `{value.evidence}` has no column {missing} (columns: "
                                f"{sorted(table.columns)}).")
         try:
             members = op.unit_members(book, where) if op.target is not None else []
