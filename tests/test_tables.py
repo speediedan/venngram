@@ -89,6 +89,15 @@ def test_a_table_reads_round_trips_and_gives_its_columns_by_member():
     ({"rows": [{**ROWS[0], "dose": True}]}, "finite number"),
     ({"rows": [{**ROWS[0], "unit": -1}]}, "`unit` is an integer >= 0"),
     ({"edges": []}, "unknown keys \\['edges'\\]"),
+    ({"key": ["layer", "unit", "pass"]}, "`key` names \\['pass'\\], which this venngram does not know"),
+    ({"key": ["unit"]}, "includes `layer` and `unit`"),
+    ({"key": ["layer", "unit", "unit"]}, "lists each coordinate once"),
+    ({"key": "layer,unit"}, "`key` lists the coordinates"),
+    ({"columns": {"stack": {"description": "x"}}}, "not a valid column name"),
+    ({"rows": [{**ROWS[0], "stack": "vision"}]}, "gives a `stack`, and the table's key is \\['layer', 'unit'\\]"),
+    ({"key": ["stack", "layer", "unit"], "rows": [{**ROWS[0], "stack": 3}]}, "`stack` is a block stack's name"),
+    ({"key": ["stack", "layer", "unit"], "rows": [{**ROWS[0], "stack": "vision"}, {**ROWS[0], "stack": "vision"}]},
+     "repeats \\(stack vision, layer 13, unit 4810\\)"),
     ({"kind": "graph_subset"}, "kind: unit_table"),
 ])
 def test_a_malformed_table_is_refused_by_name(change, match):
@@ -266,3 +275,60 @@ def test_a_treatments_free_form_notes_are_metadata_and_an_earlier_evidence_mappi
     steered = book.treatments["steer"]
     assert steered.metadata == {"author": "x", "evidence": {"examples": ["a"]}}
     assert "evidence" not in steered.to_treatment() and steered.to_treatment()["metadata"] == steered.metadata
+
+
+STACKED = [{**ROWS[0]}, {**ROWS[1], "stack": "vision"}, {**ROWS[0], "stack": "vision", "dose": 0.25}]
+
+
+def test_a_table_keyed_by_stack_gives_each_stacks_rows_and_round_trips(tmp_path):
+    table = UnitTable.from_mapping(table_doc(key=["unit", "stack", "layer"], rows=copy.deepcopy(STACKED)))
+    assert table.key == ("stack", "layer", "unit") and table.stacks == [None, "vision"]
+    assert table.column("dose") == {(13, 4810): 1.5}
+    assert table.column("dose", stack="vision") == {(15, 7): -0.8, (13, 4810): 0.25}
+    assert table.to_mapping() == table_doc(key=["stack", "layer", "unit"], rows=copy.deepcopy(STACKED))
+    plain = UnitTable.from_mapping(table_doc())
+    assert plain.key == ("layer", "unit") and "key" not in plain.to_mapping()  # the default key is not written
+    with pytest.raises(AddressError, match="keyed by \\['layer', 'unit'\\], so its rows are the primary stack's"):
+        plain.column("dose", stack="vision")
+    path = table.write(tmp_path / "stacked.yaml", threshold=0)  # rows to a sidecar, the stacks by index
+    again = UnitTable.from_file(path)
+    assert again.rows == table.rows and again.key == table.key and again.stacks == [None, "vision"]
+    assert read_table_rows(tmp_path / "stacked.rows.safetensors") == STACKED
+
+
+def test_a_sidecar_with_stacks_needs_a_table_keyed_by_stack(tmp_path):
+    table = UnitTable.from_mapping(table_doc(key=["stack", "layer", "unit"], rows=copy.deepcopy(STACKED)))
+    sha = write_table_rows(tmp_path / "rows.safetensors", table)
+    with pytest.raises(AddressError, match="row 1: gives a `stack`, and the table's key is \\['layer', 'unit'\\]"):
+        UnitTable.from_mapping(table_doc(rows={"file": "rows.safetensors", "sha256": sha}), base_dir=tmp_path)
+
+
+def vision_book(table, units=None):
+    doc = book_doc({"nf_anime": table}, units=units)
+    doc["sets"]["found"]["stack"] = "vision"
+    return doc
+
+
+def test_a_target_in_another_stack_reads_only_a_table_keyed_by_stack():
+    with pytest.raises(AddressError, match="op 0 \\(`add`\\): unit table `nf_anime` is keyed by \\['layer', 'unit'\\], "
+                                          "so its rows are the primary stack's, and the target is in stack `vision`"):
+        AddressBook.from_mapping(vision_book(body()))
+    stacked = body(key=["stack", "layer", "unit"], rows=copy.deepcopy(STACKED))
+    book = AddressBook.from_mapping(vision_book(stacked, units={13: [4810], 15: [7]}))
+    assert book.unit_tables(stack="vision") == {"nf_anime": book.tables["nf_anime"].table(stack="vision")}
+    assert book.unit_tables()["nf_anime"]["dose"] == {(13, 4810): 1.5}
+    with pytest.raises(AddressError, match="no row for \\(stack vision, layer 13, unit 9\\)"):
+        AddressBook.from_mapping(vision_book(stacked, units={13: [4810, 9]}))
+    primary = book_doc({"nf_anime": stacked}, units={13: [4810], 15: [7]})  # the primary stack lacks (15, 7)
+    with pytest.raises(AddressError, match="no row for \\(layer 15, unit 7\\)"):
+        AddressBook.from_mapping(primary)
+
+
+def test_a_composed_unit_target_reads_its_sites_stack():
+    doc = vision_book(body(key=["stack", "layer", "unit"], rows=copy.deepcopy(STACKED)), units={15: [7]})
+    doc["sets"]["more"] = {"point": SITE, "stack": "vision", "units": {13: [4810]}}
+    doc["sets"]["both"] = "@found | @more"
+    doc["treatments"]["steer"] = steer(target="both")
+    book = AddressBook.from_mapping(doc)
+    op = book.treatments["steer"].stages[0].ops[0]
+    assert op.unit_stack(book) == "vision" and op.unit_members(book) == [(15, 7), (13, 4810)]

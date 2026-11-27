@@ -192,8 +192,8 @@ what it applies in its support record's `circuits.subsets` section.
 
 ### Unit tables
 
-The values a treatment's `from` values read are a `kind: unit_table` document (`venngram.tables`): one row per
-`(layer, unit)`, typed columns that each state their meaning (a `description`, optionally a `measure` and a `dtype` of
+The values a treatment's `from` values read are a `kind: unit_table` document (`venngram.tables`): one row per key
+(`key: [layer, unit]` unless the table declares another), typed columns that each state their meaning (a `description`, optionally a `measure` and a `dtype` of
 `float` or `int`), and its provenance: the checkpoint the values were measured on (`model: {id, revision}`) and its
 `source` with a `license` and a `version`, `commit` or `revision`. A table says what its values are, not why they were
 chosen, so a measured statistic, a published setting and a random-unit null are all tables. A book names the tables its
@@ -215,8 +215,13 @@ A table holds one finding per unit: a unit that is a finding for two targets is 
 refused when the book loads, as is a transform such as `sign_of` reading a column the table lacks; a book without one
 leaves the tables to its caller. `AddressBook.unit_tables()` gives the tables in the shape a consumer takes
 (`{table: {column: {(layer, unit): value}}}`), and a large table goes to a safetensors sidecar (`rows: {file, sha256}`)
-with integer `layer` and `unit` columns. The `(layer, unit)` key is a starting point: a looped model's layer is the
-weight layer a visit reads, and models not built from layers would need another key, which a later schema would add.
+with integer `layer` and `unit` columns.
+
+A table declares the coordinates its rows are keyed by, from `stack`, `layer` and `unit`, and a reader refuses a key
+it does not know by name, so the key can grow (a pass, a position) without being misread. A unit target sits in one
+block stack, and a table whose key has no `stack` is the primary stack's: a target in another stack (`stack: vision`)
+is refused against it. A table keyed by `[stack, layer, unit]` gives each row's stack (a row without one is the
+primary stack's), and `unit_tables(stack="vision")` gives that stack's rows.
 
 ### Sharing documents: manifests and stores
 
