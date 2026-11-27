@@ -1,0 +1,32 @@
+/* venngram's docs share finetuning-scheduler's and interpretune's layout: stock pydata-sphinx-theme, full width. */
+
+/* pydata-sphinx-theme centres an 88rem page and caps the article at 60em, which leaves most of a wide window empty.
+   Pin both sidebars at fixed widths and let the article take the rest, so wide tables and code use the room. */
+.bd-page-width {
+    max-width: none;
+}
+
+.bd-main .bd-content .bd-article-container {
+    max-width: none;
+}
+
+/* with no header links (``navbar_center: []``), push search, the theme switcher and the icons to the right edge */
+.bd-header .navbar-header-items__end {
+    margin-left: auto;
+}
+
+@media (min-width: 960px) {
+    .bd-sidebar-primary {
+        flex: 0 0 20rem;
+        width: 20rem;
+        max-width: 20rem;
+    }
+}
+
+@media (min-width: 1200px) {
+    .bd-sidebar-secondary {
+        flex: 0 0 17rem;
+        width: 17rem;
+        max-width: 17rem;
+    }
+}

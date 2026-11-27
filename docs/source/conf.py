@@ -57,10 +57,37 @@ myst_heading_anchors = 3
 
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 
+# The layout finetuning-scheduler's and interpretune's docs share: stock pydata-sphinx-theme at full width
+# (_static/main.css), and the whole captioned toctree in the primary sidebar on every page
+# (_templates/sidebar-nav-full.html), since every page is a child of ``index``.
 html_theme = "pydata_sphinx_theme"
 html_title = f"venngram {release}"
-html_theme_options = {"github_url": REPO, "show_toc_level": 2, "navigation_with_keys": False}
-html_static_path: list[str] = []
+# Read the Docs supplies the canonical URL of the version being built; local builds fall back to ``latest``.
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "https://venngram.readthedocs.io/en/latest/")
+html_theme_options = {
+    "github_url": REPO,
+    "navbar_center": [],
+    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "show_nav_level": 1,
+    "navigation_depth": 2,
+    "collapse_navigation": False,
+    "show_toc_level": 2,
+    "navigation_with_keys": False,
+    "secondary_sidebar_items": ["page-toc", "sourcelink"],
+    "footer_start": ["copyright"],
+    "footer_end": ["sphinx-version", "theme-version"],
+}
+html_sidebars = {"**": ["sidebar-nav-full"]}
+html_context = {"github_user": "speediedan", "github_repo": "venngram", "github_version": "main",
+                "doc_path": "docs/source"}
+html_static_path = ["_static"]
+html_css_files = ["main.css"]
+templates_path = ["_templates"]
+
+# sphinx-copybutton: copy the code, not the ``>>>``/``...`` prompts or doctest output
+copybutton_prompt_text = r">>> |\.\.\. |\$ "
+copybutton_prompt_is_regexp = True
+copybutton_only_copy_prompt_lines = True
 exclude_patterns = ["_build"]
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 master_doc = "index"
