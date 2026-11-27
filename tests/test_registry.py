@@ -346,3 +346,30 @@ def test_cache_only_scopes_the_calling_context_and_refuses_stores_that_cannot(tm
         with pytest.raises(CacheMissError, match="cannot read cache-only"):
             registry.rows("component_map", "TinyDecoder", locations=["remote:x"])
     assert not cache_only_active()
+
+
+def test_a_location_publishing_a_map_at_two_schemas_serves_each_reader_the_newest_it_reads(tmp_path, monkeypatch):
+    pytest.importorskip("transformers")
+    from test_maps import tiny
+
+    from venngram.maps.verification import with_layouts
+
+    v5 = seed_doc("llama.yaml")
+    v6 = with_layouts(v5, tiny("LlamaForCausalLM"))
+    assert (v5["schema_version"], v6["schema_version"]) == (5, 6)
+    # the older document is listed first, so crawl order alone would serve it
+    root = tmp_path / "both"
+    for sub, doc in (("v5", v5), ("v6", v6)):
+        (root / sub).mkdir(parents=True)
+        (root / sub / "llama.yaml").write_text(yaml.safe_dump(doc))
+    publish("local", str(root), root, documents=[("component_map", "v5/llama.yaml"),
+                                                  ("component_map", "v6/llama.yaml")])
+    both = f"local:{root}"
+    registry.set_registries([build(tmp_path, [both])])
+    assert [r.schema_version for r in registry.rows("component_map", "LlamaForCausalLM")] == [6, 5]
+    assert component_map_for("LlamaForCausalLM").unit_block_of("attn.o", 0) == 4
+    registry.clear_cache()
+    monkeypatch.setattr(registry, "newest_readable", lambda kind, subject="": 5)  # a reader from before schema 6
+    with pytest.warns(registry.NewerSchemaWarning, match="passed over"):
+        older = component_map_for("LlamaForCausalLM")
+    assert older.unit_block_of("attn.o", 0) is None
