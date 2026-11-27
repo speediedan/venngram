@@ -155,12 +155,13 @@ def test_a_consumer_declares_parameter_targets_and_the_record_takes_schema_4():
     assert check_support(treatment, steering) == ["weights op 0 (`scale`): target `param_units` is not supported"]
     weights = Support(ops=frozenset({"scale"}), targets=frozenset({"units", "param_units"}))
     assert check_support(treatment, weights) == []
-    record = SupportRecord(sections={"steering": weights})
+    record = SupportRecord(sections={"treatments": weights})
     doc = record.to_mapping()
-    assert doc["schema_version"] == 4 and SupportRecord.from_mapping(doc).steering == weights
+    assert doc["schema_version"] == 9 and SupportRecord.from_mapping(doc).treatments == weights
+    old = {"schema_version": 4, "kind": "support_record", "sections": {"steering": doc["sections"]["treatments"]}}
+    assert SupportRecord.from_mapping(old).treatments == weights
     with pytest.raises(ValueError, match="parameter targets \\['param_units'\\] need support record schema 4"):
-        SupportRecord.from_mapping({**doc, "schema_version": 3})
-    assert SupportRecord(sections={"steering": steering}).to_mapping()["schema_version"] == 2
+        SupportRecord.from_mapping({**old, "schema_version": 3})
 
 
 def test_an_op_declaring_a_parameter_target_needs_op_specs_schema_2():

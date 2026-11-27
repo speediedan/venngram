@@ -36,9 +36,11 @@ component map       5 -> 6     none (schema 6 adds per-row ``unit_block``, which
 component map       6 -> 7     none (schema 7 adds an optional execution map)
 overlay map         4 -> 5     none (schema 5 adds templates)
 support record      1 -> 2     the top-level steering contract moves under ``sections.steering``
+support record      2-8 -> 9   ``sections.steering`` is renamed ``treatments``, ``circuits.evidence`` ``levels``
 ==================  =========  ==================================================================================
 
-An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a support record at schema 2 to 4, a
+An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a support record that uses neither
+old name, a
 rule set, an ``op_specs`` document (2 adds parameter targets), a ``weight_patch`` document, a ``graph_subset``
 document and an ``unit_table`` document are current already. A book that names graphs reads them relative to
 ``base_dir`` (the document's directory, from the command line). A document newer than this venngram reads is refused as
@@ -103,14 +105,30 @@ def _overlay_map(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str
 
 
 def _support_record(doc: dict[str, Any], source: str, steps: list[str]) -> dict[str, Any]:
-    from venngram.support import SCHEMA_VERSION, SupportRecord
+    import warnings
 
-    SupportRecord.from_mapping(doc, source=source)
+    from venngram.deprecation import VenngramDeprecationWarning
+    from venngram.support import SCHEMA_VERSION, SECTION_ALIASES, SupportRecord, TREATMENTS_SCHEMA
+
+    with warnings.catch_warnings():  # the old names are what this rewrites, so reading them does not warn here
+        warnings.simplefilter("ignore", VenngramDeprecationWarning)
+        SupportRecord.from_mapping(doc, source=source)
     if doc.get("schema_version") == 1:
         head = {k: doc[k] for k in ("name", "description") if k in doc}
         steering = {k: v for k, v in doc.items() if k not in ("schema_version", "kind", "name", "description")}
         doc = {"schema_version": SCHEMA_VERSION, "kind": "support_record", **head, "sections": {"steering": steering}}
         steps.append(f"support record 1 -> {SCHEMA_VERSION}: the steering contract moved under `sections.steering`")
+    version = doc["schema_version"]
+    sections = doc.get("sections") or {}
+    circuits = sections.get("circuits")
+    if version < TREATMENTS_SCHEMA and (set(SECTION_ALIASES) & set(sections) or
+                                        isinstance(circuits, dict) and "evidence" in circuits):
+        renamed = {SECTION_ALIASES.get(k, k): v for k, v in sections.items()}
+        if isinstance(circuits, dict) and "evidence" in circuits:
+            renamed["circuits"] = {("levels" if k == "evidence" else k): v for k, v in circuits.items()}
+        doc = {**doc, "schema_version": TREATMENTS_SCHEMA, "sections": renamed}
+        steps.append(f"support record {version} -> {TREATMENTS_SCHEMA}: `sections.steering` is now `treatments` and "
+                     "`circuits.evidence` `levels`")
     SupportRecord.from_mapping(doc, source=source)
     return doc
 

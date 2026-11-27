@@ -110,9 +110,10 @@ def test_a_consumer_declares_the_ops_it_applies_to_parameter_gradients_at_suppor
         "gradients op 0 (`scale`): the op is not applied to parameter gradients (`gradient_ops`: [])"]
     grads = Support(ops=frozenset({"scale"}), targets=frozenset({"param_units"}), gradient_ops=frozenset({"scale"}))
     assert check_support(treatment, grads) == []
-    doc = SupportRecord(sections={"steering": grads}).to_mapping()
-    assert doc["schema_version"] == 5 and doc["sections"]["steering"]["gradient_ops"] == ["scale"]
-    assert SupportRecord.from_mapping(doc).steering == grads
+    doc = SupportRecord(sections={"treatments": grads}).to_mapping()
+    assert doc["schema_version"] == 9 and doc["sections"]["treatments"]["gradient_ops"] == ["scale"]
+    assert SupportRecord.from_mapping(doc).treatments == grads
+    old = {"schema_version": 5, "kind": "support_record", "sections": {"steering": doc["sections"]["treatments"]}}
+    assert SupportRecord.from_mapping(old).treatments == grads  # a schema 5 record names the section `steering`
     with pytest.raises(ValueError, match="`gradient_ops` needs support record schema 5, not 4"):
-        SupportRecord.from_mapping({**doc, "schema_version": 4})
-    assert SupportRecord(sections={"steering": weights_only}).to_mapping()["schema_version"] == 4
+        SupportRecord.from_mapping({**old, "schema_version": 4})

@@ -15,6 +15,9 @@ import warnings
 import pytest
 import yaml
 
+import venngram.deprecation
+from venngram.deprecation import VenngramDeprecationWarning
+
 from venngram.book import AddressBook
 from venngram.conformance import check
 from venngram.ops import Support
@@ -42,7 +45,7 @@ def test_default_tuning_support_does_not_advertise_execution_passes():
 
 def test_a_tuning_section_refuses_what_its_consumer_cannot_tune():
     record = SupportRecord.from_mapping(TUNER)
-    assert record.tuning is not None and record.steering is None and record.circuits is None
+    assert record.tuning is not None and record.treatments is None and record.circuits is None
     assert record.check_book(book({"top": "role:adapter & layers:-4:", "attn": {"component": "attn.*"}})) == []
     refusals = record.check_book(book({"site": {"point": "resid_post", "layers": 3},
                                        "neurons": {"module": "mlp.down_proj", "units": [1, 2]}},
@@ -111,18 +114,18 @@ def test_imported_books_are_checked_under_their_namespace(tmp_path):
 
 def test_a_section_the_record_omits_is_a_contract_it_does_not_offer():
     record = SupportRecord.from_mapping(TUNER)
-    assert record.check_treatment(object()) == ["treatment `?`: `tuner` declares no `steering` section, so it offers "
-                                                "no steering contract"]
+    assert record.check_treatment(object()) == ["treatment `?`: `tuner` declares no `treatments` section, so it "
+                                                "offers no treatments contract"]
     steerer = as_record(Support(ops=frozenset({"add"}), name="steerer"))
     assert steerer.check_book(book({"x": "role:adapter"})) == [
         "b: `steerer` declares no `tuning` section, so it offers no tuning contract"]
 
 
-def test_schema_1_records_read_as_a_steering_section():
+def test_schema_1_records_read_as_a_treatments_section():
     record = SupportRecord.from_mapping({"schema_version": 1, "kind": "support_record", "name": "s", "ops": ["add"],
                                          "tokens": ["all", "prompt"]})
-    assert set(record.sections) == {"steering"} and record.steering.tokens == frozenset({"all", "prompt"})
-    assert record.to_mapping()["sections"]["steering"]["tokens"] == ["all", "prompt"]
+    assert set(record.sections) == {"treatments"} and record.treatments.tokens == frozenset({"all", "prompt"})
+    assert record.to_mapping()["sections"]["treatments"]["tokens"] == ["all", "prompt"]
 
 
 def test_unknown_sections_are_skipped_by_name_and_kept_as_written():
@@ -158,25 +161,91 @@ def test_a_registered_extension_section_is_parsed(monkeypatch):
         register_support_section("acme.probes", lambda doc, source: doc)
 
 
-def test_a_circuits_section_names_graphs_nodes_features_and_evidence():
-    record = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "name": "tracer", "sections": {
+def test_a_circuits_section_names_graphs_nodes_features_and_levels():
+    record = SupportRecord.from_mapping({"schema_version": 9, "kind": "support_record", "name": "tracer", "sections": {
         "circuits": {"graphs": ["attribution"], "nodes": ["feature", "error", "embedding", "logit"],
-                     "features": ["clt", "transcoder"], "evidence": ["traced", "pruned"]}}})
+                     "features": ["clt", "transcoder"], "levels": ["traced", "pruned"]}}})
     assert record.circuits == CircuitSupport(graphs=frozenset({"attribution"}),
                                              nodes=frozenset({"feature", "error", "embedding", "logit"}),
                                              features=frozenset({"clt", "transcoder"}),
-                                             evidence=frozenset({"traced", "pruned"}))
-    assert SupportRecord.from_mapping(record.to_mapping()) == record
+                                             levels=frozenset({"traced", "pruned"}))
+    assert SupportRecord.from_mapping(record.to_mapping()) == record and record.to_mapping()["schema_version"] == 9
+
+
+def test_a_schema_8_record_reads_its_old_names_with_a_deprecation_warning():
+    old = {"schema_version": 6, "kind": "support_record", "name": "old", "sections": {
+        "steering": {"ops": ["add"]}, "circuits": {"graphs": ["attribution"], "evidence": ["traced"]}}}
+    with venngram.deprecation.strict():
+        with pytest.raises(VenngramDeprecationWarning, match="support record section `steering` is deprecated.*"
+                                                             "use `treatments`"):
+            SupportRecord.from_mapping(old)
+        with pytest.raises(VenngramDeprecationWarning, match="`circuits.evidence` .*use `circuits.levels`"):
+            SupportRecord.from_mapping({**old, "sections": {"circuits": old["sections"]["circuits"]}})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", VenngramDeprecationWarning)
+        record = SupportRecord.from_mapping(old)
+    assert record.treatments.ops == {"add"} and record.circuits.levels == {"traced"}
+    written = record.to_mapping()  # written with the schema 9 names
+    assert written["schema_version"] == 9 and set(written["sections"]) == {"treatments", "circuits"}
+    assert written["sections"]["circuits"]["levels"] == ["traced"]
+
+
+@pytest.mark.parametrize("version, sections, match", [
+    (9, {"steering": {"ops": ["add"]}}, "named `treatments` from support record schema 9"),
+    (9, {"circuits": {"evidence": ["traced"]}}, "`evidence` is named `levels` from support record schema 9"),
+    (8, {"treatments": {"ops": ["add"]}}, "`treatments` needs support record schema 9, not 8 .*names it `steering`"),
+    (8, {"circuits": {"levels": ["traced"]}}, "`levels` needs support record schema 9, not 8"),
+    (8, {"tuning": {"units": "grad-mask"}}, "`units: grad-mask` needs support record schema 9, not 8"),
+    (2, {"steering": {"ops": ["add"]}, "treatments": {"ops": ["add"]}}, "`treatments` needs support record schema 9"),
+])
+def test_a_name_from_the_other_side_of_schema_9_is_refused_by_name(version, sections, match):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", VenngramDeprecationWarning)
+        with pytest.raises(ValueError, match=match):
+            SupportRecord.from_mapping({"schema_version": version, "kind": "support_record", "sections": sections})
+
+
+def test_steering_cannot_be_registered_as_an_extension_section():
+    with pytest.raises(ValueError, match="namespaced"):
+        register_support_section("steering", lambda doc, source: doc)
+
+
+GRAD_MASKER = {"schema_version": 9, "kind": "support_record", "name": "masker", "sections": {
+    "tuning": {"fields": ["role", "name", "module", "layers", "units", "of"], "targets": ["param"],
+               "units": "grad-mask"}}}
+
+
+def test_a_grad_mask_consumer_takes_unit_sets_only_as_gradient_masks():
+    record = SupportRecord.from_mapping(GRAD_MASKER)
+    assert record.tuning.units == "grad-mask" and SupportRecord.from_mapping(record.to_mapping()) == record
+    assert record.to_mapping()["schema_version"] == 9
+    accepted = book({"rows": "module:q_proj & units:[0, 3] & of:grad",
+                     "heads": {"module": "o_proj", "units": [1]},  # a unit set its users mask
+                     "masked": "@heads & of:grad",
+                     "thaw": "module:k_proj"}, schema_version=2)
+    assert record.check_book(accepted) == []
+    refusals = record.check_book(book({"values": {"module": "q_proj", "units": [0, 3]},
+                                       "stated": "module:q_proj & units:[1] & of:value"}, schema_version=2))
+    assert refusals == [
+        "b: set `values`: it selects units as values (`module:q_proj & units:[0,3]`), and this consumer applies unit "
+        "sets only as gradient masks (`units: grad-mask`), under `of: grad`",
+        "b: set `stated`: it selects units as values (`module:q_proj & units:[1] & of:value`), and this consumer "
+        "applies unit sets only as gradient masks (`units: grad-mask`), under `of: grad`"]
+    none = SupportRecord.from_mapping({**GRAD_MASKER, "sections": {"tuning": {**GRAD_MASKER["sections"]["tuning"],
+                                                                              "units": "none"}}})
+    assert any("tunes no unit sets (`units: none`)" in r for r in none.check_book(accepted))
 
 
 @pytest.mark.parametrize("doc, match", [
-    ({**TUNER, "schema_version": 9}, "support record schema 9 is newer than this venngram reads"),
+    ({**TUNER, "schema_version": 10}, "support record schema 10 is newer than this venngram reads"),
     ({**TUNER, "ops": ["add"]}, "contracts go under `sections`"),
     ({**TUNER, "sections": {}}, "maps each contract"),
     ({**TUNER, "sections": {"tuning": {"units": "lora"}}}, "`units` is one of"),
     ({**TUNER, "sections": {"tuning": {"fields": ["neuron"]}}}, "does not define"),
     ({**TUNER, "sections": {"circuits": {"evidence": ["guessed"]}}}, "does not define"),
+    ({**TUNER, "schema_version": 9, "sections": {"circuits": {"levels": ["guessed"]}}}, "does not define"),
     ({**TUNER, "sections": {"steering": {"ops": ["add"], "speed": 1}}}, "unknown"),
+    ({**TUNER, "sections": {"tuning": {"units": ["grad-mask"]}}}, "`units` is one of"),
     ({**TUNER, "extensions": {"probes": {"schema": "x"}}}, "not namespaced"),
     ({**TUNER, "extensions": {"acme.probes": {}}}, "gives the `schema`"),
 ])

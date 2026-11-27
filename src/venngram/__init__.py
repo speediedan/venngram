@@ -26,7 +26,7 @@ specification of the neural traces it targets.
 - :mod:`venngram.treatment`: treatments over a book's sets, and their composition;
 - :mod:`venngram.ops`: treatment ops as declared specs and value transforms;
 - :mod:`venngram.tables`: unit tables, the recorded values a treatment's ``from`` values read;
-- :mod:`venngram.support`: consumers' support records, by section (steering, tuning, circuits, extensions);
+- :mod:`venngram.support`: consumers' support records, by section (treatments, tuning, circuits, extensions);
 - :mod:`venngram.operands`: the tensors treatment ops act with, as sidecar files;
 - :mod:`venngram.manifest`: the manifest (``venngram.yaml``) that lists a directory's documents;
 - :mod:`venngram.store`: document references, and the stores (a directory, Hub repositories and buckets) they name;

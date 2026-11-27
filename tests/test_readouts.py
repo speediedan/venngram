@@ -155,8 +155,9 @@ def test_a_consumer_declares_the_reductions_it_computes():
                                             "readout term 1: reduction `sum` is not computed (`readouts`: [])"]
     computes = Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}), readouts=frozenset({"sum"}))
     assert check_support(treatment, computes) == []
-    doc = SupportRecord(sections={"steering": computes}).to_mapping()
-    assert doc["schema_version"] == 5 and doc["sections"]["steering"]["readouts"] == ["sum"]
-    assert SupportRecord.from_mapping(doc).steering == computes
+    doc = SupportRecord(sections={"treatments": computes}).to_mapping()
+    assert doc["schema_version"] == 9 and doc["sections"]["treatments"]["readouts"] == ["sum"]
+    assert SupportRecord.from_mapping(doc).treatments == computes
+    old = {"schema_version": 5, "kind": "support_record", "sections": {"steering": doc["sections"]["treatments"]}}
     with pytest.raises(ValueError, match="`readouts` needs support record schema 5, not 4"):
-        SupportRecord.from_mapping({**doc, "schema_version": 4})
+        SupportRecord.from_mapping({**old, "schema_version": 4})

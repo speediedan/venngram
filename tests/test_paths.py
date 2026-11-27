@@ -158,7 +158,7 @@ def test_a_consumer_declares_the_waypoint_kinds_its_route_resolver_places():
     record = SupportRecord.from_mapping({"schema_version": 8, "kind": "support_record", "name": "r", "sections": {
         "steering": {"ops": [], "targets": ["path"], "gradient_ops": ["stop", "route"],
                      "routes": ["address", "anchor"]}}})
-    assert record.to_mapping()["schema_version"] == 8
+    assert record.to_mapping()["schema_version"] == 9 and record.treatments.routes == {"address", "anchor"}
     with pytest.raises(ValueError, match="`routes` needs support record schema 8, not 7"):
         SupportRecord.from_mapping({"schema_version": 7, "kind": "support_record", "sections": {
             "steering": {"ops": [], "routes": ["address"]}}})
