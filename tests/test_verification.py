@@ -326,3 +326,31 @@ def test_a_gated_query_projection_measures_whole_heads_of_query_and_gate():
     cmap = from_document(with_layouts(seed_document("LlamaForCausalLM"), model))
     assert [cmap.unit_block_of(f"attn.{p}", 0) for p in ("q", "k", "v", "o")] == [8, 4, 4, 4]
     assert check_unit_blocks(cmap, model).status == "passed"  # 4 query heads of 8 over 2 key/value heads of 4
+
+
+def test_the_view_measures_a_head_size_from_the_sources_the_builder_reads():
+    model = tiny("LlamaForCausalLM")
+    for layer in model.model.layers:  # the attention module states only head_dim; a distant config states a count
+        del layer.self_attn.config
+    model.config.num_attention_heads = 2
+    cmap = from_document(with_layouts(seed_document("LlamaForCausalLM"), model))
+    name = f"{cmap.module_for('attn.o', 1)}.weight"
+    assert cmap.unit_block_of("attn.o", 1) == 4 == MapStructure(model, cmap).unit_block(name)
+
+
+def test_a_packed_quantized_weight_is_not_measured_so_the_recorded_size_stands():
+    model = tiny("LlamaForCausalLM")
+    cmap = from_document(with_layouts(seed_document("LlamaForCausalLM"), model))
+    o_proj = model.model.layers[1].self_attn.o_proj
+    o_proj.weight = nn.Parameter(torch.empty(o_proj.in_features * o_proj.out_features // 2, 1, dtype=torch.uint8,
+                                             device="meta"), requires_grad=False)  # a 4-bit weight, two per byte
+    assert MapStructure(model, cmap).unit_block(f"{cmap.module_for('attn.o', 1)}.weight") == 4
+
+
+def test_output_heads_read_value_heads_of_the_same_width():
+    model = tiny("LlamaForCausalLM")
+    doc = with_layouts(seed_document("LlamaForCausalLM"), model)
+    for p in ("q", "o"):
+        doc["components"][f"blocks.{{i}}.attn.{p}"]["unit_block"] = 8  # 2 heads of 8 over 2 key/value heads of 4
+    check = check_unit_blocks(from_document(doc), model)
+    assert check.status == "failed" and any("which it reads" in str(p) for p in check.problems)

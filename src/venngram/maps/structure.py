@@ -61,7 +61,8 @@ def architecture_of(model: nn.Module) -> list[str]:
 def unit_width(module: Any, component: str, layout: str | None) -> int | None:
     """The width of ``module``'s weight along ``component``'s unit side, given its recorded ``layout``."""
     side, weight = UNIT_SIDES.get(component), getattr(module, "weight", None)
-    if side is None or layout is None or not isinstance(weight, torch.Tensor) or weight.ndim != 2:
+    if side is None or layout is None or not isinstance(weight, torch.Tensor) or weight.ndim != 2 \
+            or not weight.is_floating_point():  # a packed quantized weight's shape is not the projection's
         return None
     return int(weight.shape[0 if layout.startswith(side) else 1])
 
@@ -370,7 +371,8 @@ class MapStructure:
         return recorded
 
     def _measured_block(self, owner: str, loc: Location) -> int | None:
-        """The head size ``owner`` (a row's module) measures: from it, its ancestors and their configurations."""
+        """The head size ``owner`` (a row's module) measures, from the sources the map builder reads: the module, its
+        attention module (the ``attn`` row's, else its parent) and that module's configuration."""
         if self._modules is None:
             self._modules = {strip_wrappers(n): m for n, m in self._root.named_modules()}
         module = self._modules.get(owner)
@@ -378,14 +380,17 @@ class MapStructure:
         width = unit_width(module, component, self.cmap.layout_of(component, loc.layer, loc.stack))
         if module is None or width is None:
             return None
-        sources: list[Any] = [module]
-        path = owner
-        while path:
-            path = path.rpartition(".")[0]
-            parent = self._modules.get(path)
-            if parent is not None:
-                sources += [parent, getattr(parent, "config", None)]
-        return head_size(component, sources, width)
+        path = self._root_path(self.cmap.module_for("attn", loc.layer, loc.stack))
+        attention = self._modules.get(path if path is not None else owner.rpartition(".")[0])
+        return head_size(component, (module, attention, getattr(attention, "config", None)), width)
+
+    def _root_path(self, path: str | None) -> str | None:
+        """A map module path as the (wrapper-stripped) path of the module under this structure's root."""
+        rel = self._relative(path)
+        if rel is None:
+            return None
+        lead = strip_wrappers(f"{self.mount}.") if self.mount else ""
+        return f"{lead}{rel}" if rel else lead[:-1]
 
     def depth(self, stack: str | None = None) -> int | Refusal:
         """The number of blocks in ``stack`` (the primary one when ``None``), or why it is unknown."""

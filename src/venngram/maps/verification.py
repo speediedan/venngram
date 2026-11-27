@@ -299,6 +299,12 @@ def check_unit_blocks(cmap: ComponentMap, model: nn.Module) -> CheckResult:
                 peer, peer_count, peer_size = pair[1]
                 problems.append(MapProblem(key, layer, f"its {count} heads of width {size} do not match "
                                            f"{peer}'s {peer_count} heads of width {peer_size}"))
+        if "attn.v" in projections and "attn.o" in projections \
+                and projections["attn.v"][2] != projections["attn.o"][2]:  # o reads the heads v writes
+            key, count, size = projections["attn.o"]
+            v_key, _, v_size = projections["attn.v"]
+            problems.append(MapProblem(key, layer, f"its heads of width {size} do not match the width {v_size} of "
+                                       f"{v_key}'s heads, which it reads"))
         for key, query, q_size in queries:
             for kv_key, kv, kv_size in keys_values:
                 if query % kv:
