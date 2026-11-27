@@ -1,0 +1,25 @@
+# Golden fixture: an address book at schema 13, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 13
+name: golden-tables
+portability: checkpoint
+applies_to:
+  models:
+  - {id: Qwen/Qwen3.5-4B, revision: abc123}
+sets:
+  found: {point: mlp.out.hook_in, units: {13: [4810]}}
+tables:
+  finding:
+    model: {id: Qwen/Qwen3.5-4B, revision: abc123}
+    source: {name: example-finder, commit: 0f3a9c1, license: MIT}
+    columns:
+      dose: {description: signed steering dose, measure: dose_unit}
+    rows:
+    - {layer: 13, unit: 4810, dose: 1.5}
+treatments:
+  steer:
+    model: {id: Qwen/Qwen3.5-4B, revision: abc123}
+    stages:
+    - site: mlp.out.hook_in
+      ops:
+      - {op: add, target: {set: found}, value: {from: {table: finding, column: dose}}}

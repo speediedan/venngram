@@ -1,6 +1,6 @@
 # Conformance vectors for venngram's value transforms (venngram.ops.transform_cases, check_transforms). Each case is a
 # transform pipeline over one op's members: `value` is the op's value source (`dose`, `doses` as one starting value per
-# member, or `from: <column>`), each member gives its row of the `from` evidence table (`columns`) and the statistics
+# member, or `from: <column>`), each member gives its row of the `from` unit table (`columns`) and the statistics
 # a consumer would supply for it, and `expect` is every member's value after the pipeline, in member order.
 schema_version: 1
 kind: transform_vectors

@@ -29,9 +29,9 @@ A directory of venngram documents (a Hub repository, a bucket prefix, a local fo
     layout: {address_book: "books/{name}.yaml"}   # optional: how a writer names new documents of a kind
 
 **Readers use the manifest only**, never a path convention. Every document is listed with its kind, its own schema
-version, the sha256 of its content and the files it needs (an address book's sidecars, imported books and graphs, and
-the weight patches its treatments name), so a store fetches exactly a document and what it needs, and a layout can
-change without breaking a reader.
+version, the sha256 of its content and the files it needs (an address book's sidecars, imported books, graphs and
+unit tables, and the weight patches its treatments name), so a store fetches exactly a document and what it
+needs, and a layout can change without breaking a reader.
 
 **Versions.** A manifest schema outside :data:`MANIFEST_WINDOW`, and a ``requires.venngram`` this version does not
 satisfy, are refused by name. A document of an unknown ``kind`` is skipped with a warning (kept in
@@ -71,9 +71,11 @@ MANIFEST_WINDOW = (1, 1)
 #: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's recipe ops
 #: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a treatment's weight patch (:mod:`venngram.patches`), and
 #: ``weight_delta`` its sidecar, read through the patch; ``graph_subset`` is a graph subset a book names
-#: (:mod:`venngram.graphs`), and ``graph_table`` its table sidecar, read through the graph.
+#: (:mod:`venngram.graphs`), and ``graph_table`` its table sidecar, read through the graph; ``unit_table`` is a
+#: unit table a book names (:mod:`venngram.tables`), and ``unit_table_rows`` its row sidecar, read through the table
+#: (or through the book, for a table written inline).
 KINDS = ("address_book", "component_map", "rules", "verification_record", "units", "index", "support_record",
-         "op_specs", "weight_patch", "weight_delta", "graph_subset", "graph_table")
+         "op_specs", "weight_patch", "weight_delta", "graph_subset", "graph_table", "unit_table", "unit_table_rows")
 
 #: Kinds an earlier version listed and this one no longer reads, with what to do about a document of one.
 _RETIRED = {"recipe": "a treatment is written in its book now; run `python -m venngram.migrate` on the document to "
@@ -320,7 +322,21 @@ def _book_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
         if isinstance(ref, Mapping) and isinstance(ref.get("file"), str):
             path = base / ref["file"]
             out += [("graph_subset", path), *_graph_needs(_read_yaml(path), path.parent)]
+    for ref in (doc.get("tables") or {}).values():
+        if isinstance(ref, Mapping) and isinstance(ref.get("file"), str):
+            path = base / ref["file"]
+            out += [("unit_table", path), *_table_needs(_read_yaml(path), path.parent)]
+        else:  # a table written inline: its row sidecar resolves against the book
+            out += _table_needs(ref, base)
     return out
+
+
+def _table_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
+    """The row sidecar a unit table's ``rows`` names."""
+    rows = doc.get("rows") if isinstance(doc, Mapping) else None
+    if isinstance(rows, Mapping) and isinstance(rows.get("file"), str):
+        return [("unit_table_rows", base / rows["file"])]
+    return []
 
 
 def _graph_needs(doc: Any, base: Path) -> list[tuple[str, Path]]:
@@ -354,7 +370,8 @@ def _read_yaml(path: Path) -> Any:
         return yaml.safe_load(fh)
 
 
-_NEEDS = {"address_book": _book_needs, "weight_patch": _patch_needs, "graph_subset": _graph_needs}
+_NEEDS = {"address_book": _book_needs, "weight_patch": _patch_needs, "graph_subset": _graph_needs,
+          "unit_table": _table_needs}
 
 
 def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, requires: Mapping[str, str] | None = None,
@@ -362,7 +379,8 @@ def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, re
     """A manifest for ``documents`` (``(kind, path)`` pairs, paths relative to ``root``).
 
     Each document is hashed, its schema version read, and the files it needs (an address book's sidecars, relative
-    imports, graphs and its treatments' weight patches) found and listed too, each as an entry of its own kind.
+    imports, graphs, unit tables and its treatments' weight patches) found and listed too, each as an entry of its
+    own kind.
 
     Raises:
         StoreError: If a document or a file it needs is missing or outside ``root``, or a document is of a retired

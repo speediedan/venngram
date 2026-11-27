@@ -125,7 +125,7 @@ selection and what is done to it travel together in one document. A treatment (a
 is ordered **stages**, each applying ordered **ops** at one site under one
 token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
-a per-unit table, or a column of recorded evidence through declared transforms, each with a stated meaning and
+a per-unit table, or a column of a unit table through declared transforms, each with a stated meaning and
 conformance vectors a consumer's evaluator runs). A unit target is one address with explicit layers and `units`, or a
 composition of such sets at one site with the set algebra (`@a & @b`, `@a | @b`, `(@a & @b & layers:12) - @control`),
 resolved over `(layer, unit)` pairs when the recipe is read; an empty, mixed-site or feature-set composition is refused
@@ -185,16 +185,49 @@ state). Each node carries an **anchor** that places it in a new prompt: an `abso
 `GraphSubset.plan` resolves every node before returning: a node without an anchor, an anchor that does not resolve, or
 two nodes landing on one coordinate refuses the whole plan, never dropping a node. A restriction
 (`outside: {set: ...}`) targets everything else in a finite feature set of the book, for ablating all but the subset
-(`GraphSubset.restriction`). Only feature nodes are applied; error, embedding and logit nodes and edges are evidence. A
+(`GraphSubset.restriction`). Only feature nodes are applied; error, embedding and logit nodes and edges are context. A
 large table goes to a sidecar (`nodes: {file, sha256}`): a safetensors file of typed columns, one row per node, where
 integer identities stay integer columns. `anchor_cases` gives conformance vectors for anchoring, and a consumer declares
 what it applies in its support record's `circuits.subsets` section.
 
+### Unit tables
+
+The values a treatment's `from` values read are a `kind: unit_table` document (`venngram.tables`): one row per key
+(`key: [layer, unit]` unless the table declares another), typed columns that each state their meaning (a `description`, optionally a `measure` and a `dtype` of
+`float` or `int`), and its provenance: the checkpoint the values were measured on (`model: {id, revision}`) and its
+`source` with a `license` and a `version`, `commit` or `revision`. A table says what its values are, not why they were
+chosen, so a measured statistic, a published setting and a random-unit null are all tables. A book names the tables its
+treatments read under `tables` (book schema 13), each cited by hash or written inline, so it is published with them:
+
+```yaml
+tables:
+  nf_anime: {file: tables/nf_anime.yaml, sha256: 9c1e...}
+treatments:
+  nf_anime:
+    model: {id: Qwen/Qwen3.5-4B, revision: pinned-model-commit}
+    stages:
+      - site: mlp.out.hook_in
+        ops: [{op: add, target: {set: nf_anime}, value: {from: {table: nf_anime, column: dose}}}]
+```
+
+A table holds one finding per unit: a unit that is a finding for two targets is a row in two tables. In a book with a
+`tables` section, a `from` value naming a table or a column the book lacks, or a target member without a row, is
+refused when the book loads, as is a transform such as `sign_of` reading a column the table lacks; a book without one
+leaves the tables to its caller. `AddressBook.unit_tables()` gives the tables in the shape a consumer takes
+(`{table: {column: {(layer, unit): value}}}`), and a large table goes to a safetensors sidecar (`rows: {file, sha256}`)
+with integer `layer` and `unit` columns.
+
+A table declares the coordinates its rows are keyed by, from `stack`, `layer` and `unit`, and a reader refuses a key
+it does not know by name, so the key can grow (a pass, a position) without being misread. A unit target sits in one
+block stack, and a table whose key has no `stack` is the primary stack's: a target in another stack (`stack: vision`)
+is refused against it. A table keyed by `[stack, layer, unit]` gives each row's stack (a row without one is the
+primary stack's), and `unit_tables(stack="vision")` gives that stack's rows.
+
 ### Sharing documents: manifests and stores
 
 A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
-each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports and graphs, and
-the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
+each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports, graphs and
+unit tables, and the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
 names `python -m venngram.migrate`. A **document reference** names one document wherever it lives:
 `<store>:<ref>[@<revision>]:<path>[#<sha256>]`, for example
 `hub-model:speediedan/venngram-maps@3f1e...:maps/Qwen3ForCausalLM.yaml`.
@@ -476,10 +509,11 @@ Published documents outlive the venngram that wrote them, so every document kind
 | component map | 1 to 7 | 6 for maps with `unit_block`, 7 for maps with `execution` | ignored when descriptive |
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
-| address book | 1 to 12 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass | ignored at the top level |
+| address book | 1 to 13 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass, 13 when the book names `tables` | ignored at the top level |
 | recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
+| unit table | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |
 | op declarations (`op_specs`) | 1 to 3 | 1, 2 when a declaration names a parameter target or a `delta` operand, or 3 when one names a path target or a parameter's `choices` | refused |
 | weight patch | 1 | 1 | refused |

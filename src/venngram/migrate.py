@@ -51,9 +51,9 @@ treatment's operand files are rewritten relative to it, and the command refuses 
 book sits in another directory: write the output beside the book instead.
 
 An address book (schema 2 only adds ``of``, schema 3 treatments with ``weights``), a support record at schema 2 to 4, a
-rule set, an ``op_specs`` document (2 adds parameter targets), a ``weight_patch`` document and a ``graph_subset``
-document are current already. A book that names graphs reads them relative to ``base_dir`` (the document's directory,
-from the command line). A document newer than this venngram reads is refused as
+rule set, an ``op_specs`` document (2 adds parameter targets), a ``weight_patch`` document, a ``graph_subset``
+document and an ``unit_table`` document are current already. A book that names graphs reads them relative to
+``base_dir`` (the document's directory, from the command line). A document newer than this venngram reads is refused as
 :class:`~venngram.errors.NewerSchemaError`.
 
 .. warning:: This is an experimental API and may change in a future release.
@@ -203,6 +203,12 @@ def _graph(doc: dict[str, Any], source: str) -> Any:
     return GraphSubset.from_mapping(doc, source=source, base_dir=_BASE.get())
 
 
+def _table(doc: dict[str, Any], source: str) -> Any:
+    from venngram.tables import UnitTable
+
+    return UnitTable.from_mapping(doc, source=source, base_dir=_BASE.get())
+
+
 def _op_specs(doc: dict[str, Any], source: str) -> Any:
     from venngram.ops import read_op_specs
 
@@ -224,7 +230,8 @@ def _rules(doc: dict[str, Any], source: str) -> Any:
 _STEPS: dict[str, Callable[[dict[str, Any], str, list[str]], dict[str, Any]]] = {
     "component_map": _component_map, "overlay_map": _overlay_map, "recipe": _recipe,
     "support_record": _support_record, "address_book": _current(_book), "rules": _current(_rules),
-    "op_specs": _current(_op_specs), "weight_patch": _current(_weight_patch), "graph_subset": _current(_graph)}
+    "op_specs": _current(_op_specs), "weight_patch": _current(_weight_patch), "graph_subset": _current(_graph),
+    "unit_table": _current(_table)}
 
 
 def migrate(doc: Mapping[str, Any], *, source: str = "<document>",

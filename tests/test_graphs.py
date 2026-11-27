@@ -164,7 +164,7 @@ def test_an_all_anchor_expands_and_a_collision_is_refused_not_resolved():
      {"tokenizer": {"id": "other", "revision": "x"}}, "pinned tokenizer"),
 ])
 def test_a_plan_refuses_the_whole_subset_naming_the_node(nodes, kwargs, match):
-    if match is None:  # a node without an anchor is evidence only, and cannot be placed
+    if match is None:  # a node without an anchor is context only, and cannot be placed
         nodes[0].pop("anchor")
         match = "has no anchor"
     graph = GraphSubset.from_mapping(graph_doc(nodes=nodes))
@@ -305,7 +305,7 @@ def _refused(tmp_path, stages, match, **kwargs):
     ([{"site": SITE, "ops": [transfer_op(**{"from": {"graph": "reasoning", "column": "score"}})]}], "no column"),
     ([{"site": SITE, "ops": [transfer_op(**{"from": {"graph": "other", "column": "activation"}})]}],
      "reads graph `other`"),
-    ([{"site": SITE, "ops": [transfer_op(**{"from": {"evidence": "e", "column": "c"}})]}], "not a `from` value"),
+    ([{"site": SITE, "ops": [transfer_op(**{"from": {"table": "e", "column": "c"}})]}], "not a `from` value"),
     ([{"site": SITE, "ops": [transfer_op(**{"from": {"graph": "reasoning", "column": "activation"},
                                             "transform": [{"normalize": {"by": "max_abs"}}]})]}],
      "act on each value alone"),

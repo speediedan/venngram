@@ -29,7 +29,7 @@ composable (books import books, by namespace) and versioned.
       rest: {role: adapter, exclude: "@top"}
 
 **Treatments** are optional: what is done to the book's sets for one model, by name, each the body of a recipe
-(:mod:`venngram.recipe`: ``model``, ``operands``, ``stages``, ``sampling``, ``evidence``) whose targets name this book's
+(:mod:`venngram.recipe`: ``model``, ``operands``, ``stages``, ``sampling``, ``metadata``) whose targets name this book's
 sets, so a selection and what is done to it travel together and a consumer reads one kind of document:
 
 .. code-block:: yaml
@@ -50,6 +50,19 @@ have an empty ``sets``:
     graphs:
       reasoning: {file: reasoning.yaml, sha256: 4be1...}
 
+**Tables** are optional as well: the unit tables (:mod:`venngram.tables`) the book's treatments read their ``from``
+values from, by name, each a ``unit_table`` document beside the book cited by hash, or written inline (the document's
+body without its header). A book with this section is published with the values it reads: its treatments' ``from``
+values name its tables and their columns, and every member of a target has a row, or the book is refused by name. A
+book without it leaves the tables to its caller. The section needs book schema 13: a store lists the tables as files
+the book needs, which an older venngram cannot fetch, so it refuses the book as newer instead.
+
+.. code-block:: yaml
+
+    tables:
+      nf_anime: {file: tables/nf_anime.yaml, sha256: 9c1e...}
+      audit_cards: {model: {...}, source: {...}, columns: {dose: {description: ...}}, rows: [...]}
+
 A standalone ``kind: recipe`` document, written before books and recipes merged, is retired:
 ``python -m venngram.migrate`` rewrites one as its book, carrying the recipe as a treatment (:mod:`venngram.migrate`).
 
@@ -62,7 +75,8 @@ book whose sets use it is schema 2, and every other book stays readable as schem
 adds ``graphs``, and treatments whose ops target a graph; schema 6 the ``axis`` address field, schema 7
 layer sets relative to the depth (``0.25d:0.75d``), schema 8 the model pins in ``requires``, schema 9 element
 masks (``units: {elements: ...}``), schema 10 paths (``path: [...]``, :mod:`venngram.paths`), and schema 11 whole
-attention heads (``units: {heads: ...}``). Schema 12 adds the ``passes`` field for activation sites.
+attention heads (``units: {heads: ...}``). Schema 12 adds the ``passes`` field for activation sites, and schema 13 the
+``tables`` section.
 
 **Requirements are declared.** ``requires.structure`` is the structure a consumer must provide (``physical`` block
 indices, or a ``vocabulary`` of components). ``requires.naming_scheme`` names the vocabulary a book's ``name``,
@@ -118,7 +132,7 @@ from venngram.errors import AddressError, NewerAddressSchemaError, PinMismatchEr
 from venngram.units import sidecar_root
 
 SCHEMA_VERSION = 1
-SCHEMA_WINDOW = (1, 12)
+SCHEMA_WINDOW = (1, 13)
 #: The first schema whose sets may use the ``of`` field (a key that changes what a consumer acts on).
 OF_SCHEMA = 2
 #: The first schema whose treatments may carry a ``weights`` section (ops on parameters).
@@ -143,6 +157,8 @@ PATHS_SCHEMA = 10
 HEADS_SCHEMA = 11
 #: The first schema whose sets may address an execution pass.
 PASSES_SCHEMA = 12
+#: The first schema with a ``tables`` section (unit tables its treatments read).
+TABLES_SCHEMA = 13
 PORTABILITY = ("family", "checkpoint")
 STRUCTURE_LEVELS = ("physical", "vocabulary")
 _SET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -221,6 +237,8 @@ class AddressBook:
     """Treatments by name (each a :class:`venngram.recipe.Recipe` over this book), from the ``treatments`` section."""
     graphs: Mapping[str, Any] = field(default_factory=dict)
     """Graph subsets by name (each a :class:`venngram.graphs.GraphSubset`), from the ``graphs`` section."""
+    tables: Mapping[str, Any] = field(default_factory=dict)
+    """Unit tables by name (each a :class:`venngram.tables.UnitTable`), from the ``tables`` section."""
 
     @classmethod
     def from_mapping(cls, doc: Mapping[str, Any], *, source: str = "<inline>", base_dir: str | Path | None = None,
@@ -268,11 +286,18 @@ class AddressBook:
                 raise AddressError(f"{source}: `requires.base_model` is {base['id']}@{base['revision']}, which is not "
                                    "among the checkpoint's pinned `applies_to.models`.")
         graphs = _graphs(doc.get("graphs"), source, base_dir) if doc.get("graphs") is not None else {}
+        tables = _tables(doc.get("tables"), source, base_dir) if doc.get("tables") is not None else {}
         if graphs and inline and "schema_version" not in doc:
             version = GRAPHS_SCHEMA
         if graphs and version < GRAPHS_SCHEMA:
             raise AddressError(f"{source}: `graphs` needs address book schema {GRAPHS_SCHEMA}, not {version}: an older "
                                "venngram would pass over it silently.")
+        if tables and inline and "schema_version" not in doc:
+            version = max(version, TABLES_SCHEMA)
+        if tables and version < TABLES_SCHEMA:
+            raise AddressError(f"{source}: `tables` needs address book schema {TABLES_SCHEMA}, not {version}: an "
+                               "older venngram would not fetch the tables it names, and would leave its treatments' "
+                               "values to a caller.")
         raw_sets = doc.get("sets")
         if not isinstance(raw_sets, Mapping) or not (raw_sets or graphs):
             raise AddressError(f"{source}: `sets` is a non-empty mapping of set names to addresses (it may be empty "
@@ -363,7 +388,7 @@ class AddressBook:
         extra = {k: v for k, v in doc.items() if k not in _KNOWN_KEYS}
         book = cls(name=str(doc.get("name", source)), schema_version=version, portability=portability,
                    applies_to=applies_to, requires=requires, own_sets=own, imports=imports, source=source,
-                   description=doc.get("description"), extra=extra, graphs=graphs)
+                   description=doc.get("description"), extra=extra, graphs=graphs, tables=tables)
         for set_name, expr in own.items():
             missing = [r for r in references(expr) if r not in known]
             if missing:
@@ -419,6 +444,13 @@ class AddressBook:
                 out[ns] = cls.from_mapping(_load_yaml(path), source=str(path), base_dir=path.parent,
                                            _loading=loading + (key,))
         return out
+
+    def unit_tables(self, *, stack: str | None = None) -> dict[str, dict[str, dict[tuple[int, int], Any]]]:
+        """The book's unit tables as ``{table: {column: {(layer, unit): value}}}`` over the rows of ``stack`` (the
+        primary stack when ``None``), the shape a consumer that applies ``from`` values reads (empty when the book
+        leaves the tables to its caller). With ``stack``, only the tables keyed by stack are given."""
+        return {name: table.table(stack=stack) for name, table in self.tables.items()
+                if stack is None or "stack" in table.key}
 
     def sets(self) -> dict[str, Expr]:
         """Every set this book can reference: its own by name, and each import's as ``<namespace>.<set>``."""
@@ -674,7 +706,7 @@ def _states_readout(body: Mapping[str, Any]) -> bool:
 
 
 _KNOWN_KEYS = ("schema_version", "name", "description", "portability", "applies_to", "requires", "imports", "sets",
-               "treatments", "graphs")
+               "treatments", "graphs", "tables")
 
 
 def _graphs(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
@@ -694,6 +726,31 @@ def _graphs(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any
             out[name] = GraphSubset.from_file(Path(base_dir or ".") / ref["file"], sha256=ref["sha256"])
         except VenngramError as err:
             raise AddressError(f"{source}: graph `{name}`: {err}") from err
+    return out
+
+
+def _tables(raw: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
+    from venngram.tables import UnitTable
+
+    if not isinstance(raw, Mapping) or not raw:
+        raise AddressError(f"{source}: `tables` maps a table name to its document {{file, sha256}}, or to the table "
+                           "inline.")
+    out = {}
+    for name, ref in raw.items():
+        if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
+            raise AddressError(f"{source}: {name!r} is not a valid table name (letters, digits, `_` and "
+                               "`-`).")
+        where = f"{source}: table `{name}`"
+        if not (isinstance(ref, Mapping) and "file" in ref):  # the table inline; its refusals name `where`
+            out[name] = UnitTable.from_mapping(ref, source=where, base_dir=base_dir, name=name)
+            continue
+        if set(ref) != {"file", "sha256"} or not all(isinstance(ref[k], str) and ref[k] for k in ref):
+            raise AddressError(f"{where}: a table document is cited as {{file, sha256}}: by its hash, so a changed "
+                               "document is refused rather than re-read.")
+        try:
+            out[name] = UnitTable.from_file(Path(base_dir or ".") / ref["file"], sha256=ref["sha256"])
+        except VenngramError as err:
+            raise AddressError(f"{where}: {err}") from err
     return out
 
 
@@ -742,6 +799,7 @@ __all__ = [
     "AddressBook",
     "AXIS_SCHEMA",
     "DEPTH_SCHEMA",
+    "TABLES_SCHEMA",
     "diff_lock",
     "GRAPHS_SCHEMA",
     "make_lock",

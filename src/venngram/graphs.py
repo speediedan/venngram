@@ -48,7 +48,7 @@ second tier for a coordinate within a block where one is addressed. ``value_shap
 **Node kinds** are ``feature``, ``error``, ``embedding`` and ``logit``. A feature node has a site, a space, a layer, a
 source position and its full index; an error node a site, a layer and a position; an embedding or logit node a
 ``token_id`` and a position. Every node has a unique ``id`` and an ``activation``; other value columns (``baseline``,
-...) are optional. Only feature nodes are applied by a treatment: the other kinds are evidence. Edges are evidence too,
+...) are optional. Only feature nodes are applied by a treatment: the other kinds are context. Edges are context too,
 never an instruction to route gradients.
 
 **Anchors** (:class:`Anchor`) place a node in a new prompt: ``absolute`` (a position), ``from_end`` (an offset from the
@@ -85,7 +85,7 @@ SCHEMA_WINDOW = (1, 1)
 #: The graph table sidecar schema.
 TABLE_SCHEMA_VERSION = 1
 NODE_KINDS = ("feature", "error", "embedding", "logit")
-#: The node kinds a treatment applies; the others are evidence.
+#: The node kinds a treatment applies; the others are context.
 APPLIED_KINDS = ("feature",)
 ANCHORS = ("absolute", "from_end", "token_match", "all")
 #: Node keys that are not value columns, and so cannot name an index axis or a value column.
@@ -278,7 +278,7 @@ class Node:
 
 @dataclass(frozen=True)
 class Edge:
-    """An attribution from one node to another (evidence)."""
+    """An attribution from one node to another (context, never applied)."""
 
     source: str
     target: str
