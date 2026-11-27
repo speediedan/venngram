@@ -8,7 +8,12 @@ with set algebra, and share them as data documents.
 neuroscience's term for the physical trace of a memory or function in the brain. A venngram is a set-algebraic
 specification of the neural traces it targets.
 
-> **Status: experimental (0.x).** The API and the document schema may change. Design discussion:
+> **Status: experimental (0.x), and moving quickly.** Any 0.x minor release may change the Python API and the document
+> schemas. Changes follow one published policy (`venngram.deprecation`): a name deprecated in `0.N` still works in
+> `0.N`, with a `VenngramDeprecationWarning`, and is refused in `0.N+1`; set `VENNGRAM_STRICT=1` to turn those warnings
+> into errors and find them early. Pin a compatible range (`venngram>=0.1,<0.2`) so a breaking release never reaches
+> you unannounced. Documents keep reading across releases within each kind's schema window (see "Versions and
+> evolution"). Docs: [venngram.readthedocs.io](https://venngram.readthedocs.io). Design discussion:
 > [finetuning-scheduler#153](https://github.com/speediedan/finetuning-scheduler/issues/153).
 
 ## A model's view in one call
