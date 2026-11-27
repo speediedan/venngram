@@ -37,12 +37,13 @@ placement is an argument of the structure rather than a row of a published map.
 
 .. warning:: This is an experimental API and may change in a future release.
 """
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
+import torch
 from torch import nn
 
-from venngram.errors import Refusal
+from venngram.errors import AddressError, Refusal
 from venngram.maps.check import stack_length, submodule
 from venngram.maps.schema import component_map_for, ComponentMap, PRIMARY_STACK, UNIT_SIDES
 from venngram.resolve import Location, strip_wrappers
@@ -55,6 +56,37 @@ def architecture_of(model: nn.Module) -> list[str]:
     config = getattr(model, "config", None)
     names += [a for a in (getattr(config, "architectures", None) or ()) if isinstance(a, str) and a not in names]
     return names
+
+
+def unit_width(module: Any, component: str, layout: str | None) -> int | None:
+    """The width of ``module``'s weight along ``component``'s unit side, given its recorded ``layout``."""
+    side, weight = UNIT_SIDES.get(component), getattr(module, "weight", None)
+    if side is None or layout is None or not isinstance(weight, torch.Tensor) or weight.ndim != 2 \
+            or not weight.is_floating_point():  # a packed quantized weight's shape is not the projection's
+        return None
+    return int(weight.shape[0 if layout.startswith(side) else 1])
+
+
+def head_size(component: str, sources: Sequence[Any], width: int) -> int | None:
+    """The width of one whole head of a projection of ``width`` units: ``width`` over the first head count among
+    ``sources`` (the projection, its attention module, their configurations; key and value heads for ``attn.k`` and
+    ``attn.v``), else the first ``head_dim`` among them, or ``None`` when neither is stated.
+
+    The head count comes first because a head's block on a projection need not be ``head_dim`` wide: a gated
+    attention's query projection carries each head's query and gate side by side, so its whole head is twice
+    ``head_dim``.
+    """
+    names = (("num_key_value_heads", "num_kv_heads") if component in ("attn.k", "attn.v")
+             else ("num_heads", "num_attention_heads", "n_head"))
+    counts = (getattr(obj, name, None) for obj in sources for name in names)
+    count = next((c for c in counts if type(c) is int and c > 0), None)
+    if count is not None and width > 0 and width % count == 0:
+        return width // count
+    for obj in sources:
+        size = getattr(obj, "head_dim", None)
+        if type(size) is int and size > 0:
+            return size
+    return None
 
 
 def map_for(model: nn.Module, architecture: str | None = None, *, strict: bool = False) -> ComponentMap:
@@ -176,6 +208,9 @@ class MapStructure:
     def __init__(self, root: nn.Module, cmap: ComponentMap, prefix: str | None = None,
                  mount: str | None = None, attached: Mapping[str, str] | None = None) -> None:
         self.cmap = cmap
+        self._root = root
+        self._modules: dict[str, nn.Module] | None = None
+        self._blocks: dict[str, int | None] = {}
         self.refusal: Refusal | None = None
         self._depths: dict[str, int] = {}
         self._table: dict[str, Location] = {}
@@ -308,10 +343,54 @@ class MapStructure:
         return (0 if side == "out" else 1) if layout == "out_in" else (0 if side == "in" else 1)
 
     def unit_block(self, name: str) -> int | None:
-        """The recorded head block size for a tensor on a map row's own module, if defined."""
+        """The recorded head block size for a tensor on a map row's own module, if defined.
+
+        A component map describes every checkpoint of its architecture, and head sizes can differ between them, so a
+        recorded size is checked against the head size this model measures (its attention module's or configuration's
+        ``head_dim``, or its width over its head count) wherever that can be measured.
+
+        Raises:
+            AddressError: If the recorded size differs from the measured one: whole heads are then refused rather than
+                cut at the wrong boundaries.
+        """
         owner, _, leaf = strip_wrappers(name).rpartition(".")
         loc = self._table.get(owner) if leaf in ("weight", "bias") else None
-        return self.cmap.unit_block_of(loc.component, loc.layer, loc.stack) if loc and loc.component else None
+        if not (loc and loc.component):
+            return None
+        recorded = self.cmap.unit_block_of(loc.component, loc.layer, loc.stack)
+        if recorded is None:
+            return None
+        if owner not in self._blocks:
+            self._blocks[owner] = self._measured_block(owner, loc)
+        measured = self._blocks[owner]
+        if measured is not None and measured != recorded:
+            raise AddressError(f"the {self.cmap.architecture} component map records `unit_block` {recorded} for "
+                               f"`{loc.component}`, but this model's `{owner}` measures heads of {measured}: the map "
+                               "was recorded on a checkpoint with another head size, so whole heads are refused rather "
+                               "than cut at the wrong boundaries.")
+        return recorded
+
+    def _measured_block(self, owner: str, loc: Location) -> int | None:
+        """The head size ``owner`` (a row's module) measures, from the sources the map builder reads: the module, its
+        attention module (the ``attn`` row's, else its parent) and that module's configuration."""
+        if self._modules is None:
+            self._modules = {strip_wrappers(n): m for n, m in self._root.named_modules()}
+        module = self._modules.get(owner)
+        component = str(loc.component)
+        width = unit_width(module, component, self.cmap.layout_of(component, loc.layer, loc.stack))
+        if module is None or width is None:
+            return None
+        path = self._root_path(self.cmap.module_for("attn", loc.layer, loc.stack))
+        attention = self._modules.get(path if path is not None else owner.rpartition(".")[0])
+        return head_size(component, (module, attention, getattr(attention, "config", None)), width)
+
+    def _root_path(self, path: str | None) -> str | None:
+        """A map module path as the (wrapper-stripped) path of the module under this structure's root."""
+        rel = self._relative(path)
+        if rel is None:
+            return None
+        lead = strip_wrappers(f"{self.mount}.") if self.mount else ""
+        return f"{lead}{rel}" if rel else lead[:-1]
 
     def depth(self, stack: str | None = None) -> int | Refusal:
         """The number of blocks in ``stack`` (the primary one when ``None``), or why it is unknown."""
