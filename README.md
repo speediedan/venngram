@@ -405,10 +405,14 @@ one the module disagrees with, and `MapStructure.unit_dim(name, ndim)` gives the
 bias that runs along its units.
 
 A schema 6 component map can record `unit_block`, the number of consecutive unit-axis coordinates in one attention
-head. `with_layouts` adds it to projections whose head size it can measure. Verification checks the recorded sizes
-against the unit-axis widths and checks that query heads group evenly over key/value heads. Fused QKV rows need
-separate projection boundaries, so the builder leaves their head size unset. Measure and verify against the model
-that will use the map, since checkpoints of one architecture can have different head sizes.
+head. `with_layouts` adds it to projections whose head size it can measure: the projection's width over its head
+count, or `head_dim` where no count is stated. Counting comes first because a head's block need not be `head_dim`
+wide: a gated attention's query projection carries each head's query and gate side by side. Verification checks the
+recorded sizes against the unit-axis widths, that query and output head counts match, as do key and value head counts,
+and that query heads group evenly over key/value heads. Fused QKV rows need separate projection boundaries, so the
+builder leaves their head size unset. Checkpoints of one architecture can have different head sizes, so a view checks
+a recorded size against the head size its model measures and refuses whole heads when they differ, rather than cut
+them at the wrong boundaries.
 
 In an address book at schema 11, `units:{heads:[2,5]}` selects whole heads. For example, the gradient address
 `component:attn.o & layers:12 & leaf:weight & units:{heads:[2,5]} & of:grad` expands heads 2 and 5 along the output
