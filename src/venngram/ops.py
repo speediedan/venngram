@@ -44,24 +44,24 @@ document, so a recipe naming a published op validates without its publisher's co
 Values pass through a **transform pipeline** from a small declared vocabulary (:data:`TRANSFORMS`), applied in order
 to each member of the op: each unit or feature its target set names, or the whole activation, one member, for an op
 without a target. A member's value starts as the op's ``dose``, its own entry in ``doses``, or its own value in the
-``from`` column of the evidence table, and each transform maps it to the next:
+``from`` column of the ``from`` table, and each transform maps it to the next:
 
 ====================================  =============================================================================
 transform                             value for a member, given ``v``
 ====================================  =============================================================================
 ``scale {factor: f}``                 ``v * f``
 ``abs``                               ``|v|``
-``normalize {by: max_abs}``           ``v / max(|v_m|)`` over the op's members ``m`` (not the whole evidence table);
+``normalize {by: max_abs}``           ``v / max(|v_m|)`` over the op's members ``m`` (not the whole table);
                                       zero for every member when every value is zero
 ``normalize {by: <statistic>}``       ``v / t``: expresses ``v`` in units of the named statistic ``t``
 ``statistic {name: <statistic>}``     ``v * t``: ``v`` is a dose in units of the named statistic ``t``, made absolute
 ``sign_of {column: c}``               ``sign(e_c) * |v|``, for the member's value ``e_c`` in column ``c`` of the
-                                      ``from`` evidence table
+                                      ``from`` table
 ``sign_aware_scale {factor: f}``      ``sign(s) * |v| * f``, for the member's score ``s`` in the ``from`` column:
                                       ``sign_of`` that column, then ``scale``
 ====================================  =============================================================================
 
-``sign(0)`` is ``0``. ``sign_of`` and ``sign_aware_scale`` read the evidence table, so they apply only to a ``from``
+``sign(0)`` is ``0``. ``sign_of`` and ``sign_aware_scale`` read the ``from`` table, so they apply only to a ``from``
 value (a recipe giving them a ``dose`` or ``doses`` is refused when read). A statistic is computed from the model, not
 recorded: the consumer supplies ``t`` for each member (a value per layer, or per unit, such as a layer's median
 residual norm over a unit's output column norm), declares ``statistic`` in its support record, and refuses a
@@ -195,13 +195,13 @@ TRANSFORM_MEANINGS: dict[str, str] = {
     "abs": "|v|",
     "normalize": "by max_abs: v / max |v_m| over the op's members (zero throughout when every value is zero); by a "
                  "statistic t: v / t",
-    "sign_of": "sign(e_c) * |v|, for the member's value e_c in `column` of the `from` evidence table",
+    "sign_of": "sign(e_c) * |v|, for the member's value e_c in `column` of the `from` table",
     "sign_aware_scale": "sign(s) * |v| * factor, for the member's score s in the `from` column",
     "statistic": "v * t, for the named statistic t the consumer supplies",
 }
 
-#: Transforms that read the ``from`` evidence table, so apply only to a ``from`` value.
-EVIDENCE_TRANSFORMS: set[str] = {"sign_of", "sign_aware_scale"}
+#: Transforms that read the ``from`` table, so apply only to a ``from`` value.
+TABLE_TRANSFORMS: set[str] = {"sign_of", "sign_aware_scale"}
 
 _REGISTERED_CASES: dict[str, tuple[Any, ...]] = {}
 
@@ -216,7 +216,7 @@ class Transform:
 
 @dataclass(frozen=True)
 class TransformMember:
-    """One member's inputs to a conformance vector: its starting value, its row of the ``from`` evidence table, and
+    """One member's inputs to a conformance vector: its starting value, its row of the ``from`` table, and
     the statistics the consumer would supply for it."""
 
     start: float
@@ -248,7 +248,7 @@ def transform_cases() -> tuple[TransformCase, ...]:
 
 
 def register_transform(name: str, params: Mapping[str, ParamSpec], *, meaning: str,
-                       cases: Sequence[Mapping[str, Any]], reads_evidence: bool = False, replace: bool = False) -> None:
+                       cases: Sequence[Mapping[str, Any]], reads_table: bool = False, replace: bool = False) -> None:
     """Register a value transform, so recipes may name it and consumers may declare it.
 
     A transform is shared only with what it computes: ``meaning`` states it, and ``cases`` are conformance vectors in
@@ -257,7 +257,7 @@ def register_transform(name: str, params: Mapping[str, ParamSpec], *, meaning: s
 
     Raises:
         ValueError: If the name is taken and ``replace`` is not set, ``meaning`` is empty, no case uses the transform,
-            a case is malformed, or a transform that reads the evidence table has a case whose value is not ``from``.
+            a case is malformed, or a transform that reads the ``from`` table has a case whose value is not ``from``.
     """
     if name in TRANSFORMS and not replace:
         raise ValueError(f"transform {name!r} is already registered; pass replace=True to replace it")
@@ -277,15 +277,15 @@ def register_transform(name: str, params: Mapping[str, ParamSpec], *, meaning: s
         if len(c.expect) != len(c.members):
             raise ValueError(f"transform {name!r}: case {c.name!r} expects {len(c.expect)} values for "
                              f"{len(c.members)} members")
-        if reads_evidence and c.source != "from":
-            raise ValueError(f"transform {name!r} reads the evidence table, so case {c.name!r} needs a `from` value")
+        if reads_table and c.source != "from":
+            raise ValueError(f"transform {name!r} reads the ``from`` table, so case {c.name!r} needs a `from` value")
     TRANSFORMS[name] = params
     TRANSFORM_MEANINGS[name] = meaning
     _REGISTERED_CASES[name] = parsed
-    if reads_evidence:
-        EVIDENCE_TRANSFORMS.add(name)
+    if reads_table:
+        TABLE_TRANSFORMS.add(name)
     else:
-        EVIDENCE_TRANSFORMS.discard(name)
+        TABLE_TRANSFORMS.discard(name)
 
 
 def _case(raw: Mapping[str, Any]) -> TransformCase:
@@ -723,7 +723,7 @@ __all__ = [
     "check_transforms",
     "CORE_OPS",
     "COMPOSITION",
-    "EVIDENCE_TRANSFORMS",
+    "TABLE_TRANSFORMS",
     "OPERAND_KINDS",
     "OPS",
     "op_cases",

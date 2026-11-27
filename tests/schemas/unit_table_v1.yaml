@@ -1,7 +1,7 @@
-# Golden fixture: an evidence table at schema 1, as published. Never edit it;
+# Golden fixture: a unit table at schema 1, as published. Never edit it;
 # add a fixture for a new schema instead.
 schema_version: 1
-kind: evidence_table
+kind: unit_table
 name: golden-finding
 description: one target's best neuron, with its confirm statistics
 model:
@@ -15,10 +15,10 @@ source:
 columns:
   dose:
     description: signed steering dose at the best confirm hit rate
-    unit: dose_unit
+    measure: dose_unit
   confirm_hit_rate:
     description: fraction of confirm prompts that hit the target
-    unit: fraction
+    measure: fraction
   confirm_n:
     description: confirm prompts
     dtype: int

@@ -13,10 +13,10 @@ r"""
 Recipes
 ^^^^^^^
 
-A recipe is a *treatment* over an address book's sets: what is done at which sites, to which units or features, in
-which order. It is kept apart from the evidence (generations, graphs, scores, which it names). A treatment lives in the
-book it treats, by name, under its ``treatments`` section (:mod:`venngram.book`), so one selection carries several
-treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` reads one, and
+A recipe is a *treatment* over an address book's sets: what is done at which sites, to which units or features, in which
+order. It is kept apart from the values and findings it reads (unit tables and graph subsets the book names). A
+treatment lives in the book it treats, by name, under its ``treatments`` section (:mod:`venngram.book`), so one
+selection carries several treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` reads one, and
 :meth:`Recipe.to_treatment` writes one. :class:`Recipe` is a treatment in memory: its book, and the body below.
 
 .. code-block:: yaml
@@ -34,7 +34,7 @@ treatments and a consumer reads one kind of document; :meth:`Recipe.treatment` r
               - {op: add, target: {set: openings}, value: {doses: {15: {4041: 0.5}}}}
               - {op: reject, operand: concept, params: {fraction: 1.0}}
         sampling: {temperature: 0.7}
-        evidence: {examples: [...]}
+        metadata: {examples: [...]}      # free-form, carried and never read
 
 The standalone ``kind: recipe`` document, written before books and recipes merged (the body above with a header and a
 ``book``), is retired: only ``python -m venngram.migrate`` reads it, and writes its book with the recipe as a treatment
@@ -52,9 +52,9 @@ target may be one address with explicit layers and ``units``, or a composition o
 set algebra (``@a & @b``, ``@a | @b``, ``@a - @control``), evaluated over ``(layer, unit)`` pairs; a ``layers``-only
 term in it filters by layer (``(@a & @b & layers:12) - @control``). A composed target is resolved when the recipe is
 read, and refused by name if it is empty, mixes sites, composes feature sets or names units only by slice. **Values**:
-a ``dose``, a per-unit ``doses`` table, or ``from`` a column of recorded evidence through a ``transform`` pipeline of
-declared transforms (:data:`~venngram.ops.TRANSFORMS`); the evidence is an evidence table the book names
-(:mod:`venngram.evidence`), or the caller's when the book names none. **Tokens** are set per stage; an op may
+a ``dose``, a per-unit ``doses`` table, or ``from`` a column of a unit table through a ``transform`` pipeline of
+declared transforms (:data:`~venngram.ops.TRANSFORMS`); the table is one the book names
+(:mod:`venngram.tables`), or the caller's when the book names none. **Tokens** are set per stage; an op may
 override them only if its spec allows. ``prompt`` is every position of the input before any generated token;
 ``generated`` is every position the consumer generates, at each decode step (a consumer that does not generate
 refuses it by name).
@@ -143,7 +143,7 @@ from venngram.deprecation import VenngramDeprecationWarning
 from venngram.errors import AddressError, AddressUnresolvable, NewerAddressSchemaError, VenngramError
 from venngram.graphs import GRAPH_TRANSFORMS
 from venngram.operands import INLINE_LIMIT, read_operand
-from venngram.ops import ALIASES, EVIDENCE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
+from venngram.ops import ALIASES, TABLE_TRANSFORMS, OPS, OpSpec, Transform, TRANSFORMS
 from venngram.paths import is_path, paths
 from venngram.readouts import READOUTS
 from venngram.resolve import gradient_of
@@ -251,13 +251,13 @@ class Tokens:
 
 @dataclass(frozen=True)
 class Value:
-    """An op's value: a ``dose``, per-unit ``doses``, ``from`` evidence, or ``from`` a graph's node column (source
-    ``graph``, optionally less a ``baseline`` column), through a transform pipeline."""
+    """An op's value: a ``dose``, per-unit ``doses``, ``from`` a unit table's column, or ``from`` a graph's node column
+    (source ``graph``, optionally less a ``baseline`` column), through a transform pipeline."""
 
     source: str
     dose: float | None = None
     doses: Mapping[int, Mapping[int, float]] | None = None
-    evidence: str | None = None
+    table: str | None = None
     column: str | None = None
     transform: tuple[Transform, ...] = ()
     graph: str | None = None
@@ -273,7 +273,7 @@ class Value:
             out["from"] = {"graph": self.graph, "column": self.column,
                            **({"baseline": self.baseline} if self.baseline is not None else {})}
         else:
-            out["from"] = {"evidence": self.evidence, "column": self.column}
+            out["from"] = {"table": self.table, "column": self.column}
         if self.transform:
             out["transform"] = [{t.name: dict(t.params)} if t.params else t.name for t in self.transform]
         return out
@@ -438,8 +438,8 @@ class Recipe:
     """What the document says for ``book`` (a path, or the inline mapping), kept so it round-trips."""
     revision_source: str = "pinned"
     sampling: Mapping[str, Any] = field(default_factory=dict)
-    evidence: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    """Free-form: carried with the treatment and never read by venngram."""
     source: str = "<inline>"
     base_dir: str | None = None
 
@@ -516,19 +516,19 @@ class Recipe:
                                    "older venngram would pass over it silently.")
             readout = _readout(doc["readout"], f"{source}: readout", book, operands)
         _check_readouts(stages, readout, book, source, version)
-        _check_evidence(stages, weights, gradients, book, source)
+        _check_tables(stages, weights, gradients, book, source)
         return cls(name=str(doc.get("name") or source), model_id=model["id"], revision=model["revision"], book=book,
                    stages=stages, operands=operands, weights=weights, gradients=gradients, readout=readout,
                    book_ref=raw_book,
                    revision_source=model.get("revision_source", "pinned"), sampling=dict(doc.get("sampling") or {}),
-                   evidence=dict(doc.get("evidence") or {}), metadata=dict(doc.get("metadata") or {}), source=source,
+                   metadata=_metadata(doc), source=source,
                    base_dir=str(base_dir) if base_dir is not None else None)
 
     @classmethod
     def treatment(cls, body: Any, book: AddressBook, *, name: str, source: str = "<inline>",
                   base_dir: str | Path | None = None) -> "Recipe":
         """Read one entry of a book's ``treatments`` section: a recipe's body (``model``, ``operands``, ``stages``,
-        ``sampling``, ``evidence``, ``metadata``) over ``book``'s sets.
+        ``sampling``, ``metadata``) over ``book``'s sets.
 
         Raises:
             AddressError: As :meth:`from_mapping`, or if the body carries a recipe header or its own ``book``.
@@ -572,38 +572,46 @@ class Recipe:
             doc["readout"] = self.readout.to_mapping()
         if self.stages or not (self.weights or self.gradients):
             doc["stages"] = [s.to_mapping() for s in self.stages]
-        for key in ("sampling", "evidence", "metadata"):
+        for key in ("sampling", "metadata"):
             if getattr(self, key):
                 doc[key] = dict(getattr(self, key))
         return doc
 
 
-def _check_evidence(stages: Sequence[Stage], weights: Sequence[Op], gradients: Sequence[Op], book: AddressBook,
+def _metadata(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """A treatment's free-form ``metadata``; an ``evidence`` mapping an earlier document carried is kept under it."""
+    out = dict(doc.get("metadata") or {})
+    if doc.get("evidence"):
+        out.setdefault("evidence", dict(doc["evidence"]))
+    return out
+
+
+def _check_tables(stages: Sequence[Stage], weights: Sequence[Op], gradients: Sequence[Op], book: AddressBook,
                     source: str) -> None:
-    """In a book with an ``evidence`` section, refuse a ``from`` value that names a table or a column the book does not
+    """In a book with a ``tables`` section, refuse a ``from`` value that names a table or a column the book does not
     have (its own, or one a transform such as ``sign_of`` reads), or whose target has a member without a row
-    (:mod:`venngram.evidence`). A book without the section leaves evidence to its caller."""
-    if not book.evidence:
+    (:mod:`venngram.tables`). A book without the section leaves the tables to its caller."""
+    if not book.tables:
         return
-    from venngram.evidence import check_members
+    from venngram.tables import check_members
 
     located = [(f"stage {i} ({st.site}) op {j}", op) for i, st in enumerate(stages) for j, op in enumerate(st.ops)]
     located += [(f"weights op {j}", op) for j, op in enumerate(weights)]
     located += [(f"gradients op {j}", op) for j, op in enumerate(gradients)]
     for at, op in located:
         value = op.value
-        if value is None or value.source != "from" or value.evidence is None:
+        if value is None or value.source != "from" or value.table is None:
             continue
         where = f"{source}: {at} (`{op.op}`)"
-        if value.evidence not in book.evidence:
-            raise AddressError(f"{where}: the value reads evidence `{value.evidence}`, which the book's `evidence` "
-                               f"does not name (tables: {sorted(book.evidence)}).")
-        table = book.evidence[value.evidence]
+        if value.table not in book.tables:
+            raise AddressError(f"{where}: the value reads table `{value.table}`, which the book's `tables` "
+                               f"does not name (tables: {sorted(book.tables)}).")
+        table = book.tables[value.table]
         read = [str(value.column)] + [str(t.params["column"]) for t in value.transform
-                                      if t.name in EVIDENCE_TRANSFORMS and "column" in t.params]
+                                      if t.name in TABLE_TRANSFORMS and "column" in t.params]
         missing = [c for c in dict.fromkeys(read) if c not in table.columns]
         if missing:
-            raise AddressError(f"{where}: evidence `{value.evidence}` has no column {missing} (columns: "
+            raise AddressError(f"{where}: table `{value.table}` has no column {missing} (columns: "
                                f"{sorted(table.columns)}).")
         try:
             members = op.unit_members(book, where) if op.target is not None else []
@@ -747,9 +755,9 @@ def _value(raw: Any, where: str) -> Value:
             raise AddressError(f"{where}: unknown transform {item!r} (known: {sorted(TRANSFORMS)}).")
         transform.append(Transform(name, _params(params, TRANSFORMS[name], f"{where} transform `{name}`")))
     src = sources[0]
-    reads_evidence = sorted({t.name for t in transform} & EVIDENCE_TRANSFORMS)
-    if reads_evidence and src != "from":
-        raise AddressError(f"{where}: {reads_evidence} read the evidence table, so apply only to a `from` value, not "
+    reads_table = sorted({t.name for t in transform} & TABLE_TRANSFORMS)
+    if reads_table and src != "from":
+        raise AddressError(f"{where}: {reads_table} read the `from` table, so apply only to a `from` value, not "
                            f"`{src}`.")
     if src == "dose":
         if not _number(raw["dose"]):
@@ -777,10 +785,10 @@ def _value(raw: Any, where: str) -> Value:
                                "rows, and those transforms would mean different things on the two.")
         return Value("graph", graph=frm["graph"], column=frm["column"], baseline=frm.get("baseline"),
                      transform=tuple(transform))
-    if not isinstance(frm, Mapping) or not all(isinstance(frm.get(k), str) for k in ("evidence", "column")):
-        raise AddressError(f"{where}: `from` is {{evidence: <name>, column: <column>}}, or {{graph: <name>, "
+    if not isinstance(frm, Mapping) or not all(isinstance(frm.get(k), str) for k in ("table", "column")):
+        raise AddressError(f"{where}: `from` is {{table: <name>, column: <column>}}, or {{graph: <name>, "
                            "column: <column>}}.")
-    return Value("from", evidence=frm["evidence"], column=frm["column"], transform=tuple(transform))
+    return Value("from", table=frm["table"], column=frm["column"], transform=tuple(transform))
 
 
 def _op(raw: Any, where: str, book: AddressBook, operands: Mapping[str, Operand], weights: bool = False,

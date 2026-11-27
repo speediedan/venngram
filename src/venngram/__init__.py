@@ -25,7 +25,7 @@ specification of the neural traces it targets.
 - :mod:`venngram.units`: large unit sets as sidecar files an address book names;
 - :mod:`venngram.recipe`: recipes, treatments over a book's sets, and their composition;
 - :mod:`venngram.ops`: recipe ops as declared specs and value transforms;
-- :mod:`venngram.evidence`: evidence tables, the recorded evidence a treatment's values read;
+- :mod:`venngram.tables`: unit tables, the recorded values a treatment's ``from`` values read;
 - :mod:`venngram.support`: consumers' support records, by section (steering, tuning, circuits, extensions);
 - :mod:`venngram.operands`: the tensors recipe ops act with, as sidecar files;
 - :mod:`venngram.manifest`: the manifest (``venngram.yaml``) that lists a directory's documents;

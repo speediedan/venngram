@@ -58,11 +58,11 @@ def test_a_schema_2_recipe_reads_and_round_trips():
     assert again.to_mapping() == recipe.to_mapping() and again.stages == recipe.stages
 
 
-def test_values_from_evidence_and_features_targets():
+def test_values_from_tables_and_features_targets():
     sets = {"top": {"space": "transcoder", "features": "3,7", "layers": [10]}}
     doc = recipe_doc([{"site": "transcoder.features", "tokens": {"positions": [5, 6]}, "ops": [
         {"op": "replace", "target": {"set": "top"},
-         "value": {"from": {"evidence": "scores", "column": "score"},
+         "value": {"from": {"table": "scores", "column": "score"},
                    "transform": [{"sign_aware_scale": {"factor": 4.0}}, "abs"]}}]}], sets=sets)
     recipe = Recipe.from_mapping(doc)
     op = recipe.stages[0].ops[0]
@@ -118,15 +118,15 @@ def test_a_composed_unit_target_takes_per_unit_doses_commutes_when_disjoint_and_
 
 def test_a_unit_targets_members_do_not_depend_on_its_value():
     sets = {**UNIT_SETS, "both": "(@a | @c) - @ctl", "top": {"space": "transcoder", "features": "3,7", "layers": [10]}}
-    evidence = {"from": {"evidence": "scores", "column": "score"}, "transform": ["abs"]}
+    from_table = {"from": {"table": "scores", "column": "score"}, "transform": ["abs"]}
     members = [(12, 1), (12, 3), (14, 5)]
-    for value in (evidence, {"dose": 0.5}, {"doses": {12: {3: 2.0}}}):
+    for value in (from_table, {"dose": 0.5}, {"doses": {12: {3: 2.0}}}):
         recipe = composed([add("both", value)], sets)
         assert recipe.stages[0].ops[0].unit_members(recipe.book) == members
-    (op,) = composed([add("both", evidence)], sets).stages[0].ops
+    (op,) = composed([add("both", from_table)], sets).stages[0].ops
     with pytest.raises(AddressError, match="has no unit doses"):
         op.unit_doses(recipe.book)
-    single = composed([add("a", evidence)], sets)
+    single = composed([add("a", from_table)], sets)
     assert single.stages[0].ops[0].unit_members(single.book) == [(12, 1), (12, 2), (12, 3)]
     whole = composed([{"site": "resid.post", "ops": [{"op": "scale", "value": {"dose": 2.0}}]}], sets)
     with pytest.raises(AddressError, match="has no unit members"):
@@ -224,10 +224,10 @@ def test_malformed_target_is_refused_in_every_op_section(target, section, in_boo
     (lambda r: r["stages"][0].update(tokens="first"), "`tokens` is all, last"),
     (lambda r: r.update(operands={"x": {"values": [1.0], "shape": [2]}}), "1 values for shape"),
     (lambda r: r["stages"][0]["ops"][0]["value"].update(transform=[{"sign_of": {"column": "score"}}]),
-     r"\['sign_of'\] read the evidence table, so apply only to a `from` value, not `dose`"),
+     r"\['sign_of'\] read the `from` table, so apply only to a `from` value, not `dose`"),
     (lambda r: r["stages"][0]["ops"][0].update(value={"doses": {13: {7956: 1.0}},
                                                       "transform": [{"sign_aware_scale": {"factor": 2.0}}]}),
-     r"\['sign_aware_scale'\] read the evidence table.*not `doses`"),
+     r"\['sign_aware_scale'\] read the `from` table.*not `doses`"),
 ])
 def test_malformed_recipes_are_refused(change, match):
     doc = copy.deepcopy(recipe_doc([add("chess", {"dose": 1.0})]))
