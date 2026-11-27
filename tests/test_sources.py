@@ -9,11 +9,11 @@ from venngram.errors import Refusal
 from venngram.manifest import build_manifest
 from venngram.maps.schema import ComponentMap
 from venngram.maps.transformer_lens import TransformerLensSource
-from venngram.recipe import Recipe
 from venngram.sources import (derive_map, format_for, formats, map_sources, Provenance, ReadContext,
                               register_format, register_map_source, SourceError, SourceLoadWarning, Translation,
                               unregister, write_translation)
 from venngram.store import load, publish
+from venngram.treatment import Treatment
 
 
 class ToyFormat:
@@ -41,15 +41,12 @@ class ToyFormat:
         doses: dict = {}
         for layer, u, d in neurons:
             doses.setdefault(layer, {})[u] = d
-        recipe = {"schema_version": 2, "kind": "recipe", "name": "toy",
-                  "model": {"id": doc["model"], "revision": revision, "revision_source": "resolved-at-import"},
-                  "book": book,
-                  "stages": [{"site": "mlp.out.hook_in",
-                              "ops": [{"op": "add", "target": {"set": "toy"}, "value": {"doses": doses}}]}],
-                  "metadata": {"unexpressed": [str(r) for r in skipped]} if skipped else {}}
         # Sidecar digests do not exist until write_translation; keep the body as a mapping until then.
-        book["treatments"] = {"toy": {k: v for k, v in recipe.items()
-                                      if k not in {"schema_version", "kind", "name", "book"}}}
+        book["treatments"] = {"toy": {
+            "model": {"id": doc["model"], "revision": revision, "revision_source": "resolved-at-import"},
+            "stages": [{"site": "mlp.out.hook_in",
+                        "ops": [{"op": "add", "target": {"set": "toy"}, "value": {"doses": doses}}]}],
+            "metadata": {"unexpressed": [str(r) for r in skipped]} if skipped else {}}}
         sha = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
         return Translation({"toy.yaml": ("address_book", book)},
                            Provenance("format", self.name, self.version, sha, "resolved-at-import"),
@@ -90,9 +87,9 @@ def test_a_translation_is_written_listed_published_and_loaded(tmp_path):
     publish("local", str(tmp_path / "pub"), tmp_path / "src", documents=documents)
     loaded_book = load(f"local:{tmp_path / 'pub'}:toy.yaml")
     assert isinstance(loaded_book, AddressBook)
-    recipe = loaded_book.treatments["toy"]
-    assert isinstance(recipe, Recipe)
-    assert recipe.stages[0].ops[0].unit_doses(recipe.book) == {(13, 7): -1.0, (14, 9): 0.5}
+    treatment = loaded_book.treatments["toy"]
+    assert isinstance(treatment, Treatment)
+    assert treatment.stages[0].ops[0].unit_doses(treatment.book) == {(13, 7): -1.0, (14, 9): 0.5}
     assert translation.provenance.to_mapping()["revision_source"] == "resolved-at-import"
 
 

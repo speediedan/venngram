@@ -82,7 +82,8 @@ class NewerSchemaError(VenngramError):
 
 
 class NewerAddressSchemaError(NewerSchemaError, AddressError):
-    """A :class:`NewerSchemaError` for an address book or a recipe, whose other refusals are :class:`AddressError`."""
+    """A :class:`NewerSchemaError` for an address book, a graph subset or a unit table, whose other refusals are
+    :class:`AddressError`."""
 
 
 @dataclass(frozen=True)

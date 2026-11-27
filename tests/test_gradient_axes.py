@@ -16,9 +16,9 @@ from venngram import AddressBook, ParamSpace
 from venngram.address import parse, to_mapping, to_string
 from venngram.errors import AddressError, AddressUnresolvable
 from venngram.maps import from_document, MapStructure
-from venngram.recipe import Recipe
 from venngram.resolve import gradient_forms, gradient_masks, gradient_selections, GradientSelection
 from venngram.support import SupportRecord
+from venngram.treatment import Treatment
 
 MLP = "component:mlp.* & leaf:weight & units:[1] & of:grad"
 
@@ -163,12 +163,12 @@ def test_a_book_using_axis_needs_schema_6_and_a_consumer_that_honours_it():
     assert any("physical-axis" in r for r in new.check_book(physical))
 
 
-def test_a_recipe_refuses_an_axis_it_does_not_read():
+def test_a_treatment_refuses_an_axis_it_does_not_read():
     model = {"id": "m", "revision": "r"}
-    book = {"schema_version": 6, "name": "b", "portability": "checkpoint", "applies_to": {"models": [model]},
-            "sets": {"cols": {"component": "mlp.out", "leaf": "weight", "layers": [0], "units": [1], "of": "grad",
-                              "axis": "unit"}}}
-    doc = {"schema_version": 4, "kind": "recipe", "name": "r", "model": model, "book": book,
-           "gradients": [{"op": "replace", "target": {"set": "cols"}, "value": {"dose": 0.0}}]}
-    with pytest.raises(AddressError, match="no recipe reads `axis` yet"):
-        Recipe.from_mapping(doc)
+    book = AddressBook.from_mapping({
+        "schema_version": 6, "name": "b", "portability": "checkpoint", "applies_to": {"models": [model]},
+        "sets": {"cols": {"component": "mlp.out", "leaf": "weight", "layers": [0], "units": [1], "of": "grad",
+                          "axis": "unit"}}})
+    body = {"model": model, "gradients": [{"op": "replace", "target": {"set": "cols"}, "value": {"dose": 0.0}}]}
+    with pytest.raises(AddressError, match="no treatment reads `axis` yet"):
+        Treatment.from_mapping(body, book, name="r")

@@ -19,7 +19,6 @@ import pytest
 
 from venngram.deprecation import deprecated, STRICT_ENV, strict, VenngramDeprecationWarning
 from venngram.maps.schema import ComponentMapDeprecationWarning
-from venngram.recipe import RecipeSchemaWarning
 
 
 def test_a_deprecation_warns_once_naming_its_replacement():
@@ -41,8 +40,6 @@ def test_strict_mode_turns_deprecations_into_errors():
 def test_existing_warnings_join_the_cycle_without_changing_who_sees_them():
     assert issubclass(ComponentMapDeprecationWarning, VenngramDeprecationWarning)
     assert issubclass(ComponentMapDeprecationWarning, UserWarning)  # still shown by default
-    assert issubclass(RecipeSchemaWarning, VenngramDeprecationWarning)
-    assert issubclass(RecipeSchemaWarning, DeprecationWarning)  # still hidden by default outside __main__
 
 
 def test_the_environment_switch_applies_to_the_whole_process():

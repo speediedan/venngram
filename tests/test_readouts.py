@@ -13,14 +13,14 @@
 import math
 
 import pytest
-from test_recipe import CONCEPT, MODEL, recipe_doc
+from test_treatment import CONCEPT, MODEL, read_treatment, treatment_doc
 
 from venngram.book import AddressBook
 from venngram.errors import AddressError
 from venngram.ops import check_support, Support
 from venngram.readouts import check_readouts, READOUTS, readout_cases, register_readout
-from venngram.recipe import Recipe
 from venngram.support import SupportRecord
+from venngram.treatment import Treatment
 
 # the logits of an answer and a foil token (unembed's output units are the vocabulary), a residual site, and a
 # gradient target at layer 12's MLP output
@@ -37,9 +37,8 @@ ZERO_GRAD = {"site": "mlp.out.hook_in", "ops": [{"op": "scale", "target": {"set"
 STEER = {"site": "mlp.out.hook_in", "ops": [{"op": "add", "target": {"set": "mlp_val"}, "value": {"dose": 1.0}}]}
 
 
-def readout_doc(stages, *, readout=LOGIT_DIFF, operands=None, version=4):
-    doc = recipe_doc(stages, SETS, operands=operands)
-    doc["schema_version"] = version
+def readout_doc(stages, *, readout=LOGIT_DIFF, operands=None):
+    doc = treatment_doc(stages, SETS, operands=operands)
     doc["book"]["schema_version"] = 2
     if readout is not None:
         doc["readout"] = readout
@@ -85,8 +84,8 @@ def test_a_registered_reduction_states_its_meaning_and_brings_its_vectors():
     register_readout("mean", meaning="the addressed values' mean over their units and tokens", cases=[case])
     try:
         assert check_readouts(_evaluate) == [] and "mean" in READOUTS
-        recipe = Recipe.from_mapping(readout_doc([ZERO_GRAD], readout={"terms": [{"reduce": "mean", "set": "resid"}]}))
-        assert recipe.readout.terms[0].reduce == "mean"
+        treatment = read_treatment(readout_doc([ZERO_GRAD], readout={"terms": [{"reduce": "mean", "set": "resid"}]}))
+        assert treatment.readout.terms[0].reduce == "mean"
     finally:
         from venngram import readouts
 
@@ -96,40 +95,39 @@ def test_a_registered_reduction_states_its_meaning_and_brings_its_vectors():
 
 def test_a_treatment_states_its_readout_and_a_stage_may_override_it():
     project = {"terms": [{"reduce": "project", "set": "resid", "operand": "probe"}]}
-    recipe = Recipe.from_mapping(readout_doc([ZERO_GRAD, {**ZERO_GRAD, "readout": project}, STEER],
-                                             operands={"probe": CONCEPT}))
-    assert [t.weight for t in recipe.readout.terms] == [1.0, -1.0]
-    assert recipe.stages[0].readout is None and recipe.stages[1].readout.terms[0].operand == "probe"
-    doc = recipe.to_mapping()
-    assert doc["schema_version"] == 4
+    treatment = read_treatment(readout_doc([ZERO_GRAD, {**ZERO_GRAD, "readout": project}, STEER],
+                                           operands={"probe": CONCEPT}))
+    assert [t.weight for t in treatment.readout.terms] == [1.0, -1.0]
+    assert treatment.stages[0].readout is None and treatment.stages[1].readout.terms[0].operand == "probe"
+    doc = treatment.to_mapping()
+    assert treatment.schema_version == 4
     assert doc["readout"]["terms"][1] == {"reduce": "sum", "set": "foil", "tokens": "last", "weight": -1.0}
-    assert Recipe.from_mapping(doc).readout == recipe.readout
-    only_stage = Recipe.from_mapping(readout_doc([{**ZERO_GRAD, "readout": LOGIT_DIFF}], readout=None))
-    assert only_stage.readout is None and only_stage.to_mapping()["schema_version"] == 4
+    assert Treatment.from_mapping(doc, treatment.book).readout == treatment.readout
+    only_stage = read_treatment(readout_doc([{**ZERO_GRAD, "readout": LOGIT_DIFF}], readout=None))
+    assert only_stage.readout is None and only_stage.schema_version == 4
 
 
-@pytest.mark.parametrize("stages, readout, version, match", [
-    ([ZERO_GRAD], None, 4, "stage 0 acts on gradients .* states the `readout` they are gradients of"),
-    ([STEER], LOGIT_DIFF, 4, "the treatment states a readout, but no stage takes its gradients from it"),
-    ([{**STEER, "readout": LOGIT_DIFF}], None, 4, "stage 0 states a readout, but none of its ops acts on a gradient"),
-    ([ZERO_GRAD], LOGIT_DIFF, 2, "`readout` needs recipe schema 4, not 2"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "softmax", "set": "answer"}]}, 4, "unknown reduction 'softmax'"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "weights"}]}, 4,
-     "addresses tensors .* a readout reads activations"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer_grad"}]}, 4, "a readout reads values"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "project", "set": "resid"}]}, 4, "`project` takes an operand"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer", "operand": "probe"}]}, 4, "`sum` takes no operand"),
-    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer", "weight": "1"}]}, 4, "`weight` is a finite number"),
-    ([ZERO_GRAD], {"expr": "logit[42] - logit[7]"}, 4, "it carries no expression"),
+@pytest.mark.parametrize("stages, readout, match", [
+    ([ZERO_GRAD, {**ZERO_GRAD, "readout": LOGIT_DIFF}], None,
+     "stage 0 acts on gradients .* states the `readout` they are gradients of"),
+    ([STEER], LOGIT_DIFF, "the treatment states a readout, but no stage takes its gradients from it"),
+    ([{**STEER, "readout": LOGIT_DIFF}], None, "stage 0 states a readout, but none of its ops acts on a gradient"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "softmax", "set": "answer"}]}, "unknown reduction 'softmax'"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "weights"}]}, "addresses tensors .* a readout reads activations"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer_grad"}]}, "a readout reads values"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "project", "set": "resid"}]}, "`project` takes an operand"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer", "operand": "probe"}]}, "`sum` takes no operand"),
+    ([ZERO_GRAD], {"terms": [{"reduce": "sum", "set": "answer", "weight": "1"}]}, "`weight` is a finite number"),
+    ([ZERO_GRAD], {"expr": "logit[42] - logit[7]"}, "it carries no expression"),
 ])
-def test_a_misplaced_or_malformed_readout_is_refused_by_name(stages, readout, version, match):
+def test_a_misplaced_or_malformed_readout_is_refused_by_name(stages, readout, match):
     with pytest.raises(AddressError, match=match):
-        Recipe.from_mapping(readout_doc(stages, readout=readout, version=version, operands={"probe": CONCEPT}))
+        read_treatment(readout_doc(stages, readout=readout, operands={"probe": CONCEPT}))
 
 
 def test_a_gradient_stage_without_a_readout_keeps_reading_below_schema_4():
-    recipe = Recipe.from_mapping(readout_doc([ZERO_GRAD], readout=None, version=2))  # the consumer's own scalar
-    assert recipe.readout is None and recipe.to_mapping()["schema_version"] == 2
+    treatment = read_treatment(readout_doc([ZERO_GRAD], readout=None))  # the consumer's own scalar
+    assert treatment.readout is None and treatment.schema_version == 2
 
 
 def test_a_book_treatment_with_a_readout_is_book_schema_4():
@@ -137,9 +135,9 @@ def test_a_book_treatment_with_a_readout_is_book_schema_4():
     book = {**readout_doc([])["book"], "schema_version": 3, "treatments": {"diff": body}}
     with pytest.raises(AddressError, match="have `gradients` or a `readout`, which need address book schema 4"):
         AddressBook.from_mapping(book)
-    read = AddressBook.from_mapping({**book, "schema_version": 4})
-    assert read.treatments["diff"].readout.terms[0].set == "answer"
-    assert read.treatments["diff"].to_treatment()["readout"]["terms"][0]["reduce"] == "sum"
+    loaded = AddressBook.from_mapping({**book, "schema_version": 4})
+    assert loaded.treatments["diff"].readout.terms[0].set == "answer"
+    assert loaded.treatments["diff"].to_mapping()["readout"]["terms"][0]["reduce"] == "sum"
 
 
 def test_a_treatment_readout_refuses_execution_passes():
@@ -151,12 +149,12 @@ def test_a_treatment_readout_refuses_execution_passes():
 
 
 def test_a_consumer_declares_the_reductions_it_computes():
-    recipe = Recipe.from_mapping(readout_doc([ZERO_GRAD]))
+    treatment = read_treatment(readout_doc([ZERO_GRAD]))
     grads = Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}))
-    assert check_support(recipe, grads) == ["readout term 0: reduction `sum` is not computed (`readouts`: [])",
+    assert check_support(treatment, grads) == ["readout term 0: reduction `sum` is not computed (`readouts`: [])",
                                             "readout term 1: reduction `sum` is not computed (`readouts`: [])"]
     computes = Support(ops=frozenset({"scale"}), of=frozenset({"value", "grad"}), readouts=frozenset({"sum"}))
-    assert check_support(recipe, computes) == []
+    assert check_support(treatment, computes) == []
     doc = SupportRecord(sections={"steering": computes}).to_mapping()
     assert doc["schema_version"] == 5 and doc["sections"]["steering"]["readouts"] == ["sum"]
     assert SupportRecord.from_mapping(doc).steering == computes

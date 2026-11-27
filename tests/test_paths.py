@@ -125,7 +125,7 @@ def test_stop_and_route_act_on_a_path_in_the_gradients_section():
                                                             "params": {"reduce": "sum"}}])
     assert [o.op for o in t.gradients] == ["stop", "route"] and t.gradients[1].params == {"reduce": "sum"}
     assert t.gradients[0].target_kind(t.book) == "path"
-    assert t.to_treatment()["gradients"][1] == {"op": "route", "target": {"set": "p"}, "params": {"reduce": "sum"}}
+    assert t.to_mapping()["gradients"][1] == {"op": "route", "target": {"set": "p"}, "params": {"reduce": "sum"}}
 
 
 @pytest.mark.parametrize("op, match", [

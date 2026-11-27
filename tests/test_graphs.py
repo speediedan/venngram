@@ -19,9 +19,9 @@ from venngram.conformance import check
 from venngram.errors import AddressError, NewerAddressSchemaError
 from venngram.graphs import Anchor, anchor_cases, GraphSubset, read_graph_table, write_graph_table
 from venngram.manifest import build_manifest
-from venngram.recipe import Recipe
 from venngram.store import publish
 from venngram.support import SupportRecord
+from venngram.treatment import Treatment
 from venngram.units import _sha256
 
 MODEL = {"id": "example/model", "revision": "pinned-model"}
@@ -258,16 +258,16 @@ def test_a_book_names_graphs_and_its_treatments_apply_them(tmp_path):
                   "transform": [{"scale": {"factor": 0.5}}]}}]}])
     book = AddressBook.from_mapping(doc, base_dir=tmp_path)
     assert book.schema_version == 5 and book.graphs["reasoning"].name == "reasoning" and not book.own_sets
-    recipe = book.treatments["transfer"]
-    first, second = recipe.stages[0].ops
+    treatment = book.treatments["transfer"]
+    first, second = treatment.stages[0].ops
     assert first.target_kind(book) == "graph_nodes" and first.target_of(book) == "value"
     assert second.value.baseline == "baseline" and second.value.source == "graph"
-    written = recipe.to_mapping()
-    assert written["schema_version"] == 5
+    written = treatment.to_mapping()
+    assert treatment.schema_version == 5
     assert written["stages"][0]["ops"][1]["target"] == {"graph": "reasoning"}
     assert written["stages"][0]["ops"][1]["value"]["from"] == {"graph": "reasoning", "column": "activation",
                                                                 "baseline": "baseline"}
-    assert Recipe.treatment(recipe.to_treatment(), book, name="again").stages == recipe.stages
+    assert Treatment.from_mapping(treatment.to_mapping(), book, name="again").stages == treatment.stages
 
 
 def test_a_restriction_names_a_finite_feature_universe_of_the_book(tmp_path):
@@ -347,16 +347,6 @@ def test_graphs_need_book_schema_5_and_cite_a_hash(tmp_path):
     assert AddressBook.from_mapping(inline, base_dir=tmp_path, inline=True).schema_version == 5
 
 
-def test_a_legacy_recipe_with_a_graph_target_needs_schema_5(tmp_path):
-    book = book_with(tmp_path, [{"site": SITE, "ops": [transfer_op()]}])
-    book.pop("treatments")
-    doc = {"schema_version": 4, "kind": "recipe", "name": "r", "model": dict(MODEL), "book": book,
-           "stages": [{"site": SITE, "ops": [transfer_op()]}]}
-    with pytest.raises(AddressError, match="needs recipe schema 5"):
-        Recipe.from_mapping(doc, base_dir=tmp_path)
-    assert Recipe.from_mapping({**doc, "schema_version": 5}, base_dir=tmp_path).to_mapping()["schema_version"] == 5
-
-
 def circuits_record(**subsets):
     sections = {"circuits": {"graphs": ["attribution"], **({"subsets": subsets} if subsets is not None else {})}}
     return SupportRecord.from_mapping({"schema_version": 6, "kind": "support_record", "name": "tracer",
@@ -371,11 +361,11 @@ def test_graph_treatments_are_checked_against_circuits_subsets(tmp_path):
                 "value": {"dose": 0.0}}
     book = AddressBook.from_mapping(book_with(tmp_path, [{"site": SITE, "ops": [transfer_op(), restrict]}], sets=sets,
                                               graph=graph), base_dir=tmp_path)
-    recipe = book.treatments["transfer"]
+    treatment = book.treatments["transfer"]
     full = circuits_record(ops=["replace"], anchors=["from_end", "token_match", "absolute"],
                            featurizers=["transcoder", "block_sparse"], values=["scalar", "vector"], complement=True)
-    assert full.check_recipe(recipe) == []
-    refusals = circuits_record(ops=["add"], anchors=["from_end"], featurizers=["transcoder"]).check_recipe(recipe)
+    assert full.check_treatment(treatment) == []
+    refusals = circuits_record(ops=["add"], anchors=["from_end"], featurizers=["transcoder"]).check_treatment(treatment)
     assert any("not applied to graph targets" in r for r in refusals)
     assert any("anchor `token_match` is not resolved" in r for r in refusals)
     assert any("`block_sparse` featurizer, which is not placed" in r for r in refusals)
@@ -383,12 +373,13 @@ def test_graph_treatments_are_checked_against_circuits_subsets(tmp_path):
     assert any("restriction (`outside`) is not applied" in r for r in refusals)
     reads_only = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "name": "reader",
                                              "sections": {"circuits": {"graphs": ["attribution"]}}})
-    assert reads_only.check_recipe(recipe) == ["recipe `transfer`: its graph targets need `circuits.subsets`, which "
-                                               "this consumer does not declare (reading graphs is not applying them)"]
+    assert reads_only.check_treatment(treatment) == [
+        "treatment `transfer`: its graph targets need `circuits.subsets`, which this consumer does not declare "
+        "(reading graphs is not applying them)"]
     steering_only = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "name": "steerer",
                                                 "sections": {"steering": {"ops": ["replace"]}}})
-    assert steering_only.check_recipe(recipe) == ["recipe `transfer`: `steerer` declares no `circuits` section, so it "
-                                                  "offers no circuits contract"]
+    assert steering_only.check_treatment(treatment) == [
+        "treatment `transfer`: `steerer` declares no `circuits` section, so it offers no circuits contract"]
 
 
 def test_subsets_need_support_record_schema_6_and_round_trip():

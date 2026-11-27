@@ -28,13 +28,13 @@ document of **sections**, one per contract the consumer offers, and it opts in t
         targets: [param]
         units: none                    # none | unit-adapter
         naming_schemes: [physical]
-      steering: {ops: [add, scale]}    # recipes (schema 1's fields)
+      steering: {ops: [add, scale]}    # treatments (schema 1's fields)
     extensions:                        # sections defined outside venngram
       acme.probes: {schema: "hub-model:acme/probe-support:schema.yaml", description: probe heads}
 
 **Core sections** (:data:`CORE_SECTIONS`):
 
-- ``steering``: recipes, as :class:`venngram.ops.Support` (ops, targets, token scopes, value sources, transforms,
+- ``steering``: treatments, as :class:`venngram.ops.Support` (ops, targets, token scopes, value sources, transforms,
   sites, bases);
 - ``tuning``: address books whose sets select tensors to tune (:class:`TuningSupport`);
 - ``circuits``: traced or validated circuits, attribution graphs in general (:class:`CircuitSupport`), and, under
@@ -44,7 +44,7 @@ document of **sections**, one per contract the consumer offers, and it opts in t
   (:class:`FormatSupport`), so a reader can say how to read a foreign document without running anything.
 
 **Opt-in.** A section a record omits is a contract its consumer does not offer: :meth:`SupportRecord.check_book` and
-:meth:`SupportRecord.check_recipe` refuse every document that needs it, naming the section.
+:meth:`SupportRecord.check_treatment` refuse every document that needs it, naming the section.
 
 **Unknown sections are skipped, not fatal.** A record written for a newer venngram, or carrying another project's
 section, still loads: a section type this reader cannot parse is reported (:class:`UnknownSupportSectionWarning`,
@@ -335,17 +335,17 @@ class SubsetSupport:
         out["complement"] = self.complement
         return out
 
-    def check_recipe(self, recipe: Any) -> list[str]:
-        """Every way ``recipe``'s graph ops ask for something this declaration does not honour."""
+    def check_treatment(self, treatment: Any) -> list[str]:
+        """Every way ``treatment``'s graph ops ask for something this declaration does not honour."""
         import fnmatch
 
         out: list[str] = []
-        for i, stage in enumerate(recipe.stages):
+        for i, stage in enumerate(treatment.stages):
             for j, op in enumerate(stage.ops):
                 if op.graph is None:
                     continue
                 at = f"stage {i} ({stage.site}) op {j} (`{op.op}`, graph `{op.graph}`)"
-                graph = recipe.book.graphs[op.graph]
+                graph = treatment.book.graphs[op.graph]
                 if op.op not in self.ops:
                     out.append(f"{at}: the op is not applied to graph targets (`subsets.ops`: {sorted(self.ops)})")
                 if self.sites is not None and stage.site not in self.sites and not any(
@@ -382,7 +382,7 @@ class CircuitSupport:
 
     A circuit is a subgraph of a model's computation with evidence for it: an attribution graph (circuit-tracer's is one
     producer), pruned to a threshold, perhaps validated by intervening on its nodes. Its nodes are addressed with
-    venngram addresses (a feature, a site, a token position), so a circuit document composes with books and recipes.
+    venngram addresses (a feature, a site, a token position), so a circuit document composes with books and treatments.
 
     Attributes:
         graphs: The graph kinds it reads (``attribution``; others as they are defined).
@@ -420,12 +420,12 @@ class CircuitSupport:
             out["subsets"] = self.subsets.to_mapping()
         return out
 
-    def check_recipe(self, recipe: Any) -> list[str]:
-        """Every way ``recipe``'s graph ops ask for something this section does not honour."""
+    def check_treatment(self, treatment: Any) -> list[str]:
+        """Every way ``treatment``'s graph ops ask for something this section does not honour."""
         if self.subsets is None:
-            return [f"recipe `{getattr(recipe, 'name', '?')}`: its graph targets need `circuits.subsets`, which this "
-                    "consumer does not declare (reading graphs is not applying them)"]
-        return self.subsets.check_recipe(recipe)
+            return [f"treatment `{getattr(treatment, 'name', '?')}`: its graph targets need `circuits.subsets`, which "
+                    "this consumer does not declare (reading graphs is not applying them)"]
+        return self.subsets.check_treatment(treatment)
 
 
 @dataclass(frozen=True)
@@ -696,23 +696,23 @@ class SupportRecord:
         """Every way the book's treatments (those in ``names``, else all) ask for something the ``steering`` section
         does not honour, each refusal prefixed with its treatment's name."""
         chosen = [n for n in book.treatments if names is None or n in names]
-        return [f"treatment `{n}`: {r}" for n in chosen for r in self.check_recipe(book.treatments[n])]
+        return [f"treatment `{n}`: {r}" for n in chosen for r in self.check_treatment(book.treatments[n])]
 
-    def check_recipe(self, recipe: Any) -> list[str]:
-        """Every way ``recipe`` asks for something the ``steering`` section does not honour (see
+    def check_treatment(self, treatment: Any) -> list[str]:
+        """Every way ``treatment`` asks for something the ``steering`` section does not honour (see
         :func:`venngram.ops.check_support`), and its graph ops anything ``circuits.subsets`` does not."""
-        what = f"recipe `{getattr(recipe, 'name', '?')}`"
-        stages = getattr(recipe, "stages", ())
+        what = f"treatment `{getattr(treatment, 'name', '?')}`"
+        stages = getattr(treatment, "stages", ())
         graph_ops = [o for s in stages for o in s.ops if getattr(o, "graph", None) is not None]
-        other = len(graph_ops) < sum(len(s.ops) for s in stages) or getattr(recipe, "weights", ()) \
-            or getattr(recipe, "gradients", ()) or getattr(recipe, "readout", None) is not None
+        other = len(graph_ops) < sum(len(s.ops) for s in stages) or getattr(treatment, "weights", ()) \
+            or getattr(treatment, "gradients", ()) or getattr(treatment, "readout", None) is not None
         out: list[str] = []
         if other or not graph_ops:
             out += self._refuse_missing("steering", what) if self.steering is None else \
-                check_support(recipe, self.steering)
+                check_support(treatment, self.steering)
         if graph_ops:
             out += self._refuse_missing("circuits", what) if self.circuits is None else \
-                self.circuits.check_recipe(recipe)
+                self.circuits.check_treatment(treatment)
         return out
 
 

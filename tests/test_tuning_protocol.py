@@ -31,7 +31,7 @@ ALLOWED = {"torch", "yaml", "venngram"}
 OPTIONAL = {"maps/verification.py": {"transformers"}, "store.py": {"huggingface_hub"},
             "registry.py": {"huggingface_hub", "pyarrow"}}
 TORCH_FREE = ("__init__.py", "__about__.py", "address.py", "book.py", "errors.py", "resolve.py", "roles.py", "units.py",
-              "recipe.py", "manifest.py", "store.py", "sources.py",
+              "treatment.py", "manifest.py", "store.py", "sources.py",
               "ops.py", "operands.py")
 
 

@@ -9,18 +9,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Parameter gradients: a recipe's `gradients` section, its schema steps and its support declaration."""
+"""Parameter gradients: a treatment's `gradients` section, its schema steps and its support declaration."""
 import pytest
 import torch
 from test_param_targets import PARAM_SETS
-from test_recipe import CONCEPT, MODEL, recipe_doc
+from test_treatment import CONCEPT, MODEL, read_treatment, treatment_doc
 
 from venngram.book import AddressBook
 from venngram.errors import AddressError
 from venngram.ops import check_support, Support
 from venngram.patches import tensor_sha256, write_weight_patch
-from venngram.recipe import compose_weights, Composition, Recipe
 from venngram.support import SupportRecord
+from venngram.treatment import compose_weights, Composition, Treatment
 
 GRAD_SETS = {**PARAM_SETS,
              "down_grad": "@down & of:grad",
@@ -29,8 +29,7 @@ GRAD_SETS = {**PARAM_SETS,
 
 
 def gradients_doc(gradients, *, sets=GRAD_SETS, operands=None, name="g"):
-    doc = recipe_doc([], sets, operands=operands, name=name)
-    doc["schema_version"] = 4
+    doc = treatment_doc([], sets, operands=operands, name=name)
     doc["book"]["schema_version"] = 2
     doc["gradients"] = gradients
     doc.pop("stages")
@@ -43,15 +42,16 @@ def scale(target, dose):
 
 def test_a_gradients_op_targets_a_tensors_gradient_or_its_units_and_round_trips():
     masked = {"op": "replace", "target": {"set": "neuron_grads"}, "value": {"dose": 0.0}}
-    recipe = Recipe.from_mapping(gradients_doc([masked, scale("down_grad", 0.5)]))
-    units, whole = recipe.gradients
-    assert (units.target_kind(recipe.book), whole.target_kind(recipe.book)) == ("param_units", "param")
-    assert units.target_of(recipe.book) == whole.target_of(recipe.book) == "grad"
-    assert units.unit_doses(recipe.book) == {(13, 7): 0.0, (13, 9): 0.0} and recipe.weights == ()
-    doc = recipe.to_mapping()
-    assert doc["schema_version"] == 4 and "stages" not in doc and doc["gradients"] == [masked, scale("down_grad", 0.5)]
-    assert Recipe.from_mapping(doc).gradients == recipe.gradients
-    projected = Recipe.from_mapping(gradients_doc([{"op": "project", "target": {"set": "down_grad"},
+    treatment = read_treatment(gradients_doc([masked, scale("down_grad", 0.5)]))
+    units, whole = treatment.gradients
+    assert (units.target_kind(treatment.book), whole.target_kind(treatment.book)) == ("param_units", "param")
+    assert units.target_of(treatment.book) == whole.target_of(treatment.book) == "grad"
+    assert units.unit_doses(treatment.book) == {(13, 7): 0.0, (13, 9): 0.0} and treatment.weights == ()
+    doc = treatment.to_mapping()
+    assert treatment.schema_version == 4 and "stages" not in doc
+    assert doc["gradients"] == [masked, scale("down_grad", 0.5)]
+    assert Treatment.from_mapping(doc, treatment.book).gradients == treatment.gradients
+    projected = read_treatment(gradients_doc([{"op": "project", "target": {"set": "down_grad"},
                                                     "operand": "concept"}], operands={"concept": CONCEPT}))
     assert projected.gradients[0].operand == "concept"
 
@@ -67,7 +67,7 @@ def test_a_gradients_op_targets_a_tensors_gradient_or_its_units_and_round_trips(
 def test_a_misused_gradients_op_is_refused_by_name(op, match):
     poles = {"values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0], "shape": [2, 4], "basis": "paper"}
     with pytest.raises(AddressError, match=match):
-        Recipe.from_mapping(gradients_doc([op], operands={"concept": CONCEPT, "poles": poles}))
+        read_treatment(gradients_doc([op], operands={"concept": CONCEPT, "poles": poles}))
 
 
 def test_a_weight_patch_applies_to_a_value_never_to_a_gradient(tmp_path):
@@ -78,29 +78,25 @@ def test_a_weight_patch_applies_to_a_value_never_to_a_gradient(tmp_path):
     doc = gradients_doc([{"op": "add", "target": {"set": "down_grad"}, "operand": "edit"}],
                         operands={"edit": {"patch": "edit.yaml"}})
     with pytest.raises(AddressError, match="is a weight patch, which only a `weights` op applies"):
-        Recipe.from_mapping(doc, base_dir=tmp_path)
+        read_treatment(doc, base_dir=tmp_path)
 
 
-def test_gradients_need_recipe_schema_4_and_a_book_treatment_with_them_book_schema_4():
-    doc = gradients_doc([scale("neuron_grads", 0.5)])
-    doc["schema_version"] = 3
-    with pytest.raises(AddressError, match="`gradients` needs recipe schema 4, not 3"):
-        Recipe.from_mapping(doc)
+def test_a_book_treatment_with_gradients_needs_book_schema_4():
     book = {**gradients_doc([])["book"], "schema_version": 3,
             "treatments": {"damped": {"model": MODEL, "gradients": [scale("neuron_grads", 0.5)]}}}
     with pytest.raises(AddressError, match="treatments \\[.damped.\\] have `gradients` or a `readout`, which "
                                            "need address book schema 4"):
         AddressBook.from_mapping(book)
-    read = AddressBook.from_mapping({**book, "schema_version": 4})
-    assert read.treatments["damped"].gradients[0].target_kind(read) == "param_units"
-    assert read.treatments["damped"].to_treatment()["gradients"] == [scale("neuron_grads", 0.5)]
+    loaded = AddressBook.from_mapping({**book, "schema_version": 4})
+    assert loaded.treatments["damped"].gradients[0].target_kind(loaded) == "param_units"
+    assert loaded.treatments["damped"].to_mapping()["gradients"] == [scale("neuron_grads", 0.5)]
 
 
-def test_gradient_ops_from_two_recipes_compose_when_they_commute():
-    a = Recipe.from_mapping(gradients_doc([scale("neuron_grads", 0.5)], name="a"), source="a")
-    b = Recipe.from_mapping(gradients_doc([scale("neuron_grads", 2.0)], name="b"), source="b")
-    assert [x.recipe.name for x in Composition((a, b)).gradients()] == ["a", "b"]
-    c = Recipe.from_mapping(gradients_doc([{"op": "replace", "target": {"set": "other_grads"}, "value": {"dose": 0.0}}],
+def test_gradient_ops_from_two_treatments_compose_when_they_commute():
+    a = read_treatment(gradients_doc([scale("neuron_grads", 0.5)], name="a"), source="a")
+    b = read_treatment(gradients_doc([scale("neuron_grads", 2.0)], name="b"), source="b")
+    assert [x.treatment.name for x in Composition((a, b)).gradients()] == ["a", "b"]
+    c = read_treatment(gradients_doc([{"op": "replace", "target": {"set": "other_grads"}, "value": {"dose": 0.0}}],
                                           name="c"), source="c")
     with pytest.raises(AddressError, match="gradients op `replace` does not commute with `scale`"):
         compose_weights([a, c], section="gradients")  # unit 9 is in both
@@ -108,12 +104,12 @@ def test_gradient_ops_from_two_recipes_compose_when_they_commute():
 
 
 def test_a_consumer_declares_the_ops_it_applies_to_parameter_gradients_at_support_record_schema_5():
-    recipe = Recipe.from_mapping(gradients_doc([scale("neuron_grads", 0.5)]))
+    treatment = read_treatment(gradients_doc([scale("neuron_grads", 0.5)]))
     weights_only = Support(ops=frozenset({"scale"}), targets=frozenset({"param", "param_units"}))
-    assert check_support(recipe, weights_only) == [
+    assert check_support(treatment, weights_only) == [
         "gradients op 0 (`scale`): the op is not applied to parameter gradients (`gradient_ops`: [])"]
     grads = Support(ops=frozenset({"scale"}), targets=frozenset({"param_units"}), gradient_ops=frozenset({"scale"}))
-    assert check_support(recipe, grads) == []
+    assert check_support(treatment, grads) == []
     doc = SupportRecord(sections={"steering": grads}).to_mapping()
     assert doc["schema_version"] == 5 and doc["sections"]["steering"]["gradient_ops"] == ["scale"]
     assert SupportRecord.from_mapping(doc).steering == grads

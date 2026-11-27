@@ -13,8 +13,8 @@ r"""
 Weight Patches
 ^^^^^^^^^^^^^^
 
-A **weight patch** is the operand of a recipe's ``weights`` op (``add`` or ``replace`` on a ``param`` target): a change
-to one tensor, as a ``kind: weight_patch`` document and a safetensors sidecar holding its delta.
+A **weight patch** is the operand of a treatment's ``weights`` op (``add`` or ``replace`` on a ``param`` target): a
+change to one tensor, as a ``kind: weight_patch`` document and a safetensors sidecar holding its delta.
 
 .. code-block:: yaml
 

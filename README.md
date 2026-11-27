@@ -121,23 +121,23 @@ packed bit per element of one tensor of a recorded shape, named on a tensor's gr
 fine-tuning or lottery-ticket mask), so only a `checkpoint` book carries one.
 
 A book may carry **treatments**: what is done to its sets for one model, by name, under its `treatments` section, so a
-selection and what is done to it travel together in one document. A treatment (a **recipe**, `venngram.recipe.Recipe`)
+selection and what is done to it travel together in one document. A treatment (`venngram.treatment.Treatment`)
 is ordered **stages**, each applying ordered **ops** at one site under one
 token scope. An op acts on the whole activation, a set's units or a latent space's features; it may take a named
 **operand** (a direction, a pair, a subspace, each in a declared basis, inline or in a sidecar) and a **value** (a dose,
 a per-unit table, or a column of a unit table through declared transforms, each with a stated meaning and
 conformance vectors a consumer's evaluator runs). A unit target is one address with explicit layers and `units`, or a
 composition of such sets at one site with the set algebra (`@a & @b`, `@a | @b`, `(@a & @b & layers:12) - @control`),
-resolved over `(layer, unit)` pairs when the recipe is read; an empty, mixed-site or feature-set composition is refused
-by name. A recipe's `weights` section (recipe schema 3) holds ops on parameters instead, applied to the tensors before
+resolved over `(layer, unit)` pairs when the treatment is read; an empty, mixed-site or feature-set composition is
+refused by name. A treatment's `weights` section (treatment schema 3) holds ops on parameters instead, applied to the tensors before
 any stage and kept in them: a whole tensor is a `param` target, a set with `units` a `param_units` one, along each
 tensor's unit axis (see "Maps: base and overlay"). A weight op acts on every token, and an `add` or `replace` may take a
 `delta` operand, a weight patch (`venngram.patches`: a `kind: weight_patch` document naming the tensor, its shape and
-the hash of the base it applies to, with a low-rank, sparse or dense delta in a sidecar). A `gradients` section (recipe
+the hash of the base it applies to, with a low-rank, sparse or dense delta in a sidecar). A `gradients` section (treatment
 schema 4) holds ops on parameter gradients: its target sets say `of: grad`, and each op acts on a step's accumulated
 gradient of the tensors it targets, never materialized into them (`scale`, `replace` with a zero value as the declared
 form of a mask, `add`, and `project` and `reject` on a whole tensor). A stage op on an `of: grad` target acts on the
-gradient of a scalar, which the treatment states as a `readout` (`venngram.readouts`, recipe schema 4; a stage may
+gradient of a scalar, which the treatment states as a `readout` (`venngram.readouts`, treatment schema 4; a stage may
 replace it with its own): the weighted sum of terms, each a registered reduction (`sum`, `project` with a vector
 operand, `norm`, or one added with `register_readout`, each with a stated meaning and conformance vectors run by
 `check_readouts`) of the activations a book set addresses at a token scope, so "the logit difference of two tokens at
@@ -148,10 +148,8 @@ executes one. `replace_with_error` is a straight-through substitution: for an op
 gives $o + \mathrm{sg}(x - o)$, so the forward value is $x$ and the gradient reaches $o$, not $x$. A token scope is `all`, `last`, `prompt` (the input, before any
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
 a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
-records" below), and `check_support` names everything a recipe asks for beyond it. `compose` joins recipes stage by stage, refusing ops that
-do not commute unless the composition gives an order. The standalone `kind: recipe` document (the form written before
-books and recipes merged) is retired: `python -m venngram.migrate` rewrites one as its book, carrying the recipe as a
-treatment named by the recipe. Applying a treatment is the consumer's; treatments written in another tool's format
+records" below), and `check_support` names everything a treatment asks for beyond it. `compose` joins treatments stage by stage, refusing
+ops that do not commute unless the composition gives an order. Applying a treatment is the consumer's; treatments written in another tool's format
 are read by an adapter outside venngram's core.
 
 ### Graph subsets
@@ -160,7 +158,7 @@ A pruned piece of an attribution graph is a `kind: graph_subset` document (`venn
 coordinates and source values, optional edges with their attributions, and the provenance of the graph they came from
 (the source prompt's pinned tokenizer and token ids, attribution targets, pruning). A book names the graphs its
 treatments apply under `graphs` (book schema 5), each cited by hash, and an op targets one with
-`target: {graph: <name>}` (recipe schema 5), reading its value `from` a node column, optionally as a delta from a
+`target: {graph: <name>}` (treatment schema 5), reading its value `from` a node column, optionally as a delta from a
 baseline column:
 
 ```yaml
@@ -227,8 +225,7 @@ primary stack's), and `unit_tables(stack="vision")` gives that stack's rows.
 
 A directory of venngram documents (a Hub repository, a bucket prefix, a local folder) lists them in `venngram.yaml`:
 each document's kind, path, schema version, sha256 and the files it needs (a book's sidecars, imports, graphs and
-unit tables, and the weight patches its treatments name). A manifest entry of the retired `recipe` kind is skipped with a warning that
-names `python -m venngram.migrate`. A **document reference** names one document wherever it lives:
+unit tables, and the weight patches its treatments name). A **document reference** names one document wherever it lives:
 `<store>:<ref>[@<revision>]:<path>[#<sha256>]`, for example
 `hub-model:speediedan/venngram-maps@3f1e...:maps/Qwen3ForCausalLM.yaml`.
 
@@ -277,7 +274,7 @@ of a value part and a gradient part, `union-masks`, a union of gradient conjunct
 difference of masks, and `element-masks`, an element mask. Its `pins: true` (schema 7) says it
 checks the models a book pins (`AddressBook.check_pins`); a pinned book is refused by a consumer that does not. A
 `steering`
-section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a recipe's `gradients`
+section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a treatment's `gradients`
 section), and its `readouts` the reductions it computes a readout with. Its `routes` (schema 8) lists the path
 waypoint kinds its route resolver places (`address`, `graph_nodes`, `anchor`), for the `stop` and `route` ops on a
 `path` target. A `circuits` section's `subsets` (schema 6)
@@ -510,7 +507,6 @@ Published documents outlive the venngram that wrote them, so every document kind
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
 | address book | 1 to 13 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass, 13 when the book names `tables` | ignored at the top level |
-| recipe (retired) | 1 to 5, only by `python -m venngram.migrate`, which writes its book with the recipe as a treatment | none: a treatment is written in its book | refused in `method` and in an op's parameters |
 | support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
 | unit table | 1 | 1 | refused |
@@ -526,7 +522,7 @@ always does, since a reader that skipped it would resolve the wrong thing silent
 any new key bumps it.
 
 **Too new, too old, malformed.** Each is refused by name, with its own message. A document newer than the reader is a
-`venngram.NewerSchemaError` (a `ValueError`; for books and retired recipes also an `AddressError`), so code that serves
+`venngram.NewerSchemaError` (a `ValueError`; for books, graph subsets and unit tables also an `AddressError`), so code that serves
 documents from shared places can tell it apart from a broken one. Registry lookups do exactly that: a registry may hold
 documents written for a newer venngram, and a lookup passes over them with a warning and serves the best one it reads,
 while a malformed document of a schema it reads still fails. Each index row records its document's schema, so a newer
@@ -539,15 +535,22 @@ warning on every module says; it may change in any 0.x release. A consumer pins 
 (`venngram>=0.1,<0.2`), declares what it honours in its own support record, and checks published documents with
 `python -m venngram.conformance`.
 
-**Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema (a
-retired recipe to its book, with the recipe as a treatment) and reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
+**The public API.** A name is public when it is in its module's `__all__`; every module has one, and anything else
+(a leading underscore, a helper a module imports) is internal and may change without notice. A public name is
+removed only through the deprecation cycle below, and after 0.1.0 a renamed module keeps a warning alias for one minor
+version. Every error venngram raises derives from `venngram.errors.VenngramError` (a `ValueError`), so `except
+VenngramError` catches them all; `venngram.tuning.Unresolvable` is also an `AddressUnresolvable`, the same outcome
+seen through a view.
+
+**Migration.** `python -m venngram.migrate <document> [--write]` rewrites a document to its kind's current schema and
+reads the result back, and a golden fixture of every published schema (`tests/schemas/`) keeps today's readers honest.
 
 **Deprecation.** One cycle for a document schema, an API name or a vocabulary name (`venngram.deprecation`): a name
 deprecated in `0.N` warns (a `VenngramDeprecationWarning`) through `0.N` and is refused in `0.N+1`, by name and with
 its replacement; from 1.0 it warns for one full minor version. `VENNGRAM_STRICT=1`, or `with
 venngram.deprecation.strict():`, turns every such warning into an error.
 
-**Extension points.** What a new architecture or tool brings is registered or declared as data: recipe ops
+**Extension points.** What a new architecture or tool brings is registered or declared as data: treatment ops
 (`register_op`, or published as an `op_specs` document), value transforms (`register_transform`, with a stated meaning and conformance vectors), map sources
 and formats (entry points), stores, document loaders and book import schemes, support-record extension sections, a
 map's own component kinds and block stacks, rule sets, and the statistics, activation points and resolvers a consumer

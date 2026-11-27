@@ -44,7 +44,7 @@ def deprecated(what: str, name: str, *, since: str, removed_in: str, replacement
     """Warn, once per process for each ``(what, name)``, that ``name`` is deprecated.
 
     Args:
-        what: The sort of thing (``recipe schema``, ``function``, ``component name``).
+        what: The sort of thing (``treatment schema``, ``function``, ``component name``).
         name: Its name.
         since: The version that deprecated it.
         removed_in: The version that refuses it.

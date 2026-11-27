@@ -17,8 +17,8 @@ from venngram.maps.drafter import DraftingRules  # noqa: E402
 from venngram.maps.overlay import overlay_from_document, OVERLAY_SCHEMA_VERSION  # noqa: E402
 from venngram.maps.rules import rules_from_document  # noqa: E402
 from venngram.maps.verification import read_record, RECORD_SCHEMA_VERSION  # noqa: E402
-from venngram.recipe import Recipe  # noqa: E402
 from venngram.support import SupportRecord  # noqa: E402
+from venngram.tables import UnitTable  # noqa: E402
 
 LORA = {"schema_version": 5, "overlay": "peft.lora", "applies_when": {"module_names": ["lora_A"]},
         "roles": {"lora_A": "adapter:{key}"}}
@@ -47,9 +47,9 @@ def test_a_too_new_document_is_refused_as_newer_not_as_malformed(read, doc, kind
 
 @pytest.mark.parametrize("read, doc", [
     (AddressBook.from_mapping, {"schema_version": 99, "sets": {}}),
-    (Recipe.from_mapping, {"schema_version": 99, "kind": "recipe"}),
+    (UnitTable.from_mapping, {"schema_version": 99, "kind": "unit_table"}),
 ])
-def test_a_too_new_book_or_recipe_is_both_newer_and_an_address_error(read, doc):
+def test_a_too_new_book_or_unit_table_is_both_newer_and_an_address_error(read, doc):
     with pytest.raises(NewerSchemaError) as err:
         read(doc)
     assert isinstance(err.value, AddressError)

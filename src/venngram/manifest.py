@@ -35,9 +35,7 @@ needs, and a layout can change without breaking a reader.
 
 **Versions.** A manifest schema outside :data:`MANIFEST_WINDOW`, and a ``requires.venngram`` this version does not
 satisfy, are refused by name. A document of an unknown ``kind`` is skipped with a warning (kept in
-:attr:`Manifest.skipped`), so an older reader still uses the documents it understands. A retired kind is skipped the
-same way, and its warning names what replaces it: a ``recipe`` is now a treatment in its book, which
-``python -m venngram.migrate`` writes from the recipe document.
+:attr:`Manifest.skipped`), so an older reader still uses the documents it understands.
 
 :func:`build_manifest` writes one for a directory: it hashes each document and finds what it needs.
 
@@ -68,7 +66,7 @@ MANIFEST_WINDOW = (1, 1)
 #: The document kinds this version knows. ``units`` is a sidecar, read through the book that names it; ``index`` is a
 #: registry index; ``rules`` holds an architecture family's verification and drafting rules
 #: (:mod:`venngram.maps.rules`); ``support_record`` is what a consumer honours, or a format adapter offers
-#: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's recipe ops
+#: (:class:`venngram.support.SupportRecord`); ``op_specs`` declares a consumer's treatment ops
 #: (:func:`venngram.ops.read_op_specs`); ``weight_patch`` is a treatment's weight patch (:mod:`venngram.patches`), and
 #: ``weight_delta`` its sidecar, read through the patch; ``graph_subset`` is a graph subset a book names
 #: (:mod:`venngram.graphs`), and ``graph_table`` its table sidecar, read through the graph; ``unit_table`` is a
@@ -76,10 +74,6 @@ MANIFEST_WINDOW = (1, 1)
 #: (or through the book, for a table written inline).
 KINDS = ("address_book", "component_map", "rules", "verification_record", "units", "index", "support_record",
          "op_specs", "weight_patch", "weight_delta", "graph_subset", "graph_table", "unit_table", "unit_table_rows")
-
-#: Kinds an earlier version listed and this one no longer reads, with what to do about a document of one.
-_RETIRED = {"recipe": "a treatment is written in its book now; run `python -m venngram.migrate` on the document to "
-                      "write its book with the recipe as a treatment"}
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z.]*)\s*$")
@@ -153,10 +147,6 @@ class Manifest:
             seen.add(entry.path)
             if entry.kind in KINDS:
                 known.append(entry)
-            elif entry.kind in _RETIRED:
-                warnings.warn(f"{source}: skipping `{entry.path}` of retired kind `{entry.kind}`: "
-                              f"{_RETIRED[entry.kind]}.", UnknownKindWarning, stacklevel=2)
-                skipped.append(entry)
             else:
                 warnings.warn(f"{source}: skipping `{entry.path}` of unknown kind `{entry.kind}` (this venngram "
                               f"knows {', '.join(KINDS)}).", UnknownKindWarning, stacklevel=2)
@@ -383,15 +373,11 @@ def build_manifest(root: str | Path, documents: Iterable[tuple[str, str]], *, re
     own kind.
 
     Raises:
-        StoreError: If a document or a file it needs is missing or outside ``root``, or a document is of a retired
-            kind (a manifest listing it would only be skipped by its readers).
+        StoreError: If a document or a file it needs is missing or outside ``root``.
     """
     root = Path(root).resolve()
     entries: dict[str, DocumentEntry] = {}
     todo = [(kind, root / path) for kind, path in documents]
-    for kind, path in todo:
-        if kind in _RETIRED:
-            raise StoreError(f"`{path}` is of retired kind `{kind}`: {_RETIRED[kind]}, and list that book.")
     while todo:
         kind, path = todo.pop(0)
         rel = _inside(path, root)

@@ -13,10 +13,10 @@ r"""
 Operands
 ^^^^^^^^
 
-A recipe op's **operand** is a named tensor (a direction, a pair of directions, the basis of a subspace) declared in the
-recipe with its ``shape`` and the ``basis`` it is written in. A small operand may be inline (``values``); a large one is
-a safetensors **operand sidecar**, referenced like a unit sidecar by ``{file, key, sha256}``, holding ``F32`` tensors.
-It is read and written with the standard library (no ``torch``, no pickle).
+A treatment op's **operand** is a named tensor (a direction, a pair of directions, the basis of a subspace) declared
+in the treatment with its ``shape`` and the ``basis`` it is written in. A small operand may be inline (``values``); a
+large one is a safetensors **operand sidecar**, referenced like a unit sidecar by ``{file, key, sha256}``, holding
+``F32`` tensors. It is read and written with the standard library (no ``torch``, no pickle).
 
 .. warning:: This is an experimental API and may change in a future release.
 """
@@ -79,7 +79,7 @@ def read_operand(path: str | Path, key: str, *, sha256: str | None = None) -> tu
     if not path.is_file():
         raise AddressError(f"Operand sidecar {path} does not exist.")
     if sha256 is not None and _sha256(path) != sha256.lower():
-        raise AddressError(f"{path}: its sha256 differs from the reference's; the operand changed after the recipe "
+        raise AddressError(f"{path}: its sha256 differs from the reference's; the operand changed after the treatment "
                            "named it.")
     with open(path, "rb") as fh:
         (n,) = struct.unpack("<Q", fh.read(8))

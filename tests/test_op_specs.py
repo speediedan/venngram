@@ -15,13 +15,12 @@ import copy
 import pytest
 import torch
 import yaml
-from test_recipe import recipe_doc
+from test_treatment import read_treatment, treatment_doc
 
 from venngram import NewerSchemaError
 from venngram.errors import AddressError
 from venngram.ops import (check_ops, check_support, CORE_OPS, op_cases, op_spec_from_mapping, op_spec_to_mapping,
                           OPS, OpSpec, ParamSpec, read_op_specs, register_op, Support, write_op_specs)
-from venngram.recipe import Recipe
 from venngram.store import load, publish
 
 
@@ -66,17 +65,17 @@ def test_an_implementation_that_lets_the_gradient_reach_the_activation_fails_by_
                                                   "replace-with-error-when-the-operand-equals-the-activation"}
 
 
-def test_a_recipe_uses_it_and_a_consumer_must_honour_it():
-    doc = recipe_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "replace_with_error", "target": {"set": "chess"},
+def test_a_treatment_uses_it_and_a_consumer_must_honour_it():
+    doc = treatment_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "replace_with_error", "target": {"set": "chess"},
                                                             "value": {"dose": 1.0}}]}])
-    recipe = Recipe.from_mapping(doc)
-    assert check_support(recipe, Support(ops=frozenset({"replace_with_error"}), targets=frozenset({"units"}))) == []
-    assert "not supported" in check_support(recipe, Support(ops=frozenset({"replace"})))[0]
+    treatment = read_treatment(doc)
+    assert check_support(treatment, Support(ops=frozenset({"replace_with_error"}), targets=frozenset({"units"}))) == []
+    assert "not supported" in check_support(treatment, Support(ops=frozenset({"replace"})))[0]
     grad = copy.deepcopy(doc)
     grad["book"]["schema_version"] = 2
     grad["book"]["sets"]["chess"]["of"] = "grad"
     with pytest.raises(AddressError, match=r"addresses `of: grad`, and this op acts on \['value'\]"):
-        Recipe.from_mapping(grad)
+        read_treatment(grad)
 
 
 SOFT_CLIP = {"name": "soft_clip", "operand": ["none"], "params": {"bound": {"type": "float", "required": True,
@@ -85,19 +84,19 @@ SOFT_CLIP = {"name": "soft_clip", "operand": ["none"], "params": {"bound": {"typ
 DOC = {"schema_version": 1, "kind": "op_specs", "name": "example-tensor-ops", "ops": [SOFT_CLIP]}
 
 
-def test_a_published_op_validates_a_recipe_without_its_code():
-    doc = recipe_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "soft_clip", "target": {"set": "chess"},
+def test_a_published_op_validates_a_treatment_without_its_code():
+    doc = treatment_doc([{"site": "mlp.out.hook_in", "ops": [{"op": "soft_clip", "target": {"set": "chess"},
                                                             "params": {"bound": 3.0}}]}])
     with pytest.raises(AddressError, match="unknown op 'soft_clip'"):
-        Recipe.from_mapping(doc)
+        read_treatment(doc)
     (spec,) = read_op_specs(DOC)
     assert spec.params["bound"] == ParamSpec(float, True, (0.0, 100.0)) and spec.of == ("value", "grad")
-    recipe = Recipe.from_mapping(doc)
-    assert check_support(recipe, Support(ops=frozenset({"soft_clip"}), targets=frozenset({"units"}))) == []
+    treatment = read_treatment(doc)
+    assert check_support(treatment, Support(ops=frozenset({"soft_clip"}), targets=frozenset({"units"}))) == []
     bad = copy.deepcopy(doc)
     bad["stages"][0]["ops"][0]["params"]["bound"] = 500.0
     with pytest.raises(AddressError, match=r"lies in \[0.0, 100.0\]"):
-        Recipe.from_mapping(bad)
+        read_treatment(bad)
     assert read_op_specs(DOC) == (spec,)  # reading the same declaration again is a no-op
 
 

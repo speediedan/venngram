@@ -16,7 +16,7 @@ Graph Subsets
 A **graph subset** is a pruned piece of an attribution graph, kept as a document of its own (``kind: graph_subset``):
 nodes with their coordinates and source values, optional edges with their attributions, and the provenance of the graph
 they came from. An address book names the graphs its treatments use (``graphs:``, :mod:`venngram.book`), and a
-treatment applies one in another context (:mod:`venngram.recipe`: ``target: {graph: <name>}``).
+treatment applies one in another context (:mod:`venngram.treatment`: ``target: {graph: <name>}``).
 
 .. code-block:: yaml
 

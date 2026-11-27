@@ -30,8 +30,8 @@ A location is ``<store>:<ref>[@<revision>]`` (a document reference without its p
 fails to load or a book asks for something a given consumer does not honour. It is meant to run in a format
 adapter's CI and on a schedule over published example repositories.
 
-Kinds that are read through another document (``units`` sidecars, through the book that names them), that have no
-loader yet, or that are retired (``recipe``, which the manifest skips with a warning) are listed, not loaded.
+Kinds that are read through another document (``units`` sidecars, through the book that names them), or that have no
+loader yet, are listed, not loaded.
 (Conformance of a tunable view to the tuning protocol is a different check: :mod:`venngram.tuning.conformance`.)
 
 .. warning:: This is an experimental API and may change in a future release.

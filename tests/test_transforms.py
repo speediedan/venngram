@@ -138,13 +138,12 @@ def test_a_transform_without_a_stated_meaning_or_sound_vectors_is_refused(regist
 
 
 def test_a_registered_table_transform_is_refused_on_a_dose_when_read(registered):
-    from test_recipe import add, recipe_doc
+    from test_treatment import add, read_treatment, treatment_doc
 
     from venngram.errors import AddressError
-    from venngram.recipe import Recipe
 
     register_transform("clip", {"bound": ParamSpec(float, True)}, meaning="v clamped", cases=[CLIP],
                        reads_table=True)
-    doc = recipe_doc([add("chess", {"dose": 1.0, "transform": [{"clip": {"bound": 1.0}}]})])
+    doc = treatment_doc([add("chess", {"dose": 1.0, "transform": [{"clip": {"bound": 1.0}}]})])
     with pytest.raises(AddressError, match=r"\['clip'\] read the `from` table"):
-        Recipe.from_mapping(doc)
+        read_treatment(doc)

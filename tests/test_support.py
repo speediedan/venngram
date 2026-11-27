@@ -111,8 +111,8 @@ def test_imported_books_are_checked_under_their_namespace(tmp_path):
 
 def test_a_section_the_record_omits_is_a_contract_it_does_not_offer():
     record = SupportRecord.from_mapping(TUNER)
-    assert record.check_recipe(object()) == ["recipe `?`: `tuner` declares no `steering` section, so it offers no "
-                                             "steering contract"]
+    assert record.check_treatment(object()) == ["treatment `?`: `tuner` declares no `steering` section, so it offers "
+                                                "no steering contract"]
     steerer = as_record(Support(ops=frozenset({"add"}), name="steerer"))
     assert steerer.check_book(book({"x": "role:adapter"})) == [
         "b: `steerer` declares no `tuning` section, so it offers no tuning contract"]
