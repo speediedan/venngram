@@ -53,8 +53,8 @@ def test_every_document_loads_and_sidecars_are_listed_not_loaded(tmp_path):
 def test_treatments_are_checked_against_each_support_record(tmp_path):
     location, _ = published(tmp_path, tokens="prompt")
     steerer = read_support(f"{location}:support/steerer.yaml")  # a support record read by reference
-    assert steerer.name == "steerer" and steerer.tuning is None  # schema 1: a steering section only
-    assert steerer.steering.site_ok("mlp.out.hook_in") and not steerer.steering.site_ok("attn.hook_z")
+    assert steerer.name == "steerer" and steerer.tuning is None  # schema 1: a treatments section only
+    assert steerer.treatments.site_ok("mlp.out.hook_in") and not steerer.treatments.site_ok("attn.hook_z")
     report = check(location, supports=[steerer, Support(ops=frozenset({"add"}), tokens=frozenset({"prompt"}))])
     steer, chess = (next(d for d in report.documents if d.path == f"books/{n}.yaml") for n in ("steer", "chess"))
     assert steer.refusals == {"steerer": ("treatment `chess`: stage 0 (mlp.out.hook_in) op 0 (`add`): token scope "

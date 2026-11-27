@@ -74,7 +74,7 @@ vectors of its own.
 :func:`check_transforms` runs a consumer's evaluator against them, so two consumers that honour a treatment are tested
 to give it the same values.
 
-A consumer declares what it honours as a :class:`Support` record, in code or as the ``steering`` section of a
+A consumer declares what it honours as a :class:`Support` record, in code or as the ``treatments`` section of a
 ``support_record`` document (:mod:`venngram.support`); :func:`check_support` lists every refusal by name before anything
 runs.
 
@@ -571,9 +571,10 @@ class Support:
         bases: [unfolded]                 # default: any
 
     ``of`` lists what its ops may act on: ``value`` (default) and, for a consumer that intervenes on the backward pass,
-    ``grad`` (a target set with ``of: grad``). It is declared in the ``steering`` section of a schema 3 record.
+    ``grad`` (a target set with ``of: grad``). It is declared in the ``treatments`` section (``steering`` before schema
+    9) of a schema 3 record.
     A parameter target (``param``, ``param_units``: a treatment's ``weights`` section) is declared in ``targets`` of a
-    schema 4 record's ``steering`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a
+    schema 4 record's ``treatments`` section. ``gradient_ops`` lists the ops it applies to parameter gradients (a
     treatment's ``gradients`` section, on targets it declares), and ``readouts`` the reductions it computes a readout
     with (:mod:`venngram.readouts`), in a schema 5 record; none of either by default. ``routes`` lists the path
     waypoint kinds its route resolver places (:mod:`venngram.paths`), in a schema 8 record; none by default.

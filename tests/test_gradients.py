@@ -184,13 +184,13 @@ def test_a_steering_of_declaration_is_support_record_schema_3():
     steering = {"ops": ["scale"], "of": ["value", "grad"]}
     record = SupportRecord.from_mapping({"schema_version": 3, "kind": "support_record", "sections": {
         "steering": steering}})
-    assert record.steering.of == {"value", "grad"} and record.to_mapping()["schema_version"] == 3
-    assert record.to_mapping()["sections"]["steering"]["of"] == ["grad", "value"]
-    assert SupportRecord.from_mapping(record.to_mapping()).steering.of == record.steering.of
+    assert record.treatments.of == {"value", "grad"} and record.to_mapping()["schema_version"] == 9
+    assert record.to_mapping()["sections"]["treatments"]["of"] == ["grad", "value"]
+    assert SupportRecord.from_mapping(record.to_mapping()).treatments.of == record.treatments.of
     with pytest.raises(ValueError, match="`of` needs support record schema 3, not 2"):
         SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "sections": {"steering": steering}})
     with pytest.raises(ValueError, match="not at the top level of a schema 1 one"):
         SupportRecord.from_mapping({"schema_version": 1, "kind": "support_record", **steering})
     plain = SupportRecord.from_mapping({"schema_version": 2, "kind": "support_record", "sections": {
         "steering": {"ops": ["scale"]}}})
-    assert plain.to_mapping()["schema_version"] == 2 and "of" not in plain.to_mapping()["sections"]["steering"]
+    assert plain.to_mapping()["schema_version"] == 9 and "of" not in plain.to_mapping()["sections"]["treatments"]

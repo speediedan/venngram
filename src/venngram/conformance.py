@@ -17,7 +17,7 @@ Checks a published directory of venngram documents from the outside, the way a r
 reference at one revision, load every document through its kind's loader (which validates it against the core schema
 and checks every file it needs by sha256), and check each address book against consumers' support records
 (:class:`venngram.support.SupportRecord`: a book's sets against a record's ``tuning`` section, its treatments against
-its ``steering`` section, or its ``circuits`` section for ops on graph subsets), so a refusal surfaces before any
+its ``treatments`` section, or its ``circuits`` section for ops on graph subsets), so a refusal surfaces before any
 consumer runs the document.
 
 .. code-block:: bash
@@ -130,10 +130,10 @@ def check(location: str, *, supports: Sequence[SupportRecord | Support] = ()) ->
             continue
         refusals = {}
         if entry.kind == "address_book":
-            # a consumer judges what it offers a contract for: a tuning consumer the sets, a steering consumer (or a
+            # a consumer judges what it offers a contract for: a tuning consumer the sets, a treatments consumer (or a
             # circuits consumer, for treatments over graphs) the book's treatments; one that offers none does not judge
             for i, s in enumerate(records):
-                treats = (s.steering is not None or s.circuits is not None) and bool(doc.treatments)
+                treats = (s.treatments is not None or s.circuits is not None) and bool(doc.treatments)
                 found = [*(s.check_book(doc) if s.tuning is not None else ()),
                          *(s.check_treatments(doc) if treats else ())]
                 if s.tuning is not None or treats:

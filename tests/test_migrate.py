@@ -35,7 +35,7 @@ def test_every_published_schema_has_a_fixture():
                                                             "support_record_v2", "support_record_v3",
                                                             "support_record_v4", "support_record_v5",
                                                             "support_record_v6", "support_record_v7",
-                                                            "support_record_v8",
+                                                            "support_record_v8", "support_record_v9",
                                                             "graph_subset_v1", "unit_table_v1",
                                                             "address_book_v1",
                                                             "address_book_v2", "address_book_v3",
@@ -68,8 +68,15 @@ def test_the_steps_are_the_documented_changes():
     assert migrated["properties"] == {"golden_note": "schema 1"} and "facts" not in migrated
     assert steps == ["component map 1 -> 2: `facts` renamed `properties`", "component map 2 -> 7: version only"]
     record, steps = migrate(load(SCHEMAS / "support_record_v1.yaml"))
-    assert record["sections"] == {"steering": {"ops": ["add", "scale"], "targets": ["units"], "tokens": ["all"]}}
-    assert record["name"] == "golden-steerer" and len(steps) == 1
+    assert record["sections"] == {"treatments": {"ops": ["add", "scale"], "targets": ["units"], "tokens": ["all"]}}
+    assert record["name"] == "golden-steerer" and record["schema_version"] == 9
+    assert steps == ["support record 1 -> 2: the steering contract moved under `sections.steering`",
+                     "support record 2 -> 9: `sections.steering` is now `treatments` and `circuits.evidence` `levels`"]
+    traced = {"schema_version": 6, "kind": "support_record", "sections": {"circuits": {"evidence": ["traced"]}}}
+    record, steps = migrate(traced)
+    assert record["sections"] == {"circuits": {"levels": ["traced"]}} and record["schema_version"] == 9
+    record, steps = migrate(load(SCHEMAS / "support_record_v6.yaml"))
+    assert record["schema_version"] == 6 and steps == []  # uses neither old name, so it is current already
 
 
 @pytest.mark.parametrize("doc, error, match", [

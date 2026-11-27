@@ -147,7 +147,7 @@ registered in code or read from a published `op_specs` document); venngram valid
 executes one. `replace_with_error` is a straight-through substitution: for an operand $o$ at an activation $x$ it
 gives $o + \mathrm{sg}(x - o)$, so the forward value is $x$ and the gradient reaches $o$, not $x$. A token scope is `all`, `last`, `prompt` (the input, before any
 generated token), `generated` (each decode step), explicit positions or a slice. A consumer declares what it honours as
-a `Support` record, in code or as the `steering` section of a published `support_record` document (see "Support
+a `Support` record, in code or as the `treatments` section of a published `support_record` document (see "Support
 records" below), and `check_support` names everything a treatment asks for beyond it. `compose` joins treatments stage by stage, refusing
 ops that do not commute unless the composition gives an order. Applying a treatment is the consumer's; treatments written in another tool's format
 are read by an adapter outside venngram's core.
@@ -246,7 +246,7 @@ documents is a new store (`venngram.store.register_store`).
 
 `python -m venngram.conformance <store>:<ref>[@<revision>] [--support <record>]` checks a published directory the way a
 reader meets it: every listed document is fetched at one revision and loaded by its kind, every book's sets are
-checked against each support record's `tuning` section, and its treatments against its `steering` section, or, for
+checked against each support record's `tuning` section, and its treatments against its `treatments` section, or, for
 ops on graph subsets, its `circuits` section. It exits non-zero when a document fails to load or a book asks for more
 than a given record honours, so a format adapter's CI, or a scheduled job over published examples, can run it.
 
@@ -256,35 +256,42 @@ A consumer's **support record** (`venngram.support`) declares, section by sectio
 document asking for anything else is refused by name before anything runs, and without the consumer installed:
 
 ```yaml
-schema_version: 2
+schema_version: 9
 kind: support_record
 name: finetuning-scheduler
 sections:
-  tuning: {fields: [role, name, module, layers, stack, component, leaf], targets: [param], units: none,
-           naming_schemes: [physical]}
-  steering: {ops: [add, scale]}
+  tuning: {fields: [role, name, module, layers, stack, component, leaf, units, of], targets: [param],
+           units: grad-mask, naming_schemes: [physical]}
+  treatments: {ops: [add, scale]}
 ```
 
-The core sections are `steering` (a book's treatments), `tuning` (address books whose sets select tensors to tune),
+The core sections are `treatments` (the treatments a consumer applies, whether it steers activations with them or
+applies their `weights` and `gradients` ops while tuning), `tuning` (address books whose sets select tensors to tune),
 `circuits` (traced or validated circuits, attribution graphs in general; a prototype) and `formats` (the foreign formats
 a package reads, with where to install it from). A `tuning` section that lists `of` acts on one `of` per set and one
-gradient mask per conjunction; its `gradients` list (schema 5) declares the readings beyond that: `mixed-sets`, a union
+gradient mask per conjunction. Its `units` says how it honours a unit set: `none` refuses them, `unit-adapter` tunes
+them through a module whose parameters are per-unit values, and `grad-mask` (schema 9) takes them only under `of:
+grad`, masking each selected tensor's gradient to those units and refusing a unit set read as values. Its `gradients`
+list (schema 5) declares the readings beyond that: `mixed-sets`, a union
 of a value part and a gradient part, `union-masks`, a union of gradient conjunctions with unit sets, `unit-axis` and
 `physical-axis`, a unit set's explicit `axis` (with `axis` among its `fields`), `mask-algebra`, an intersection or a
 difference of masks, and `element-masks`, an element mask. Its `pins: true` (schema 7) says it
 checks the models a book pins (`AddressBook.check_pins`); a pinned book is refused by a consumer that does not. A
-`steering`
+`treatments`
 section's `gradient_ops` (schema 5) lists the ops its consumer applies to parameter gradients (a treatment's `gradients`
 section), and its `readouts` the reductions it computes a readout with. Its `routes` (schema 8) lists the path
 waypoint kinds its route resolver places (`address`, `graph_nodes`, `anchor`), for the `stop` and `route` ops on a
-`path` target. A `circuits` section's `subsets` (schema 6)
+`path` target. A `circuits` section's `levels` (schema 9) lists the processing levels of the graphs it accepts
+(`traced`, `pruned`, `validated`), and its `subsets` (schema 6)
 declares the treatments over graph subsets it applies: the ops, the anchors it resolves, the featurizer kinds it
 places, scalar or vector values, the columns and transforms, and whether it applies a restriction; reading graphs alone
 is not permission to apply them. A section a record omits is a contract its
 consumer does not offer. A section type the reader does not know is reported and skipped, never fatal: a section
 defined outside venngram is namespaced (`acme.probes`), declared under `extensions` with the schema that defines it,
-and parsed wherever code registers a parser for it (`register_support_section`). Schema 1 records read as a `steering`
-section.
+and parsed wherever code registers a parser for it (`register_support_section`). Schema 9 renamed two names: the
+`steering` section is `treatments`, and `circuits.evidence` is `circuits.levels`. A schema 1 to 8 record still reads,
+its old names through an alias table with a deprecation warning, and `python -m venngram.migrate` rewrites it; a
+schema 9 record using an old name is refused by name. Schema 1 records read as a `treatments` section.
 
 ### Sources: map sources and formats
 
@@ -507,7 +514,7 @@ Published documents outlive the venngram that wrote them, so every document kind
 | overlay map | 4 to 5 | 5 | unknown `applies_when` conditions refused |
 | rules | 2 | 2 | refused |
 | address book | 1 to 13 | 1, 2 when a set uses `of`, 3 when a treatment has `weights`, 4 when one has `gradients` or a `readout`, 5 when the book names `graphs`, 6 when a set uses `axis`, 7 when a layer set uses a depth fraction, 8 when its `requires` pins `base_model` or `latent_models`, 9 when a set uses an element mask, 10 when a set is a path, 11 when a set selects whole heads, 12 when a set selects an execution pass, 13 when the book names `tables` | ignored at the top level |
-| support record | 1 to 8 | 2, 3 when its steering section declares `of`, 4 when it declares a parameter target, 5 when its tuning section declares `gradients` or its steering section `gradient_ops` or `readouts`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 8 when its steering section declares `routes` | refused; an unknown *section* is skipped with a warning |
+| support record | 1 to 9 | 2, 5 when its tuning section declares `gradients`, 6 when its circuits section declares `subsets`, 7 when its tuning section declares `pins`, 9 when it has a `treatments` section, its circuits section declares `levels` or its tuning section declares `units: grad-mask` (the names schema 9 introduced; schemas 3, 4 and 8 added `of`, parameter targets and `routes` to the section schema 9 renamed) | refused; an unknown *section* is skipped with a warning |
 | graph subset | 1 | 1 | refused |
 | unit table | 1 | 1 | refused |
 | verification record | 1 | 1 | ignored |

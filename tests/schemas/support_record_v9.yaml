@@ -1,0 +1,17 @@
+# Golden fixture: a support record at schema 9, as published. Never edit it;
+# add a fixture for a new schema instead.
+schema_version: 9
+kind: support_record
+name: golden-treatments
+sections:
+  tuning:
+    fields: [role, name, module, layers, of]
+    targets: [param]
+    units: grad-mask
+  treatments:
+    ops: [add]
+    targets: [activation, param_units]
+    gradient_ops: [scale]
+  circuits:
+    graphs: [attribution]
+    levels: [pruned, traced]
